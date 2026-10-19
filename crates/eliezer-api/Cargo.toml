@@ -26,3 +26,7 @@ path = "../../tests/m3/api.rs"
 [[test]]
 name = "anthropic"
 path = "../../tests/m3/anthropic.rs"
+
+[[test]]
+name = "contract_models"
+path = "../../tests/contract/models.rs"
