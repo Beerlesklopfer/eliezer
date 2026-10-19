@@ -5,3 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+tokio.workspace = true
+eliezer-core.workspace = true
+
+[[test]]
+name = "fake_backend"
+path = "../../tests/m3/fake_backend.rs"
+
+[[test]]
+name = "supervisor"
+path = "../../tests/m3/supervisor.rs"
