@@ -172,6 +172,9 @@ Options for every command: `--host URL` (otherwise `ELIEZER_HOST`, the configure
 or `http://127.0.0.1:1234`), `--key-file PATH` (otherwise `ELIEZER_API_KEY_FILE`, `ELIEZER_API_KEY`
 or the key file named in the configuration), `--json` (print the JSON of the API) and
 `--config PATH`. The key is never accepted as a command-line argument and never printed.
+`ELIEZER_TIMEOUT_SECS` changes how long a command waits for an answer (default 15 s for queries, one
+hour for `load` and `run`). If a server accepts the connection but does not answer, the message says
+it may be stopped (for example with Ctrl-Z), overloaded or hung.
 
 From another machine: `ELIEZER_HOST=http://server:1234 ELIEZER_API_KEY_FILE=~/.eliezer-key eliezer ls`.
 

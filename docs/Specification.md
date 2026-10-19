@@ -251,7 +251,9 @@ The `eliezer` binary is also a client of the running service (synchronous HTTP/1
 Global options: `--host URL` (else `ELIEZER_HOST`, else `server.listen` of the configuration with
 `0.0.0.0` read as `127.0.0.1`, else `http://127.0.0.1:1234`), `--key-file PATH` (else
 `ELIEZER_API_KEY_FILE`, `ELIEZER_API_KEY`, else the first key of `server.api_keys_file`), `--json`,
-`--config PATH`. The key is never a command-line argument and never printed. Exit codes: 0 ok,
+`--config PATH`; the environment variable `ELIEZER_TIMEOUT_SECS` sets how long to wait for an
+answer. The key is never a command-line argument and never printed. The client refuses a server
+that does not send `Server: eliezer/...`. Exit codes: 0 ok,
 1 request failed or server error (the service's message is printed), 2 usage error, 3 service not
 reachable. Sizes are decimal GB with one decimal (MB below 0.1 GB).
 

@@ -221,6 +221,12 @@ impl Client {
         }
         let mut stream = stream.ok_or(HttpError::Unreachable(last))?;
         let proto = |e: io::Error| HttpError::Protocol(e.to_string());
+        // ELIEZER_TIMEOUT_SECS shortens or lengthens the wait for an answer (for scripts and tests).
+        let read_timeout = std::env::var("ELIEZER_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|s| *s > 0)
+            .map_or(read_timeout, Duration::from_secs);
         stream.set_read_timeout(Some(read_timeout)).map_err(proto)?;
         stream
             .set_write_timeout(Some(Duration::from_secs(30)))
@@ -252,7 +258,19 @@ impl Client {
 
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
-        reader.read_line(&mut line).map_err(proto)?;
+        reader.read_line(&mut line).map_err(|e| {
+            if matches!(
+                e.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) {
+                HttpError::Protocol(format!(
+                    "no answer within {} s: the service accepted the connection but did not respond (it may be stopped with Ctrl-Z, overloaded or hung)",
+                    read_timeout.as_secs()
+                ))
+            } else {
+                proto(e)
+            }
+        })?;
         let status: u16 = line
             .split_whitespace()
             .nth(1)

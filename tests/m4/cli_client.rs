@@ -847,3 +847,63 @@ fn status_warns_when_the_budget_is_far_below_the_card() {
         "{text}"
     );
 }
+
+#[test]
+fn a_server_that_accepts_but_never_answers_is_named_as_stopped_or_hung() {
+    // A process stopped with Ctrl-Z keeps its listening socket but accepts nothing.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let started = std::time::Instant::now();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eliezer"))
+        .env_remove("ELIEZER_CONFIG")
+        .env("ELIEZER_TIMEOUT_SECS", "1")
+        .args(["ls", "--host", &format!("http://127.0.0.1:{port}")])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&result.stderr);
+    assert_eq!(result.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("did not respond") && text.contains("stopped"),
+        "{text}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the wait is bounded"
+    );
+    drop(listener);
+}
+
+#[test]
+fn binding_an_occupied_address_names_the_address_and_the_reason() {
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let dir = std::env::temp_dir().join(format!("eliezer-bind-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("models")).unwrap();
+    let config = dir.join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[server]\nlisten = \"127.0.0.1:{port}\"\n[storage]\nmodels_dir = \"{d}/models\"\n[huggingface]\ncache_dir = \"{d}/models/hf\"\n[gpu]\n",
+            d = dir.display()
+        ),
+    )
+    .unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eliezer"))
+        .env_remove("ELIEZER_CONFIG")
+        .args(["--config", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&result.stderr).to_string()
+        + &String::from_utf8_lossy(&result.stdout);
+    assert_eq!(result.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains(&format!("127.0.0.1:{port} cannot be bound")),
+        "{text}"
+    );
+    assert!(
+        text.contains("already in use") || text.contains("Address in use"),
+        "{text}"
+    );
+    assert!(text.contains(&format!("ss -ltnp | grep :{port}")), "{text}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

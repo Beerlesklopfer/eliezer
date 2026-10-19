@@ -127,7 +127,7 @@ fn load(path: &Path) -> Result<Config, String> {
     Ok(config)
 }
 
-async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str> {
+async fn serve(config_path: PathBuf, config: Config) -> Result<(), String> {
     let mut terminate =
         signal(SignalKind::terminate()).map_err(|_| "SIGTERM cannot be registered")?;
     let mut hangup = signal(SignalKind::hangup()).map_err(|_| "SIGHUP cannot be registered")?;
@@ -146,7 +146,22 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
     };
     let listener = TcpListener::bind(config.server.listen)
         .await
-        .map_err(|_| "HTTP address cannot be bound")?;
+        .map_err(|error| {
+            let hint = match error.kind() {
+                std::io::ErrorKind::AddrInUse => format!(
+                    " Another program, or an Eliezer that is already running (or stopped with Ctrl-Z), uses the port; find it with `ss -ltnp | grep :{}`.",
+                    config.server.listen.port()
+                ),
+                std::io::ErrorKind::PermissionDenied => {
+                    " Ports below 1024 need extra privileges.".to_owned()
+                }
+                _ => String::new(),
+            };
+            format!(
+                "HTTP address {} cannot be bound ({error}).{hint}",
+                config.server.listen
+            )
+        })?;
     let (stop_tx, stop_rx) = oneshot::channel();
     let task = tokio::spawn(async move {
         axum::serve(listener, router)
@@ -162,7 +177,7 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
             result = &mut task => {
                 return match result {
                     Ok(Ok(())) => Ok(()),
-                    _ => Err("HTTP framework terminated unexpectedly"),
+                    _ => Err("HTTP framework terminated unexpectedly".into()),
                 };
             }
             _ = terminate.recv() => break,
@@ -191,10 +206,10 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
     supervisor.shutdown().await;
     match tokio::time::timeout(Duration::from_secs(30), &mut task).await {
         Ok(Ok(Ok(()))) => Ok(()),
-        Ok(_) => Err("HTTP framework could not be shut down in an orderly way"),
+        Ok(_) => Err("HTTP framework could not be shut down in an orderly way".into()),
         Err(_) => {
             task.abort();
-            Err("Timeout exceeded while shutting down the service")
+            Err("Timeout exceeded while shutting down the service".into())
         }
     }
 }
