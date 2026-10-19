@@ -63,6 +63,8 @@ in it. Example (complete, all fields explained):
 [server]
 listen = "127.0.0.1:1234"          # LM Studio uses 1234; on a home network, bind to the LAN address
 api_keys_file = "/etc/eliezer/keys" # optional; one line per key, 0600. If missing: no authentication
+run_user = "eliezer"              # optional; account the service runs as; `--import` hands files to it
+run_group = "eliezer"             # optional; default: the primary group of run_user
 request_timeout_secs = 600
 
 [storage]
@@ -417,6 +419,31 @@ In the container, the same path is to be mounted either as a bind mount of a ded
 or alternatively as a named, persistent Docker/Podman volume.
 Replacing the container must not require new model downloads. The storage of
 `pins.json` and `measured.json` likewise remains persistent under `/var/lib/eliezer`.
+
+### 9.2a Importing existing models (`eliezer --import`)
+
+Models that another program already downloaded (for example LM Studio under `~/.lmstudio/models`)
+are moved into the model store with `eliezer --import DIR`. The command is run by an administrator
+(usually with `sudo`) and does the following:
+
+- It collects the regular `*.gguf` files below `DIR` (symbolic links are never followed) and keeps
+  the directory structure below `DIR` in `models_dir`. Existing files are never overwritten;
+  `DIR` and `models_dir` must not contain each other.
+- **Move** is the default: on one file system a rename (instant, no extra space), otherwise a
+  verified copy (written as `.partial`, size checked, then renamed) followed by deleting the
+  original. `--copy` keeps the originals; `--dry-run` only prints the plan.
+- The files and new directories are handed to `server.run_user` / `server.run_group` (mode 0644 and
+  0755). Accounts are looked up with `getent`, so local, LDAP and domain accounts work. A user
+  alone gives the files its primary group; a group alone changes only the group; with neither set
+  the ownership stays as it is (a note is printed).
+- Finally it prints a `[[model]]` block per model for the configuration: key derived from the file
+  name, `backend = "llamacpp"`, the path, `size_gb`, and `max_context` and `arch` read from the GGUF
+  header (the tensor data is never read). Sliding-window and recurrent models get a hint that
+  the memory estimate needs `swa_layers`/`window` or `linear_layers`/`state_bytes`. Vision
+  projector files (`mmproj-*`) are imported but get no block. The blocks are suggestions;
+  nothing is written to the configuration.
+
+Exit code 2 for unusable arguments, configuration or accounts, 1 if a file failed, otherwise 0.
 
 ### 9.3 Controlled retrieval
 

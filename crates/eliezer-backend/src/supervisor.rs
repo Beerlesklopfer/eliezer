@@ -22,6 +22,9 @@ pub enum Error {
     Timeout,
     Busy,
     Backend,
+    /// The request itself is unusable (for example longer than the context window);
+    /// the model is fine.
+    InvalidRequest,
     Stopped,
 }
 #[derive(Clone)]
@@ -214,6 +217,7 @@ impl Supervisor {
     ) -> Result<mpsc::Receiver<Result<Chunk, BackendError>>, Error> {
         match backend.chat(&lease.running, request).await {
             Ok(stream) => Ok(stream),
+            Err(BackendError::InvalidRequest) => Err(Error::InvalidRequest),
             Err(_) => {
                 let _ = self
                     .tx

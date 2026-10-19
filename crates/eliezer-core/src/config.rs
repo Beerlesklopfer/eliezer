@@ -30,6 +30,10 @@ pub struct Config {
 pub struct ServerConfig {
     pub listen: SocketAddr,
     pub api_keys_file: Option<PathBuf>,
+    /// System user the service runs as; `eliezer --import` hands imported files to it.
+    pub run_user: Option<String>,
+    /// Group of imported files; defaults to the primary group of `run_user`.
+    pub run_group: Option<String>,
     #[serde(default = "request_timeout")]
     pub request_timeout_secs: u64,
 }
@@ -268,7 +272,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "server listen api_keys_file request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb extra text_encoder vae";
+const FIELDS: &str = "server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb extra text_encoder vae";
 
 fn safe_path(path: &serde_path_to_error::Path) -> String {
     let mut result = String::new();
@@ -401,6 +405,18 @@ impl Config {
             "server.request_timeout_secs",
             "Timeout must be greater than zero",
         )?;
+        for (name, field) in [
+            (&self.server.run_user, "server.run_user"),
+            (&self.server.run_group, "server.run_group"),
+        ] {
+            if let Some(name) = name {
+                check(
+                    user_name(name),
+                    field,
+                    "Expected a system user or group name (letters, digits, '_', '-' and '.', starting with a letter or '_', at most 64 characters)",
+                )?;
+            }
+        }
         check(
             positive(self.gpu.vram_budget_gb),
             "gpu.vram_budget_gb",
@@ -662,6 +678,17 @@ impl Config {
 
 fn positive(value: f64) -> bool {
     value.is_finite() && value > 0.0
+}
+/// A Unix user or group name as found on local and domain-joined machines (`joerg.bernau`,
+/// `svc_eliezer`). It is only ever looked up in /etc/passwd and /etc/group, never passed to a
+/// shell or used as a path, so the rule just keeps out spaces, slashes and odd characters.
+fn user_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
+        && value.len() <= 64
+        && bytes.all(|c| c.is_ascii_alphanumeric() || b"_-.".contains(&c))
 }
 fn identifier(value: &str) -> bool {
     !value.is_empty()

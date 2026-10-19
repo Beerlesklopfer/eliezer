@@ -1,7 +1,7 @@
 //! Connects configuration, supervisor and program interface into the running service.
 use eliezer_api::{App, managed_router};
 use eliezer_backend::{
-    Backend, BackendError, BackendFuture, ChatRequest, Chunk, LoadSpec, Running,
+    Backend, LoadSpec,
     supervisor::{Model, Settings, Supervisor},
 };
 use eliezer_core::{
@@ -10,7 +10,6 @@ use eliezer_core::{
     scheduler::{Clock, Instance, State},
 };
 use std::{os::unix::fs::PermissionsExt, path::Path, sync::Arc, time::Instant};
-use tokio::sync::mpsc;
 
 /// Monotonic clock since service start.
 struct SystemClock(Instant);
@@ -20,26 +19,36 @@ impl Clock for SystemClock {
     }
 }
 
-/// Placeholder until the real runtimes (M4): loading fails with a clear message.
-struct NoBackend;
-impl Backend for NoBackend {
-    fn start<'a>(&'a self, _: &'a LoadSpec) -> BackendFuture<'a, Running> {
-        Box::pin(async { Err(BackendError::Unavailable) })
-    }
-    fn stop<'a>(&'a self, _: &'a Running) -> BackendFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-    fn health<'a>(&'a self, _: &'a Running) -> BackendFuture<'a, bool> {
-        Box::pin(async { Ok(false) })
-    }
-    fn chat<'a>(
-        &'a self,
-        _: &'a Running,
-        _: ChatRequest,
-    ) -> BackendFuture<'a, mpsc::Receiver<Result<Chunk, BackendError>>> {
-        Box::pin(async { Err(BackendError::Unavailable) })
+#[cfg(not(feature = "llamacpp"))]
+mod none {
+    use eliezer_backend::{
+        Backend, BackendError, BackendFuture, ChatRequest, Chunk, LoadSpec, Running,
+    };
+    use tokio::sync::mpsc;
+
+    /// Used when no runtime is compiled in: loading fails with a clear message.
+    pub struct NoBackend;
+    impl Backend for NoBackend {
+        fn start<'a>(&'a self, _: &'a LoadSpec) -> BackendFuture<'a, Running> {
+            Box::pin(async { Err(BackendError::Unavailable) })
+        }
+        fn stop<'a>(&'a self, _: &'a Running) -> BackendFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn health<'a>(&'a self, _: &'a Running) -> BackendFuture<'a, bool> {
+            Box::pin(async { Ok(false) })
+        }
+        fn chat<'a>(
+            &'a self,
+            _: &'a Running,
+            _: ChatRequest,
+        ) -> BackendFuture<'a, mpsc::Receiver<Result<Chunk, BackendError>>> {
+            Box::pin(async { Err(BackendError::Unavailable) })
+        }
     }
 }
+#[cfg(not(feature = "llamacpp"))]
+use none::NoBackend;
 
 /// Reads API keys (one line per key, `#` for comments); the file must be 0600.
 pub fn read_keys(path: &Path) -> Result<Vec<String>, &'static str> {
@@ -93,6 +102,66 @@ fn models(config: &Config) -> Vec<Model> {
     out
 }
 
+/// The runtime that serves models: embedded llama.cpp when compiled in.
+struct Runtimes {
+    backend: Arc<dyn Backend>,
+    #[cfg(feature = "llamacpp")]
+    llamacpp: Arc<eliezer_llamacpp::LlamaCppBackend>,
+}
+impl Runtimes {
+    fn new(config: &Config) -> Self {
+        #[cfg(feature = "llamacpp")]
+        {
+            // 999 offloads every layer to the GPU.
+            let llamacpp = Arc::new(eliezer_llamacpp::LlamaCppBackend::new(999));
+            llamacpp.set_models(llamacpp_models(config));
+            tracing::info!(event = "runtime", "Embedded llama.cpp runtime is available");
+            Self {
+                backend: llamacpp.clone(),
+                llamacpp,
+            }
+        }
+        #[cfg(not(feature = "llamacpp"))]
+        {
+            let _ = config;
+            tracing::warn!(
+                event = "no_runtime",
+                "This build contains no model runtime; loading models will fail"
+            );
+            Self {
+                backend: Arc::new(NoBackend),
+            }
+        }
+    }
+    fn update(&self, config: &Config) {
+        #[cfg(feature = "llamacpp")]
+        self.llamacpp.set_models(llamacpp_models(config));
+        #[cfg(not(feature = "llamacpp"))]
+        let _ = config;
+    }
+}
+
+/// Model files the llama.cpp runtime may load: only configured models of that backend, by key.
+#[cfg(feature = "llamacpp")]
+fn llamacpp_models(
+    config: &Config,
+) -> std::collections::HashMap<String, eliezer_llamacpp::ModelFile> {
+    config
+        .model
+        .iter()
+        .filter(|m| m.backend == eliezer_core::config::BackendKind::Llamacpp)
+        .filter_map(|m| {
+            Some((
+                m.key.clone(),
+                eliezer_llamacpp::ModelFile {
+                    path: m.source.file.clone()?,
+                    embedding: m.kind == ModelKind::Embedding,
+                },
+            ))
+        })
+        .collect()
+}
+
 fn settings(config: &Config) -> Result<Settings, &'static str> {
     let budget = gb_bytes(config.gpu.vram_budget_gb)
         .and_then(|b| gb_bytes(config.gpu.reserve_gb).map(|r| b.saturating_sub(r)))
@@ -126,6 +195,7 @@ pub struct Runtime {
     pub router: axum::Router,
     pub supervisor: Supervisor,
     app: App,
+    runtimes: Runtimes,
     listen: std::net::SocketAddr,
 }
 impl Runtime {
@@ -143,6 +213,7 @@ impl Runtime {
             .reconfigure(models(&config), settings)
             .await
             .map_err(|_| "Supervisor is not running")?;
+        self.runtimes.update(&config);
         self.app.replace(config, keys);
         Ok(())
     }
@@ -150,9 +221,10 @@ impl Runtime {
 
 /// Starts the supervisor and builds the router.
 pub fn build(config: Arc<Config>, keys: Vec<String>) -> Result<Runtime, &'static str> {
+    let runtimes = Runtimes::new(&config);
     let supervisor = Supervisor::spawn(
         models(&config),
-        Arc::new(NoBackend),
+        runtimes.backend.clone(),
         Arc::new(SystemClock(Instant::now())),
         settings(&config)?,
     );
@@ -171,11 +243,18 @@ pub fn build(config: Arc<Config>, keys: Vec<String>) -> Result<Runtime, &'static
     ));
     tracing::info!(event = "gpu", ?vendor, "GPU vendor determined");
     let listen = config.server.listen;
-    let app = App::new(config, supervisor.clone(), Arc::new(NoBackend), probe, keys);
+    let app = App::new(
+        config,
+        supervisor.clone(),
+        runtimes.backend.clone(),
+        probe,
+        keys,
+    );
     Ok(Runtime {
         router: managed_router(app.clone()),
         supervisor,
         app,
+        runtimes,
         listen,
     })
 }

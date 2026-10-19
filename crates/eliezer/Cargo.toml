@@ -8,11 +8,22 @@ description = "Manager for local AI models on a scarce GPU"
 publish.workspace = true
 autotests = false
 
+[features]
+default = []
+# Embedded llama.cpp runtime; pick the GPU API at build time. Without any of these the service
+# starts but cannot load models.
+llamacpp = ["dep:eliezer-llamacpp", "eliezer-llamacpp/engine"]
+rocm = ["llamacpp", "eliezer-llamacpp/rocm"]
+vulkan = ["llamacpp", "eliezer-llamacpp/vulkan"]
+cuda = ["llamacpp", "eliezer-llamacpp/cuda"]
+cpu = ["llamacpp", "eliezer-llamacpp/cpu"]
+
 [dependencies]
 eliezer-core.workspace = true
 eliezer-api.workspace = true
 eliezer-backend.workspace = true
 eliezer-gpu.workspace = true
+eliezer-llamacpp = { workspace = true, optional = true }
 axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -56,3 +67,7 @@ assets = [
     ["../../INSTALL.MD", "usr/share/doc/eliezer/", "644"],
     ["../../packaging/deb/README.Debian", "usr/share/doc/eliezer/", "644"],
 ]
+
+[[test]]
+name = "import_cli"
+path = "../../tests/m4/import_cli.rs"

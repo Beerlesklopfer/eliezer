@@ -150,6 +150,11 @@ fn error(error: Error, anth: bool) -> Response {
         ),
         Error::Busy => (409, "busy", "Model is still in use".to_owned()),
         Error::Backend => (502, "backend_error", "Backend has failed".to_owned()),
+        Error::InvalidRequest => (
+            400,
+            "invalid_request",
+            "The request is invalid or does not fit the model's context window".to_owned(),
+        ),
         Error::Stopped => (503, "unavailable", "Service is shutting down".to_owned()),
     };
     failure(

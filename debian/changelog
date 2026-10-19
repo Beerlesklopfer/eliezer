@@ -14,6 +14,11 @@ eliezer (0.3.0) UNRELEASED; urgency=low
     report queue, queue length and last use per model in /api/v1/status.
   * Apply a changed configuration and key file on SIGHUP: add and remove models,
     unload removed ones when idle, keep loaded models.
+  * Add the embedded llama.cpp runtime (feature rocm, vulkan, cuda or cpu): chat with streaming,
+    parallel sequences, prompt-prefix reuse, stop sequences, JSON-schema output, embeddings, the
+    models' own Jinja chat templates and parsing of reasoning and tool calls (Qwen, Harmony, Gemma 4).
+  * Add `eliezer --import DIR` with `server.run_user` and `server.run_group`: move GGUF models into
+    the model store, hand them to the service account and print [[model]] suggestions.
   * Build a Debian package with cargo-deb (scripts/build-deb.sh): service, systemd unit,
     default configuration, system user; checked in a clean container (tests/deb).
   * Test the documented cases over HTTP, including chat/image alternation, request

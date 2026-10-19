@@ -23,3 +23,7 @@ path = "../../tests/m3/memory.rs"
 [[test]]
 name = "scheduler"
 path = "../../tests/m3/scheduler.rs"
+
+[[test]]
+name = "import"
+path = "../../tests/m4/import.rs"

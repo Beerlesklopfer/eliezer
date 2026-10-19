@@ -43,8 +43,20 @@ pub struct Running {
     alive: Arc<AtomicBool>,
 }
 impl Running {
+    /// A freshly started instance. `generation` must be unique per backend.
+    pub fn new(spec: LoadSpec, generation: u64) -> Self {
+        Self {
+            spec,
+            generation,
+            alive: Arc::new(AtomicBool::new(true)),
+        }
+    }
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+    /// Shared flag a runtime clears when its worker dies, so the supervisor sees the crash.
+    pub fn alive_flag(&self) -> Arc<AtomicBool> {
+        self.alive.clone()
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

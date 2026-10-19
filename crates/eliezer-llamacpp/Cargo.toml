@@ -1,0 +1,37 @@
+[package]
+name = "eliezer-llamacpp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Embedded llama.cpp runtime for Eliezer"
+autotests = false
+
+[features]
+default = []
+# The engine needs a C++ toolchain; exactly one acceleration feature selects the GPU API.
+engine = ["dep:llama-cpp-2", "llama-cpp-2/common"]
+cpu = ["engine"]
+rocm = ["engine", "llama-cpp-2/rocm"]
+vulkan = ["engine", "llama-cpp-2/vulkan"]
+cuda = ["engine", "llama-cpp-2/cuda"]
+
+[dependencies]
+eliezer-core.workspace = true
+eliezer-backend.workspace = true
+tokio.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+serde.workspace = true
+minijinja.workspace = true
+minijinja-contrib.workspace = true
+tracing.workspace = true
+llama-cpp-2 = { version = "=0.1.160", default-features = false, optional = true }
+
+[[test]]
+name = "template"
+path = "../../tests/m4/template.rs"
+
+[[test]]
+name = "output"
+path = "../../tests/m4/output.rs"

@@ -103,6 +103,28 @@ logs `restart_required`). An invalid configuration or a key file that is readabl
 others is rejected with a log line (`config_rejected`); the service keeps running with
 the previous state.
 
+## Importing existing models (for example from LM Studio)
+
+Set the service account in the configuration so imported files belong to it:
+
+```toml
+[server]
+run_user = "eliezer"
+run_group = "eliezer"   # optional; default: the primary group of run_user
+```
+
+Then move the GGUF files into the model store (needs root to hand the files over):
+
+```bash
+sudo eliezer --config /etc/eliezer/config.toml --import ~/.lmstudio/models --dry-run
+sudo eliezer --config /etc/eliezer/config.toml --import ~/.lmstudio/models
+```
+
+`--dry-run` only shows the plan, `--copy` keeps the originals. The directory structure is kept,
+existing files are never overwritten, and a rename within one file system takes no extra space.
+At the end the command prints a `[[model]]` block per model; check it and add it to the
+configuration, then reload with `systemctl reload eliezer`.
+
 ## Debian package
 
 The package is built with `cargo-deb` (`cargo install cargo-deb`, Rust from rustup):
