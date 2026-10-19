@@ -89,13 +89,26 @@ fn dry_run_changes_nothing_and_a_move_hands_files_to_the_configured_account() {
         "{text}"
     );
     assert!(
-        text.contains("[[model]]") && text.contains("key = \"model-q4\""),
+        text.contains("Added to") && text.contains("model-q4"),
         "{text}"
     );
-    assert!(text.contains("backend = \"llamacpp\""));
+    assert!(text.contains(".bak"), "the backup is announced: {text}");
+    let written = fs::read_to_string(&config).unwrap();
     assert!(
-        !text.contains("key = \"mmproj-f16\""),
-        "projector files get no model block"
+        written.contains("[backend.llamacpp]\nenabled = true"),
+        "{written}"
+    );
+    assert!(written.contains("key = \"model-q4\"") && written.contains("backend = \"llamacpp\""));
+    assert!(
+        !written.contains("mmproj-f16"),
+        "projector files get no model entry"
+    );
+    assert!(dir.join("config.toml.bak").exists());
+    let check = run(&["--check-config", s(&config)]);
+    assert!(
+        check.status.success(),
+        "the edited configuration is valid: {}",
+        err(&check)
     );
 
     // running it again finds nothing new
@@ -158,5 +171,110 @@ fn unknown_accounts_and_bad_combinations_fail_clearly() {
         "--check-config",
     ]);
     assert_eq!(result.status.code(), Some(2));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A GGUF header with only the given string and number entries, as diffusion models have.
+fn tiny_gguf(entries: &[(&str, &str)]) -> Vec<u8> {
+    let text = |out: &mut Vec<u8>, t: &str| {
+        out.extend((t.len() as u64).to_le_bytes());
+        out.extend(t.as_bytes());
+    };
+    let mut body = Vec::new();
+    for (key, value) in entries {
+        text(&mut body, key);
+        body.extend(8_u32.to_le_bytes());
+        text(&mut body, value);
+    }
+    let mut file = b"GGUF".to_vec();
+    file.extend(3_u32.to_le_bytes());
+    file.extend(0_u64.to_le_bytes());
+    file.extend((entries.len() as u64).to_le_bytes());
+    file.extend(body);
+    file
+}
+
+#[test]
+fn no_config_prints_the_blocks_and_leaves_the_file_alone() {
+    let (dir, src, config) = setup("noconfig", "");
+    let before = fs::read_to_string(&config).unwrap();
+    let result = run(&["--config", s(&config), "--import", s(&src), "--no-config"]);
+    assert!(result.status.success(), "{}", err(&result));
+    assert!(out(&result).contains("[[model]]") && out(&result).contains("key = \"model-q4\""));
+    assert_eq!(fs::read_to_string(&config).unwrap(), before);
+    assert!(!dir.join("config.toml.bak").exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_broken_model_entry_does_not_block_the_import() {
+    // The situation from real life: a pasted [[model]] block whose backend section is missing.
+    let (dir, src, config) = setup("broken", "");
+    let mut text = fs::read_to_string(&config).unwrap();
+    text += "\n[[model]]\nkey = \"pasted\"\nbackend = \"llamacpp\"\nsource = { file = \"/nowhere/pasted.gguf\" }\nkind = \"llm\"\nsize_gb = 4.6\n";
+    fs::write(&config, &text).unwrap();
+    assert!(
+        !run(&["--check-config", s(&config)]).status.success(),
+        "the starting point is invalid"
+    );
+    let result = run(&["--config", s(&config), "--import", s(&src)]);
+    assert!(
+        result.status.success(),
+        "{}\n{}",
+        out(&result),
+        err(&result)
+    );
+    assert!(
+        dir.join("store/community/Model-GGUF/Model-Q4.gguf")
+            .exists(),
+        "the files are moved anyway"
+    );
+    assert!(
+        err(&result).contains("model list"),
+        "the problem is mentioned: {}",
+        err(&result)
+    );
+    // The result is either a valid configuration with the new entry, or an unchanged file with
+    // the reason; it is never a half-written file.
+    let after = fs::read_to_string(&config).unwrap();
+    if run(&["--check-config", s(&config)]).status.success() {
+        assert!(after.contains("model-q4"));
+    } else {
+        assert_eq!(after, text, "{}", err(&result));
+        assert!(err(&result).contains("not changed"), "{}", err(&result));
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn image_models_are_moved_but_stay_out_of_the_active_configuration() {
+    let (dir, src, config) = setup("image", "");
+    fs::write(
+        src.join("community/Model-GGUF/qwen-image.gguf"),
+        tiny_gguf(&[("general.architecture", "qwen_image21")]),
+    )
+    .unwrap();
+    let result = run(&["--config", s(&config), "--import", s(&src)]);
+    assert!(result.status.success(), "{}", err(&result));
+    let text = out(&result);
+    assert!(
+        dir.join("store/community/Model-GGUF/qwen-image.gguf")
+            .exists(),
+        "{text}"
+    );
+    assert!(
+        text.contains("image model") && text.contains("# backend = \"sdcpp\""),
+        "{text}"
+    );
+    let written = fs::read_to_string(&config).unwrap();
+    assert!(
+        !written.contains("qwen-image"),
+        "an image model is not an active entry: {written}"
+    );
+    assert!(
+        written.contains("model-q4"),
+        "the language model next to it is entered"
+    );
+    assert!(run(&["--check-config", s(&config)]).status.success());
     fs::remove_dir_all(dir).unwrap();
 }

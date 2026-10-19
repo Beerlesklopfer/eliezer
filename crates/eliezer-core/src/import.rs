@@ -350,6 +350,28 @@ pub struct GgufInfo {
     pub head_dim: Option<u64>,
     /// Sliding-window or recurrent layers: the estimate needs extra fields for those.
     pub hybrid: bool,
+    /// The file carries a tokenizer (language models do, diffusion models do not).
+    pub has_tokenizer: bool,
+}
+
+/// What a model file is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Llm,
+    Embedding,
+    /// Diffusion models (stable-diffusion.cpp): no tokenizer and no transformer layers in the header.
+    Image,
+}
+impl GgufInfo {
+    pub fn kind(&self) -> Kind {
+        if !self.has_tokenizer && self.layers.is_none() {
+            Kind::Image
+        } else if self.architecture.contains("bert") || self.architecture.contains("embed") {
+            Kind::Embedding
+        } else {
+            Kind::Llm
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -525,6 +547,7 @@ pub fn read_gguf(path: &Path) -> Result<GgufInfo, GgufError> {
         kv_heads: number("attention.head_count_kv").or(heads),
         head_dim,
         hybrid,
+        has_tokenizer: texts.contains_key("tokenizer.ggml.model"),
         architecture,
     })
 }
@@ -545,16 +568,31 @@ pub fn key_from(path: &Path) -> String {
     key.trim_matches(|c| c == '-' || c == '.').to_owned()
 }
 
-/// A `[[model]]` block to paste into the configuration. It is a suggestion: the memory estimate
-/// of sliding-window and hybrid models needs more fields, which the block points out.
-pub fn suggest(target: &Path, size: u64, info: Option<&GgufInfo>) -> String {
-    let embedding =
-        info.is_some_and(|i| i.architecture.contains("bert") || i.architecture.contains("embed"));
+/// The `[[model]]` block for one file under the given key. It is a suggestion: the memory estimate
+/// of sliding-window and hybrid models needs more fields, which the block points out. Image models
+/// get a commented block only, because their runtime (stable-diffusion.cpp) is not connected yet.
+pub fn block(key: &str, target: &Path, size: u64, info: Option<&GgufInfo>) -> String {
+    // Never below 0.1 GB: the configuration rejects zero, and a tiny file is still a model.
+    let gb = (size as f64 / 1e9).max(0.1);
+    let kind = info.map_or(Kind::Llm, GgufInfo::kind);
+    if kind == Kind::Image {
+        return format!(
+            "# Image model (needs the stable-diffusion.cpp runtime, which is not connected yet):\n\
+             # [[model]]\n# key = \"{key}\"\n# backend = \"sdcpp\"\n# source = {{ file = \"{}\" }}\n\
+             # kind = \"image\"\n# vram_gb = {:.1}  (measure it; image models need the figure)\n\
+             # extra = {{ text_encoder = \"...\", vae = \"...\" }}\n",
+            target.display(),
+            gb * 1.4
+        );
+    }
     let mut text = format!(
-        "[[model]]\nkey = \"{}\"\nbackend = \"llamacpp\"\nsource = {{ file = \"{}\" }}\nkind = \"{}\"\n",
-        key_from(target),
+        "[[model]]\nkey = \"{key}\"\nbackend = \"llamacpp\"\nsource = {{ file = \"{}\" }}\nkind = \"{}\"\n",
         target.display(),
-        if embedding { "embedding" } else { "llm" }
+        if kind == Kind::Embedding {
+            "embedding"
+        } else {
+            "llm"
+        }
     );
     match info {
         Some(info) => {
@@ -564,15 +602,16 @@ pub fn suggest(target: &Path, size: u64, info: Option<&GgufInfo>) -> String {
                     context.min(32768)
                 );
             }
-            text += &format!("size_gb = {:.1}\n", size as f64 / 1e9);
             if let (Some(layers), Some(kv_heads), Some(head_dim)) =
                 (info.layers, info.kv_heads, info.head_dim)
             {
+                text += &format!("size_gb = {gb:.1}\n");
                 text += &format!(
                     "arch = {{ layers = {layers}, kv_heads = {kv_heads}, head_dim = {head_dim} }}\n"
                 );
             } else {
-                text += "# arch = { layers = ?, kv_heads = ?, head_dim = ? }  (not found in the file)\n";
+                // Without the attention shape the estimate cannot be computed; state a plain figure.
+                text += &format!("vram_gb = {:.1}  # estimate: file size + 20%\n", gb * 1.2);
             }
             if info.hybrid {
                 text += "# Sliding-window or recurrent layers: add swa_layers/window or linear_layers/state_bytes to arch.\n";
@@ -580,10 +619,199 @@ pub fn suggest(target: &Path, size: u64, info: Option<&GgufInfo>) -> String {
         }
         None => {
             text += &format!(
-                "size_gb = {:.1}\n# The GGUF header could not be read; add arch = {{ ... }} or vram_gb.\n",
-                size as f64 / 1e9
+                "vram_gb = {:.1}  # estimate: file size + 20% (the GGUF header could not be read)\n",
+                gb * 1.2
             );
         }
     }
     text
+}
+
+/// A block under the key derived from the file name.
+pub fn suggest(target: &Path, size: u64, info: Option<&GgufInfo>) -> String {
+    block(&key_from(target), target, size, info)
+}
+
+/// One imported file, as far as the configuration is concerned.
+#[derive(Debug, Clone)]
+pub struct Imported {
+    pub target: PathBuf,
+    pub size: u64,
+    pub info: Option<GgufInfo>,
+}
+
+/// The configuration text after adding the imported models.
+#[derive(Debug, Default)]
+pub struct ConfigUpdate {
+    /// The complete new text (equal to the old one when nothing was added).
+    pub text: String,
+    pub added: Vec<String>,
+    /// Files that were not added, with the reason (already configured, projector, image model).
+    pub skipped: Vec<(PathBuf, &'static str)>,
+    /// Commented blocks for models that cannot be served yet.
+    pub notes: Vec<String>,
+    pub backend_enabled: bool,
+}
+
+fn string_at<'a>(table: &'a toml::Table, path: &[&str]) -> Option<&'a str> {
+    let mut value = table.get(path[0])?;
+    for part in &path[1..] {
+        value = value.get(part)?;
+    }
+    value.as_str()
+}
+
+/// Appends the language and embedding models to the configuration text. Files that are already
+/// configured (same `source.file`) are skipped, keys are made unique, and `[backend.llamacpp]`
+/// is added when missing. Comments and the rest of the text stay as they are. The caller validates
+/// the result before writing it.
+pub fn update_config(existing: &str, imported: &[Imported]) -> Result<ConfigUpdate, String> {
+    let table: toml::Table =
+        toml::from_str(existing).map_err(|_| "the configuration is not valid TOML".to_owned())?;
+    let models = table
+        .get("model")
+        .and_then(toml::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut keys: Vec<String> = models
+        .iter()
+        .filter_map(|m| {
+            m.get("key")
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    let files: Vec<String> = models
+        .iter()
+        .filter_map(|m| m.get("source")?.get("file")?.as_str().map(str::to_owned))
+        .collect();
+    let backend = table.get("backend").and_then(|b| b.get("llamacpp"));
+    let backend_present = backend.is_some();
+    let backend_enabled = backend
+        .and_then(|b| b.get("enabled"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    if backend_present && !backend_enabled {
+        return Err(
+            "[backend.llamacpp] is present but disabled; enable it or add the models yourself"
+                .into(),
+        );
+    }
+    let _ = string_at(&table, &["storage", "models_dir"]);
+
+    let mut update = ConfigUpdate {
+        text: existing.to_owned(),
+        ..ConfigUpdate::default()
+    };
+    let mut appended = String::new();
+    for item in imported {
+        let name = item
+            .target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if name.starts_with("mmproj") {
+            update
+                .skipped
+                .push((item.target.clone(), "vision projector (not used yet)"));
+            continue;
+        }
+        if files.iter().any(|f| Path::new(f) == item.target) {
+            update
+                .skipped
+                .push((item.target.clone(), "already configured"));
+            continue;
+        }
+        let mut key = key_from(&item.target);
+        if key.is_empty() {
+            key = "model".into();
+        }
+        let base = key.clone();
+        let mut n = 2;
+        while keys.contains(&key) {
+            key = format!("{base}-{n}");
+            n += 1;
+        }
+        let text = block(&key, &item.target, item.size, item.info.as_ref());
+        if item.info.as_ref().map(GgufInfo::kind) == Some(Kind::Image) {
+            update.skipped.push((
+                item.target.clone(),
+                "image model (runtime not connected yet)",
+            ));
+            update.notes.push(text);
+            continue;
+        }
+        keys.push(key.clone());
+        update.added.push(key);
+        appended += &text;
+        appended.push('\n');
+    }
+    if !update.added.is_empty() {
+        let mut text = existing.trim_end().to_owned();
+        text.push_str("\n\n# Added by `eliezer --import`; review the values.\n");
+        if !backend_present {
+            text.push_str("[backend.llamacpp]\nenabled = true\n\n");
+            update.backend_enabled = true;
+        }
+        text.push_str(&appended);
+        update.text = text;
+    }
+    Ok(update)
+}
+
+/// A configured model whose file is not what its entry says.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Mismatch {
+    pub key: String,
+    pub file: PathBuf,
+    pub problem: &'static str,
+}
+
+/// Finds entries that point at a diffusion model but are not configured as image models (for
+/// example a block pasted by hand with `kind = "llm"`). Entries whose file cannot be read are
+/// left alone.
+pub fn mismatches(existing: &str) -> Vec<Mismatch> {
+    let Ok(table) = toml::from_str::<toml::Table>(existing) else {
+        return Vec::new();
+    };
+    let Some(models) = table.get("model").and_then(toml::Value::as_array) else {
+        return Vec::new();
+    };
+    models
+        .iter()
+        .filter_map(|model| {
+            let key = model.get("key")?.as_str()?.to_owned();
+            let file = PathBuf::from(model.get("source")?.get("file")?.as_str()?);
+            let kind = model.get("kind").and_then(toml::Value::as_str).unwrap_or("llm");
+            let info = read_gguf(&file).ok()?;
+            (info.kind() == Kind::Image && kind != "image").then_some(Mismatch {
+                key,
+                file,
+                problem: "the file is an image (diffusion) model, but the entry is not an image model",
+            })
+        })
+        .collect()
+}
+
+/// Replaces the configuration file atomically (temporary file in the same directory, same mode and
+/// owner), after keeping the old one as `<name>.bak`.
+pub fn write_config(path: &Path, text: &str) -> Result<(), ImportError> {
+    let metadata = fs::metadata(path).map_err(io_error(path))?;
+    let mut backup = path.as_os_str().to_owned();
+    backup.push(".bak");
+    fs::copy(path, &backup).map_err(io_error(path))?;
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".new");
+    let temporary = PathBuf::from(temporary);
+    let result = (|| {
+        fs::write(&temporary, text).map_err(io_error(&temporary))?;
+        fs::set_permissions(&temporary, metadata.permissions()).map_err(io_error(&temporary))?;
+        // Keep the owner when running as root; as another user the file stays with that user.
+        let _ = chown(&temporary, Some(metadata.uid()), Some(metadata.gid()));
+        fs::rename(&temporary, path).map_err(io_error(path))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }

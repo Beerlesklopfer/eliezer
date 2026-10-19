@@ -984,3 +984,23 @@ async fn reconfigure_adds_removes_and_unloads_idle_models() {
     assert!(e.sup.load(spec("c")).await.is_ok());
     e.sup.shutdown().await;
 }
+
+#[tokio::test]
+async fn every_response_names_the_server() {
+    // Clients tell Eliezer from other programs on the port (LM Studio) by this header.
+    let e = env(&[("a", 1.0, false)], Default::default(), &["k"]);
+    let good = [("authorization", "Bearer k")];
+    for (path, headers, status) in [
+        ("/healthz", &[][..], 200),
+        ("/api/v1/models", &good[..], 200),
+        ("/api/v1/models", &[][..], 401),
+        ("/no/such/path", &good[..], 404),
+        ("/v1/messages", &[("x-api-key", "wrong")][..], 401),
+    ] {
+        let (code, response_headers, _) = send(&e.router, path, None, headers).await;
+        assert_eq!(code.as_u16(), status, "{path}");
+        let server = response_headers["server"].to_str().unwrap();
+        assert!(server.starts_with("eliezer/"), "{path}: {server}");
+    }
+    e.sup.shutdown().await;
+}

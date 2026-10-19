@@ -17,6 +17,9 @@ pub enum HttpError {
     Unreachable(String),
     /// The connection broke or the answer was malformed.
     Protocol(String),
+    /// Something answered, but it is not Eliezer (no `Server: eliezer/...` header); LM Studio
+    /// listens on the same default port. Carries what the server called itself.
+    NotEliezer(String),
 }
 
 /// Address of the service, parsed from `http://host:port`.
@@ -256,6 +259,7 @@ impl Client {
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| HttpError::Protocol("The answer is not valid HTTP".to_owned()))?;
         let (mut length, mut chunked) = (None, false);
+        let mut server: Option<String> = None;
         for _ in 0..200 {
             line.clear();
             if reader.read_line(&mut line).map_err(proto)? == 0 {
@@ -276,6 +280,14 @@ impl Client {
                 } else {
                     Mode::Eof
                 };
+                if !server
+                    .as_deref()
+                    .is_some_and(|s| s.to_ascii_lowercase().starts_with("eliezer"))
+                {
+                    return Err(HttpError::NotEliezer(
+                        server.unwrap_or_else(|| "no Server header".to_owned()),
+                    ));
+                }
                 return Ok(Response {
                     status,
                     body: Body {
@@ -286,7 +298,9 @@ impl Client {
             }
             if let Some((name, value)) = header.split_once(':') {
                 let (name, value) = (name.trim().to_ascii_lowercase(), value.trim());
-                if name == "content-length" {
+                if name == "server" {
+                    server = Some(value.to_owned());
+                } else if name == "content-length" {
                     length = value.parse().ok();
                 } else if name == "transfer-encoding"
                     && value.to_ascii_lowercase().contains("chunked")

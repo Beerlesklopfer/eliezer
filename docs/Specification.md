@@ -459,12 +459,25 @@ are moved into the model store with `eliezer --import DIR`. The command is run b
   0755). Accounts are looked up with `getent`, so local, LDAP and domain accounts work. A user
   alone gives the files its primary group; a group alone changes only the group; with neither set
   the ownership stays as it is (a note is printed).
-- Finally it prints a `[[model]]` block per model for the configuration: key derived from the file
-  name, `backend = "llamacpp"`, the path, `size_gb`, and `max_context` and `arch` read from the GGUF
-  header (the tensor data is never read). Sliding-window and recurrent models get a hint that
-  the memory estimate needs `swa_layers`/`window` or `linear_layers`/`state_bytes`. Vision
-  projector files (`mmproj-*`) are imported but get no block. The blocks are suggestions;
-  nothing is written to the configuration.
+- **The configuration is updated automatically.** For every language and embedding model it
+  appends a `[[model]]` block (key derived from the file name and made unique; `backend = "llamacpp"`;
+  `max_context` and `arch` from the GGUF header, which is read without touching the tensor data; a
+  `vram_gb` estimate of file size + 20 % when the header has no attention shape; at least 0.1 GB) and
+  adds `[backend.llamacpp] enabled = true` when it is missing. Existing text and comments stay as they
+  are, files that are already configured (same `source.file`) are skipped, and vision projector
+  files (`mmproj-*`) are imported but get no entry. Sliding-window and recurrent models get a hint that
+  the memory estimate needs `swa_layers`/`window` or `linear_layers`/`state_bytes`.
+- **Image models** (a GGUF with no tokenizer and no transformer layers, such as `qwen_image21`) are
+  moved too, but only a *commented* block is printed, because their runtime (stable-diffusion.cpp)
+  is not connected yet. An existing entry that points at such a file without being an image model is
+  reported as a warning.
+- **Safety:** the new text is validated exactly like at service start (syntax, values and paths)
+  before anything is written. If it would be invalid, the file stays untouched and the reason is
+  printed. The write is atomic (temporary file in the same directory, same mode and owner) and the
+  old file is kept as `<name>.bak`. A `[backend.llamacpp]` that exists but is disabled is never
+  changed. A broken `[[model]]` list does not block the import: the files are moved either way.
+- `--no-config` prints the blocks instead of editing the file; `--dry-run` shows the files and the
+  entries that would be added.
 
 Exit code 2 for unusable arguments, configuration or accounts, 1 if a file failed, otherwise 0.
 

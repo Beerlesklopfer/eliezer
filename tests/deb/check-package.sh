@@ -8,14 +8,25 @@ cd "$(dirname "$0")/../.."
 deb=${1:-$(ls -t target/debian/eliezer_*.deb | head -n 1)}
 dl=$(mktemp -d)
 trap 'rm -rf "$dl"' EXIT
-(cd "$dl" && apt-get download adduser >/dev/null)   # the minimal image lacks adduser
+# The minimal image lacks adduser and the libraries of the ROCm variant.
+(cd "$dl" && apt-get download adduser libelf1t64 libnuma1 >/dev/null)
 
-podman run --rm --network none \
+# The ROCm variant links against AMD's libraries, which are not Debian packages: they are shared
+# into the container read-only, as they would be installed on a real machine.
+rocm=""
+for dir in "${ROCM_PATH:-/opt/rocm}" /opt/amdgpu; do
+    [ -d "$dir" ] && rocm="$rocm -v $dir:$dir:ro"
+done
+# On a real machine AMD's installer registers /opt/amdgpu/lib in the loader cache; the container has none.
+[ -d /opt/amdgpu/lib/x86_64-linux-gnu ] && rocm="$rocm -e LD_LIBRARY_PATH=/opt/amdgpu/lib/x86_64-linux-gnu"
+
+# shellcheck disable=SC2086
+podman run --rm --network none $rocm \
     -v "$(realpath "$deb"):/pkg.deb:ro" -v "$dl:/dl:ro" \
     docker.io/library/debian:trixie bash -c '
 set -eu
 fail() { echo "FAIL: $*"; exit 1; }
-dpkg -i /dl/adduser*.deb >/dev/null 2>&1
+dpkg -i /dl/*.deb >/dev/null 2>&1
 dpkg -i /pkg.deb >/dev/null 2>&1 || fail "install"
 getent passwd eliezer >/dev/null || fail "system user missing"
 [ "$(stat -c %a /etc/eliezer/config.toml)" = 644 ] || fail "config mode"

@@ -75,8 +75,21 @@ impl App {
         self.keys.set(Arc::new(keys));
     }
 }
+/// Value of the `Server` header on every response; clients use it to tell Eliezer from other
+/// programs on the same port (LM Studio listens on 1234 as well).
+pub const SERVER_NAME: &str = concat!("eliezer/", env!("CARGO_PKG_VERSION"));
+
+async fn identify(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::SERVER,
+        header::HeaderValue::from_static(SERVER_NAME),
+    );
+    response
+}
 pub fn router() -> Router {
-    Router::new().route("/healthz", get(|| async { "ok" }))
+    Router::new()
+        .route("/healthz", get(|| async { "ok" }))
+        .layer(middleware::map_response(identify))
 }
 pub fn managed_router(app: App) -> Router {
     router().merge(
@@ -101,6 +114,7 @@ pub fn managed_router(app: App) -> Router {
                 )
             })
             .layer(middleware::from_fn_with_state(app.clone(), authorize))
+            .layer(middleware::map_response(identify))
             .with_state(app),
     )
 }

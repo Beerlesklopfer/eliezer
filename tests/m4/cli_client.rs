@@ -156,7 +156,7 @@ impl Canned {
 }
 fn reply(status: &str, content_type: &str, body: &str) -> Vec<u8> {
     format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nServer: eliezer/test\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
     .into_bytes()
@@ -171,7 +171,7 @@ fn sse_reply(frames: &[String]) -> Vec<u8> {
         .map(|f| format!("data: {f}\n\n"))
         .collect::<String>()
         + "data: [DONE]\n\n";
-    let mut out = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+    let mut out = b"HTTP/1.1 200 OK\r\nServer: eliezer/test\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
     let bytes = all.as_bytes();
     for piece in bytes.chunks(37) {
         out.extend(format!("{:x}\r\n", piece.len()).as_bytes());
@@ -767,4 +767,44 @@ fn end_to_end_against_an_open_service_and_a_wildcard_listen_address() {
     let parsed: Value = serde_json::from_str(&out(&json)).unwrap();
     assert_eq!(parsed["health"], "ok");
     assert!(parsed["status"]["gpu"]["budget_bytes"].as_u64().is_some());
+}
+
+#[test]
+fn a_foreign_server_on_the_port_is_refused_not_listed() {
+    // LM Studio answers /api/v1/models on 1234 too; `ls` must not show its models as ours.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(2) {
+            let Ok(mut stream) = stream else { return };
+            let mut buffer = [0_u8; 2048];
+            let _ = std::io::Read::read(&mut stream, &mut buffer);
+            let body = r#"{"models":[{"key":"lm-studio-model","type":"llm"}]}"#;
+            let _ = std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "HTTP/1.1 200 OK\r\nX-Powered-By: Express\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eliezer"))
+        .env_remove("ELIEZER_CONFIG")
+        .args(["ls", "--host", &format!("http://127.0.0.1:{port}")])
+        .output()
+        .unwrap();
+    assert_eq!(
+        result.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let text = String::from_utf8_lossy(&result.stderr);
+    assert!(text.contains("is not Eliezer"), "{text}");
+    assert!(
+        !String::from_utf8_lossy(&result.stdout).contains("lm-studio-model"),
+        "the foreign models must not be listed"
+    );
 }

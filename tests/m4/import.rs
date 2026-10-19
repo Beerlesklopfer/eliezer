@@ -385,6 +385,8 @@ fn keys_and_suggestions_are_valid_configuration() {
     // embedding models are recognized by architecture
     let embedding = GgufInfo {
         architecture: "nomic-bert".into(),
+        has_tokenizer: true,
+        layers: Some(12),
         ..Default::default()
     };
     assert!(
@@ -418,4 +420,215 @@ fn run_user_and_run_group_are_validated() {
         let error = Config::parse(&base(bad)).unwrap_err().to_string();
         assert!(error.contains("server.run_"), "{bad}: {error}");
     }
+}
+
+// --- configuration update ------------------------------------------------------------------
+
+fn imported(path: &str, size: u64, info: Option<GgufInfo>) -> Imported {
+    Imported {
+        target: PathBuf::from(path),
+        size,
+        info,
+    }
+}
+fn llm_info() -> GgufInfo {
+    GgufInfo {
+        architecture: "llama".into(),
+        context_length: Some(32768),
+        layers: Some(32),
+        kv_heads: Some(8),
+        head_dim: Some(128),
+        has_tokenizer: true,
+        ..Default::default()
+    }
+}
+fn image_info() -> GgufInfo {
+    GgufInfo {
+        architecture: "qwen_image21".into(),
+        ..Default::default()
+    }
+}
+const BASE: &str = "[server]\nlisten = \"127.0.0.1:1234\"\n# my comment\n[gpu]\n";
+
+#[test]
+fn model_kinds_follow_the_header() {
+    assert_eq!(llm_info().kind(), Kind::Llm);
+    assert_eq!(
+        image_info().kind(),
+        Kind::Image,
+        "no tokenizer and no layers: a diffusion model"
+    );
+    let embedding = GgufInfo {
+        architecture: "nomic-bert".into(),
+        has_tokenizer: true,
+        layers: Some(12),
+        ..Default::default()
+    };
+    assert_eq!(embedding.kind(), Kind::Embedding);
+    // a header that could not be read is treated as a language model, never as an image model
+    assert!(suggest(Path::new("/m/x.gguf"), 4_000_000_000, None).contains("kind = \"llm\""));
+}
+
+#[test]
+fn update_adds_models_the_backend_and_keeps_comments() {
+    let update = update_config(
+        BASE,
+        &[imported(
+            "/var/lib/eliezer/models/a/Llama-7B_Q4.gguf",
+            4_400_000_000,
+            Some(llm_info()),
+        )],
+    )
+    .unwrap();
+    assert_eq!(update.added, vec!["llama-7b-q4"]);
+    assert!(update.backend_enabled);
+    assert!(
+        update.text.starts_with(BASE.trim_end()),
+        "existing text and comments stay as they were"
+    );
+    assert!(update.text.contains("[backend.llamacpp]\nenabled = true"));
+    let config = Config::parse(&update.text).unwrap_or_else(|e| panic!("{e}\n{}", update.text));
+    assert_eq!(config.model[0].key, "llama-7b-q4");
+    // a second run adds nothing, and the backend section is not repeated
+    let again = update_config(
+        &update.text,
+        &[imported(
+            "/var/lib/eliezer/models/a/Llama-7B_Q4.gguf",
+            4_400_000_000,
+            Some(llm_info()),
+        )],
+    )
+    .unwrap();
+    assert!(again.added.is_empty());
+    assert_eq!(again.skipped[0].1, "already configured");
+    assert_eq!(again.text, update.text, "nothing to add means no change");
+}
+
+#[test]
+fn update_makes_keys_unique_and_skips_projectors_and_image_models() {
+    let first = update_config(
+        BASE,
+        &[imported("/m/a/Model.gguf", 1_000_000_000, Some(llm_info()))],
+    )
+    .unwrap();
+    let second = update_config(
+        &first.text,
+        &[
+            imported("/m/b/Model.gguf", 1_000_000_000, Some(llm_info())),
+            imported("/m/b/mmproj-F16.gguf", 500_000_000, None),
+            imported("/m/b/qwen-image.gguf", 4_600_000_000, Some(image_info())),
+        ],
+    )
+    .unwrap();
+    assert_eq!(second.added, vec!["model-2"]);
+    assert!(
+        second
+            .skipped
+            .iter()
+            .any(|(p, why)| p.ends_with("mmproj-F16.gguf") && why.contains("projector"))
+    );
+    assert!(
+        second
+            .skipped
+            .iter()
+            .any(|(p, why)| p.ends_with("qwen-image.gguf") && why.contains("image"))
+    );
+    assert!(
+        second.notes[0].contains("# backend = \"sdcpp\"")
+            && second.notes[0].contains("not connected yet")
+    );
+    assert!(
+        !second.text.contains("qwen-image"),
+        "an image model never becomes an active entry"
+    );
+    Config::parse(&second.text).unwrap();
+    // only an image model: the configuration stays untouched, not even a backend section appears
+    let only_image = update_config(
+        BASE,
+        &[imported(
+            "/m/qwen-image.gguf",
+            4_600_000_000,
+            Some(image_info()),
+        )],
+    )
+    .unwrap();
+    assert_eq!(only_image.text, BASE);
+}
+
+#[test]
+fn update_refuses_what_it_cannot_do_safely() {
+    let disabled = format!("{BASE}[backend.llamacpp]\nenabled = false\n");
+    assert!(
+        update_config(&disabled, &[imported("/m/a.gguf", 1, Some(llm_info()))])
+            .unwrap_err()
+            .contains("disabled")
+    );
+    assert!(update_config("this is [not toml", &[]).is_err());
+}
+
+#[test]
+fn a_broken_model_list_does_not_block_loading_the_rest() {
+    // an entry whose backend is not configured: the full parse fails, the lenient one works
+    let text = format!(
+        "{BASE}[[model]]\nkey = \"x\"\nbackend = \"llamacpp\"\nsource = {{ file = \"/m/x.gguf\" }}\nkind = \"llm\"\nsize_gb = 4.6\n"
+    );
+    assert!(Config::parse(&text).is_err());
+    let (config, stripped) = Config::parse_without_models(&text).unwrap();
+    assert!(config.model.is_empty() && !stripped.contains("[[model]]"));
+    // adding the backend section repairs that entry as far as the backend goes
+    let update = update_config(
+        &text,
+        &[imported("/m/a.gguf", 1_000_000_000, Some(llm_info()))],
+    )
+    .unwrap();
+    assert!(update.backend_enabled && update.added == vec!["a"]);
+}
+
+#[test]
+fn write_config_is_atomic_and_keeps_a_backup() {
+    let t = Temp::new();
+    let path = t.file("config.toml", b"old");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+    write_config(&path, "new text").unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new text");
+    assert_eq!(
+        fs::read_to_string(t.0.join("config.toml.bak")).unwrap(),
+        "old"
+    );
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o640,
+        "the mode stays"
+    );
+    assert!(!t.0.join("config.toml.new").exists());
+    assert!(write_config(&t.0.join("missing.toml"), "x").is_err());
+}
+
+#[test]
+fn entries_pointing_at_image_models_are_reported() {
+    let t = Temp::new();
+    let image = t.file("qwen-image.gguf", &{
+        let mut file = b"GGUF".to_vec();
+        file.extend(3_u32.to_le_bytes());
+        file.extend(0_u64.to_le_bytes());
+        file.extend(1_u64.to_le_bytes());
+        text(&mut file, "general.architecture");
+        file.extend(8_u32.to_le_bytes());
+        text(&mut file, "qwen_image21");
+        file
+    });
+    let llm = t.file("llm.gguf", &gguf("llama", |_| 0));
+    let config = format!(
+        "{BASE}[[model]]\nkey = \"pasted\"\nbackend = \"llamacpp\"\nsource = {{ file = \"{}\" }}\nkind = \"llm\"\n\
+         [[model]]\nkey = \"fine\"\nbackend = \"llamacpp\"\nsource = {{ file = \"{}\" }}\nkind = \"llm\"\n\
+         [[model]]\nkey = \"gone\"\nbackend = \"llamacpp\"\nsource = {{ file = \"/does/not/exist.gguf\" }}\nkind = \"llm\"\n\
+         [[model]]\nkey = \"right\"\nbackend = \"sdcpp\"\nsource = {{ file = \"{}\" }}\nkind = \"image\"\n",
+        image.display(),
+        llm.display(),
+        image.display()
+    );
+    let found = mismatches(&config);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].key, "pasted");
+    assert!(mismatches("not toml [").is_empty());
 }

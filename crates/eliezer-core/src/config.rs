@@ -364,6 +364,22 @@ fn field_line(input: &str, field: &str) -> usize {
 }
 
 impl Config {
+    /// Parses everything except the model list, so `eliezer --import` can run even when a
+    /// `[[model]]` entry is broken (the import is what writes working entries). Returns the
+    /// configuration without models and the text it was parsed from.
+    pub fn parse_without_models(input: &str) -> Result<(Self, String), ConfigError> {
+        let invalid = |message| ConfigError {
+            line: 1,
+            field: "<configuration>".into(),
+            message,
+        };
+        let mut table: toml::Table =
+            toml::from_str(input).map_err(|_| invalid("Invalid TOML syntax"))?;
+        table.remove("model");
+        let text = toml::to_string(&table).map_err(|_| invalid("Invalid TOML syntax"))?;
+        Ok((Self::parse(&text)?, text))
+    }
+
     pub fn parse(input: &str) -> Result<Self, ConfigError> {
         let de = toml::de::Deserializer::parse(input).map_err(|e| ConfigError {
             line: input.as_bytes()[..e.span().map_or(0, |s| s.start).min(input.len())]

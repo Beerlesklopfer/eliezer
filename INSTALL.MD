@@ -122,8 +122,12 @@ sudo eliezer --config /etc/eliezer/config.toml --import ~/.lmstudio/models
 
 `--dry-run` only shows the plan, `--copy` keeps the originals. The directory structure is kept,
 existing files are never overwritten, and a rename within one file system takes no extra space.
-At the end the command prints a `[[model]]` block per model; check it and add it to the
-configuration, then reload with `systemctl reload eliezer`.
+
+The command also enters the language and embedding models into the configuration (and enables
+`[backend.llamacpp]` if needed). It validates the result exactly like the service does and writes it
+only if it is valid, keeping the old file as `config.toml.bak`; use `--no-config` to get the blocks
+printed instead. Image models are moved but only printed as a commented block (their runtime is not
+connected yet). Review the added entries, then apply them with `systemctl reload eliezer`.
 
 ## Command line client
 

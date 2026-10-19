@@ -28,17 +28,18 @@ pub fn usage() -> String {
     "Eliezer – manager for local models\n\
 \n\
 Usage: eliezer [--config PATH] [--check-config [PATH]]      start the service\n\
-       eliezer [--config PATH] --import DIR [--copy] [--dry-run]\n\
+       eliezer [--config PATH] --import DIR [--copy] [--dry-run] [--no-config]\n\
        eliezer COMMAND [OPTIONS]                              talk to the running service\n\
 \n\
 Service options:\n\
   --config PATH       Configuration (otherwise ELIEZER_CONFIG or /etc/eliezer/config.toml)\n\
   --check-config      Only check, then exit\n\
-  --import DIR        Move the .gguf files below DIR into storage.models_dir and hand them to\n\
-                      server.run_user / server.run_group (usually needs root); then print\n\
-                      [[model]] suggestions\n\
+  --import DIR        Move the .gguf files below DIR into storage.models_dir, hand them to\n\
+                      server.run_user / server.run_group and add the language and embedding\n\
+                      models to the configuration (usually needs root)\n\
   --copy              With --import: copy instead of move\n\
   --dry-run           With --import: only show what would happen\n\
+  --no-config         With --import: print the [[model]] blocks, do not edit the configuration\n\
   --version           Print the version number\n\
 \n\
 Commands (they use the HTTP API of the running service):\n\
@@ -356,6 +357,12 @@ fn transport(client: &Client, error: HttpError) -> Failure {
         HttpError::Protocol(m) => {
             Failure::Request(format!("Connection to the service failed: {m}"))
         }
+        HttpError::NotEliezer(found) => Failure::Unreachable(format!(
+            "The server at {} is not Eliezer (it identifies as '{found}'). Another program, for example\n\
+             LM Studio, may be using this address. Give Eliezer its own port with `listen` in the\n\
+             configuration, or name the right address with --host or ELIEZER_HOST.",
+            client.endpoint.url()
+        )),
     }
 }
 
