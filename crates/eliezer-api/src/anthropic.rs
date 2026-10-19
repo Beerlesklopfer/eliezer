@@ -20,7 +20,7 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
         };
         messages.push(json!({"role":"system","content":text}));
     }
-    for message in input["messages"].as_array().ok_or("Nachrichten fehlen")? {
+    for message in input["messages"].as_array().ok_or("Messages are missing")? {
         let role = message["role"]
             .as_str()
             .filter(|v| ["user", "assistant"].contains(v))
@@ -37,17 +37,17 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
             .ok_or("Invalid message content")?
         {
             match block["type"].as_str() {
-                Some("text") => content.push(json!({"type":"text","text":block["text"].as_str().ok_or("Text fehlt")?})),
+                Some("text") => content.push(json!({"type":"text","text":block["text"].as_str().ok_or("Text is missing")?})),
                 Some("image") => {
                     let source = &block["source"];
                     if source["type"] != "base64" { return Err("Only base64 images are supported"); }
                     let mime = source["media_type"].as_str().filter(|v| ["image/png","image/jpeg","image/gif","image/webp"].contains(v)).ok_or("Invalid image format")?;
-                    let data = source["data"].as_str().ok_or("Bilddaten fehlen")?;
+                    let data = source["data"].as_str().ok_or("Image data is missing")?;
                     content.push(json!({"type":"image_url","image_url":{"url":format!("data:{mime};base64,{data}")}}));
                 }
-                Some("tool_use") => calls.push(json!({"id":block["id"].as_str().ok_or("Werkzeug-ID fehlt")?,"type":"function",
-                    "function":{"name":block["name"].as_str().ok_or("Werkzeugname fehlt")?,"arguments":block["input"].to_string()}})),
-                Some("tool_result") => results.push(json!({"role":"tool","tool_call_id":block["tool_use_id"].as_str().ok_or("Werkzeug-ID fehlt")?,
+                Some("tool_use") => calls.push(json!({"id":block["id"].as_str().ok_or("Tool id is missing")?,"type":"function",
+                    "function":{"name":block["name"].as_str().ok_or("Tool name is missing")?,"arguments":block["input"].to_string()}})),
+                Some("tool_result") => results.push(json!({"role":"tool","tool_call_id":block["tool_use_id"].as_str().ok_or("Tool id is missing")?,
                     "content": if let Some(text) = block["content"].as_str() { Value::String(text.into()) } else { block["content"].clone() }})),
                 Some("thinking") => {},
                 _ => return Err("This content block is not supported"),
@@ -75,7 +75,7 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
     if let Some(tools) = input.get("tools") {
         output["tools"] = Value::Array(tools.as_array().ok_or("Invalid tools")?.iter().map(|t| {
             if t.get("type").is_some() { return Err("Server-side tools are not supported"); }
-            Ok(json!({"type":"function","function":{"name":t["name"].as_str().ok_or("Werkzeugname fehlt")?,"description":t["description"],"parameters":t["input_schema"]}}))
+            Ok(json!({"type":"function","function":{"name":t["name"].as_str().ok_or("Tool name is missing")?,"description":t["description"],"parameters":t["input_schema"]}}))
         }).collect::<Result<Vec<_>, _>>()?);
     }
     if let Some(choice) = input.get("tool_choice") {
@@ -84,7 +84,7 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
             Some("any") => json!("required"),
             Some("none") => json!("none"),
             Some("tool") => {
-                json!({"type":"function","function":{"name":choice["name"].as_str().ok_or("Werkzeugname fehlt")?}})
+                json!({"type":"function","function":{"name":choice["name"].as_str().ok_or("Tool name is missing")?}})
             }
             _ => return Err("Invalid tool choice"),
         };
@@ -95,7 +95,7 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
             Some("enabled") => match thinking["budget_tokens"]
                 .as_u64()
                 .filter(|n| *n > 0)
-                .ok_or("Denkbudget fehlt")?
+                .ok_or("Thinking budget is missing")?
             {
                 0..=1024 => "low",
                 1025..=8192 => "medium",
@@ -145,7 +145,7 @@ pub fn response(openai: &Value) -> Result<Value, &'static str> {
             let arguments: Value = serde_json::from_str(
                 call["function"]["arguments"]
                     .as_str()
-                    .ok_or("Werkzeugargumente fehlen")?,
+                    .ok_or("Tool arguments are missing")?,
             )
             .map_err(|_| "Invalid tool arguments")?;
             content.push(json!({"type":"tool_use","id":call["id"],"name":call["function"]["name"],"input":arguments}));

@@ -24,6 +24,14 @@ eliezer (0.5.0) UNRELEASED; urgency=low
     `eliezer search` and `eliezer inspect`. They list candidates with license, quantizations, file sizes, backend
     support and the fit in the GPU and RAM budgets. Nothing is downloaded and no token is sent;
     `[huggingface] search = false` switches it off. New crate `eliezer-hub` with `reqwest` (rustls).
+  * Read images with the llama.cpp runtime: a model with `source.projector` accepts `image_url` parts (base64 `data:`
+    URIs only, never links) in the OpenAI and the Anthropic dialect. Checked on a Radeon RX 7900 XTX with olmOCR 2 7B,
+    Qwen3.8 27B and Gemma 4 26B, which all read back the numbers on a drawn page. A model without projector refuses
+    images with 400. The micro-batch steps down (2048, 1024, 512) until the context of a vision model can be created.
+  * Keep only the window of sliding-window layers in the cache (`swa_full` off), as the memory estimate assumes:
+    Gemma 4 at 32 768 tokens took 25.4 GB of VRAM instead of 19.7 GB. Prefix reuse and parallel requests still pass
+    the live check on Gemma 4 and gpt-oss.
+  * Translate the German leftovers in the Anthropic error messages.
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.5.0-1_amd64.deb.
     M5 model acquisition is still pending; the Candle ROCm experiment remains

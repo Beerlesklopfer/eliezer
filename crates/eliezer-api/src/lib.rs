@@ -842,6 +842,21 @@ async fn count_tokens(
     )
         .into_response()
 }
+/// True when a message carries an image part (OpenAI `image_url` or Anthropic `image`).
+fn has_image_parts(messages: &Value) -> bool {
+    messages.as_array().is_some_and(|list| {
+        list.iter().any(|m| {
+            m["content"].as_array().is_some_and(|parts| {
+                parts.iter().any(|p| {
+                    matches!(
+                        p["type"].as_str(),
+                        Some("image_url" | "input_image" | "image")
+                    )
+                })
+            })
+        })
+    })
+}
 async fn complete(app: App, mut body: Value, anth: bool, completion: bool) -> Response {
     let spec = match spec(&app, &body) {
         Ok(v) => v,
@@ -863,7 +878,15 @@ async fn complete(app: App, mut body: Value, anth: bool, completion: bool) -> Re
         return failure(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "Nachrichten fehlen",
+            "Messages are missing",
+            anth,
+        );
+    }
+    if !model.vision && has_image_parts(&body["messages"]) {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Model does not support image input",
             anth,
         );
     }

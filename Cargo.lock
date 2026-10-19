@@ -315,6 +315,7 @@ dependencies = [
 name = "eliezer-llamacpp"
 version = "0.5.0"
 dependencies = [
+ "base64 0.22.1",
  "eliezer-backend",
  "eliezer-core",
  "llama-cpp-2",

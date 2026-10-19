@@ -39,6 +39,14 @@ kind="llm"
 size_gb=1.0
 arch={layers=2,kv_heads=2,head_dim=64}
 reasoning={options=["none","low","medium","high"],default="none"}
+[[model]]
+key="v"
+backend="mistralrs"
+source={hf="test/vision"}
+kind="llm"
+size_gb=1.0
+vision=true
+arch={layers=2,kv_heads=2,head_dim=64}
 "#,
         )
         .unwrap(),
@@ -277,5 +285,48 @@ async fn estimate_reports_the_calculated_memory_with_its_parts() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    s.shutdown().await;
+}
+
+#[tokio::test]
+async fn images_are_refused_for_models_that_cannot_read_them() {
+    let (app, s) = app(Default::default(), vec![]);
+    let image = json!([{"type": "text", "text": "What is this?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]);
+    let (status, body) = call(
+        app.clone(),
+        "/v1/chat/completions",
+        Some(json!({"model": "a", "messages": [{"role": "user", "content": image}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"]["message"],
+        "Model does not support image input"
+    );
+    // The Anthropic dialect is translated to image parts first and refused the same way.
+    let (status, body) = call(
+        app.clone(),
+        "/v1/messages",
+        Some(json!({"model": "a", "max_tokens": 5, "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}]}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"]["message"],
+        "Model does not support image input"
+    );
+    // A vision model passes this check (the test supervisor does not know it, so it is not found).
+    let (_, body) = call(
+        app,
+        "/v1/chat/completions",
+        Some(json!({"model": "v", "messages": [{"role": "user", "content": image}]})),
+    )
+    .await;
+    assert_ne!(
+        body["error"]["message"],
+        "Model does not support image input"
+    );
     s.shutdown().await;
 }

@@ -163,6 +163,12 @@ the matching HTTP status. Messages never contain keys, tokens or paths outside t
   `stream_options.include_usage` is set (MultiGPT computes tokens/s from it).
 - Tool calls (`tools`, `tool_calls`) are passed through unchanged; which model supports them
   is determined by the backend.
+- **Image input** (models with `capabilities.vision`, that is a llamacpp model with `source.projector`):
+  content parts `{"type": "image_url", "image_url": {"url": "data:image/png;base64,…"}}` (also `input_image` and the
+  Anthropic `image` block). Only base64 `data:` URIs are accepted; a link is refused with 400 and never fetched.
+  At most 8 images per request, 20 MB each and 40 MB together. A model without a projector answers 400
+  "Model does not support image input". An image is encoded to at most 2000 tokens (less when the model's context
+  can only be created with a smaller micro-batch). While the images are encoded, the other requests of the same model wait.
 
 ### 5.1a Chat (Anthropic-compatible, Messages API)
 

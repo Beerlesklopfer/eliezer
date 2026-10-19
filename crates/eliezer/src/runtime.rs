@@ -157,6 +157,7 @@ fn llamacpp_models(
                 eliezer_llamacpp::ModelFile {
                     path: m.source.file.clone()?,
                     embedding: m.kind == ModelKind::Embedding,
+                    projector: m.source.projector.clone(),
                 },
             ))
         })

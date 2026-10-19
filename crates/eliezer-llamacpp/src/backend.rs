@@ -20,6 +20,8 @@ use tokio::sync::{mpsc, oneshot};
 pub struct ModelFile {
     pub path: PathBuf,
     pub embedding: bool,
+    /// The vision projector (`mmproj` file) of a model that reads images.
+    pub projector: Option<PathBuf>,
 }
 
 pub struct LlamaCppBackend {
@@ -87,6 +89,7 @@ impl Backend for LlamaCppBackend {
                 context: spec.context,
                 parallel: spec.parallel,
                 embedding: file.embedding,
+                projector: file.projector,
                 // A load placed on the CPU keeps every layer in system memory.
                 gpu_layers: if spec.device == DevicePolicy::Cpu {
                     0

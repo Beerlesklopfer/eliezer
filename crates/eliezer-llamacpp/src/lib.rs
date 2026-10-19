@@ -2,6 +2,7 @@
 //! (or one of `rocm`, `vulkan`, `cuda`, `cpu`), the engine and the `Backend` implementation.
 pub mod output;
 pub mod template;
+pub mod vision;
 
 #[cfg(feature = "engine")]
 mod backend;

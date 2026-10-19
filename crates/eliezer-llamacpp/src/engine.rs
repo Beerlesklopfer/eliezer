@@ -8,6 +8,7 @@
 use crate::{
     output::{Format, OutputParser, detect_format},
     template::{ChatTemplate, RenderOptions},
+    vision::{extract, has_images},
 };
 use eliezer_backend::{BackendError, Chunk, Embeddings};
 use llama_cpp_2::{
@@ -15,6 +16,7 @@ use llama_cpp_2::{
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::{LlamaModel, params::LlamaModelParams},
+    mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText, mtmd_default_marker},
     sampling::LlamaSampler,
     token::LlamaToken,
 };
@@ -38,6 +40,11 @@ pub(crate) const STREAM_CAPACITY: usize = 256;
 const MIN_ROOM: usize = 8;
 /// Tokens decoded per `decode` call (prompt chunks and generation steps share this budget).
 const N_BATCH: u32 = 2048;
+/// An image is encoded to at most this many tokens; the image must fit one micro-batch because the
+/// attention within an image is not causal.
+const IMAGE_MAX_TOKENS: i32 = 2000;
+/// Tokens of the micro-batch left to the text around an image.
+const IMAGE_MARGIN: u32 = 48;
 /// Chat template used when the GGUF has none.
 const FALLBACK_TEMPLATE: &str = "{% for m in messages %}<|im_start|>{{ m.role }}\n{{ m.content }}<|im_end|>\n{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}";
 
@@ -48,6 +55,8 @@ pub(crate) struct Setup {
     pub parallel: u32,
     pub embedding: bool,
     pub gpu_layers: u32,
+    /// The vision projector (`mmproj` file) of a model that reads images.
+    pub projector: Option<PathBuf>,
 }
 
 pub(crate) struct Job {
@@ -146,22 +155,21 @@ fn worker(
         }
     };
     let slots = if setup.embedding { 1 } else { setup.parallel };
-    let mut params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(setup.context))
-        .with_n_batch(N_BATCH)
-        .with_n_seq_max(slots)
-        .with_embeddings(setup.embedding);
-    if setup.embedding {
-        // Whole inputs must fit one micro-batch for non-causal embedding models.
-        params = params.with_n_ubatch(N_BATCH);
-    }
-    let mut context = match model.new_context(backend, params) {
-        Ok(context) => context,
-        Err(error) => {
-            tracing::error!(model = %setup.key, %error, "The context cannot be created");
-            let _ = ready.send(Err(BackendError::Unavailable));
-            return;
-        }
+    let Some((mut context, ubatch)) = create_context(&model, backend, setup, slots) else {
+        tracing::error!(model = %setup.key, "The context cannot be created");
+        let _ = ready.send(Err(BackendError::Unavailable));
+        return;
+    };
+    let mut vision = match &setup.projector {
+        None => None,
+        Some(path) => match init_vision(path, &model, setup.gpu_layers > 0, ubatch) {
+            Ok(ctx) => Some(ctx),
+            Err(reason) => {
+                tracing::error!(model = %setup.key, reason, "The vision projector cannot be loaded");
+                let _ = ready.send(Err(BackendError::Unavailable));
+                return;
+            }
+        },
     };
     tracing::info!(
         event = "model_loaded",
@@ -175,12 +183,89 @@ fn worker(
     if setup.embedding {
         embed_loop(&model, &mut context, commands);
     } else {
-        chat_loop(&model, &mut context, setup, commands);
+        chat_loop(&model, &mut context, vision.as_mut(), setup, commands);
     }
-    // The context must go before the model; both release their GPU memory here.
+    // The projector and the context must go before the model; all release their GPU memory here.
+    drop(vision);
     drop(context);
     drop(model);
     tracing::info!(event = "model_unloaded", model = %setup.key, "Model unloaded");
+}
+
+/// Creates the context of a model and returns it with the micro-batch size that was reached (0 for
+/// the library default).
+///
+/// Whole inputs (and whole images) must fit one micro-batch for non-causal attention. A big
+/// micro-batch needs a big compute buffer, which some models (Gemma 4) cannot get next to their
+/// weights, so a model with a projector steps down until its context can be created; the image size
+/// follows the micro-batch that was reached.
+fn create_context<'m>(
+    model: &'m LlamaModel,
+    backend: &LlamaBackend,
+    setup: &Setup,
+    slots: u32,
+) -> Option<(LlamaContext<'m>, u32)> {
+    let params = |ubatch: Option<u32>| {
+        let params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(setup.context))
+            .with_n_batch(N_BATCH)
+            .with_n_seq_max(slots)
+            // Sliding-window layers keep only their window (as the memory estimate assumes); the
+            // library default keeps the full context for them, which is several GB more for Gemma 4.
+            .with_swa_full(false)
+            .with_embeddings(setup.embedding);
+        match ubatch {
+            Some(ubatch) => params.with_n_ubatch(ubatch),
+            None => params,
+        }
+    };
+    let ladder: &[Option<u32>] = if setup.projector.is_some() {
+        &[Some(N_BATCH), Some(N_BATCH / 2), Some(N_BATCH / 4)]
+    } else if setup.embedding {
+        &[Some(N_BATCH)]
+    } else {
+        &[None]
+    };
+    for ubatch in ladder {
+        match model.new_context(backend, params(*ubatch)) {
+            Ok(context) => return Some((context, ubatch.unwrap_or(0))),
+            Err(error) => tracing::warn!(
+                model = %setup.key,
+                ubatch = ubatch.unwrap_or(0),
+                %error,
+                "The context cannot be created"
+            ),
+        }
+    }
+    None
+}
+
+/// Loads the vision projector next to the model.
+fn init_vision(
+    path: &std::path::Path,
+    model: &LlamaModel,
+    use_gpu: bool,
+    ubatch: u32,
+) -> Result<MtmdContext, &'static str> {
+    let path = path.to_str().ok_or("the path is not valid text")?;
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get().div_ceil(2));
+    let params = MtmdContextParams {
+        use_gpu,
+        print_timings: false,
+        n_threads: i32::try_from(threads).unwrap_or(4),
+        media_marker: std::ffi::CString::new(mtmd_default_marker())
+            .map_err(|_| "the media marker is not valid")?,
+        image_min_tokens: -1,
+        image_max_tokens: i32::try_from(ubatch.saturating_sub(IMAGE_MARGIN))
+            .unwrap_or(IMAGE_MAX_TOKENS)
+            .min(IMAGE_MAX_TOKENS),
+    };
+    let context = MtmdContext::init_from_file(path, model, &params)
+        .map_err(|_| "llama.cpp refused the projector file")?;
+    if !context.support_vision() {
+        return Err("the projector does not support images");
+    }
+    Ok(context)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -264,6 +349,13 @@ struct Sequence {
     /// Bytes of an incomplete UTF-8 character.
     pending_bytes: Vec<u8>,
     prompt: Vec<LlamaToken>,
+    /// Tokens of the prompt (for the context limit and the usage); for a prompt with images the
+    /// `prompt` list stays empty because the projector library decoded it.
+    prompt_len: usize,
+    /// Position of the first generated token (differs from `prompt_len` for M-RoPE models).
+    base_pos: usize,
+    /// The prompt held images: the slot's cache is dropped when the answer is done.
+    vision: bool,
     /// Prompt tokens already decoded into this slot's cache.
     fed: usize,
     /// Sampled token that still has to be decoded to get the next one.
@@ -323,6 +415,7 @@ fn prompting(model: &LlamaModel) -> Option<Prompting> {
 fn chat_loop(
     model: &LlamaModel,
     context: &mut LlamaContext<'_>,
+    mut vision: Option<&mut MtmdContext>,
     setup: &Setup,
     commands: &std_mpsc::Receiver<Cmd>,
 ) {
@@ -366,7 +459,15 @@ fn chat_loop(
             let Some(job) = pending.pop_front() else {
                 break;
             };
-            admit(model, context, &prompting, limit, &mut slots, job);
+            admit(
+                model,
+                context,
+                vision.as_deref_mut(),
+                &prompting,
+                limit,
+                &mut slots,
+                job,
+            );
         }
 
         // 3. One batch: prompt chunks and one generation step per sequence.
@@ -414,7 +515,7 @@ fn chat_loop(
                     seq.next = Some(token);
                     continue;
                 }
-                let at = seq.prompt.len() + seq.generated - 1;
+                let at = seq.base_pos + seq.generated - 1;
                 if batch.add(token, at as i32, &[index as i32], true).is_err() {
                     seq.finish = Some("length");
                     continue;
@@ -451,10 +552,15 @@ fn chat_loop(
         }
 
         // 5. Finish sequences.
-        for slot in &mut slots {
+        for (index, slot) in slots.iter_mut().enumerate() {
             if slot.seq.as_ref().is_some_and(|s| s.finish.is_some())
                 && let Some(seq) = slot.seq.take()
             {
+                // The cache of a prompt with images is no prefix for anything else.
+                if seq.vision {
+                    slot.cached.clear();
+                    let _ = context.clear_kv_cache_seq(Some(index as u32), None, None);
+                }
                 finish(seq);
             }
         }
@@ -547,6 +653,7 @@ fn stop_sequences(body: &Value) -> Vec<String> {
 fn admit(
     model: &LlamaModel,
     context: &mut LlamaContext<'_>,
+    vision: Option<&mut MtmdContext>,
     prompting: &Prompting,
     limit: usize,
     slots: &mut [Slot],
@@ -564,6 +671,19 @@ fn admit(
         .get("tools")
         .filter(|_| job.body["tool_choice"] != "none");
     let effort = job.reasoning.as_deref();
+    // Images: the messages are flattened to text with one marker per image.
+    let extracted = if has_images(messages) {
+        match extract(messages, mtmd_default_marker()) {
+            Ok(extracted) => Some(extracted),
+            Err(error) => {
+                tracing::warn!(%error, "The images of a request were refused");
+                return refuse(job, "images refused");
+            }
+        }
+    } else {
+        None
+    };
+    let messages: &[Value] = extracted.as_ref().map_or(messages, |e| &e.messages);
     let options = RenderOptions {
         messages,
         tools,
@@ -578,6 +698,22 @@ fn admit(
             return refuse(job, "template error");
         }
     };
+    if let Some(extracted) = &extracted {
+        let Some(mtmd) = vision else {
+            return refuse(job, "the model cannot read images");
+        };
+        return admit_with_images(
+            model,
+            context,
+            mtmd,
+            limit,
+            slots,
+            job,
+            &text,
+            &extracted.images,
+            prompting,
+        );
+    }
     // The template already contains the special tokens (BOS and so on) as text.
     let prompt = model.vocab().tokenize(text.as_bytes(), false, true);
     if prompt.is_empty() || prompt.len() >= limit {
@@ -627,6 +763,9 @@ fn admit(
         stops: stop_sequences(&job.body),
         held: String::new(),
         pending_bytes: Vec::new(),
+        prompt_len: prompt.len(),
+        base_pos: prompt.len(),
+        vision: false,
         prompt,
         fed: keep,
         next: None,
@@ -637,6 +776,103 @@ fn admit(
         stop_matched: false,
         abandoned: false,
     };
+    slots[index].seq = Some(sequence);
+    let _ = job.admitted.send(Ok(()));
+}
+
+/// Admits a request whose prompt holds images: the projector library encodes the images and decodes
+/// the whole prompt into the slot (it blocks the worker for that time), then the first token is
+/// sampled from its last logits and generation goes on in the shared batches.
+#[allow(clippy::too_many_arguments)]
+fn admit_with_images(
+    model: &LlamaModel,
+    context: &mut LlamaContext<'_>,
+    mtmd: &mut MtmdContext,
+    limit: usize,
+    slots: &mut [Slot],
+    job: Job,
+    text: &str,
+    images: &[Vec<u8>],
+    prompting: &Prompting,
+) {
+    let refuse = |job: Job, reason: &str| {
+        tracing::warn!(reason, "A request with images was refused");
+        let _ = job.admitted.send(Err(BackendError::InvalidRequest));
+    };
+    let mut bitmaps = Vec::with_capacity(images.len());
+    for bytes in images {
+        match MtmdBitmap::from_buffer(mtmd, bytes, false) {
+            Ok(bitmap) => bitmaps.push(bitmap),
+            Err(_) => return refuse(job, "an image cannot be decoded"),
+        }
+    }
+    let refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
+    // The template already contains the special tokens as text.
+    let input = MtmdInputText {
+        text: text.to_owned(),
+        add_special: false,
+        parse_special: true,
+    };
+    let chunks = match mtmd.tokenize(input, &refs) {
+        Ok(chunks) => chunks,
+        Err(error) => {
+            tracing::warn!(%error, "The prompt with images cannot be tokenized");
+            return refuse(job, "the images do not match the prompt");
+        }
+    };
+    let total = chunks.total_tokens();
+    if total == 0 || total >= limit {
+        return refuse(job, "prompt does not fit the context window");
+    }
+    let sampler = match sampler(model, &job.body) {
+        Ok(sampler) => sampler,
+        Err(_) => return refuse(job, "sampling parameters rejected"),
+    };
+    let Some(index) = slots.iter().position(|s| s.seq.is_none()) else {
+        return refuse(job, "no free slot");
+    };
+    // The cache of the slot cannot be reused: start from an empty slot.
+    slots[index].cached.clear();
+    let _ = context.clear_kv_cache_seq(Some(index as u32), None, None);
+    let n_past = match chunks.eval_chunks(mtmd, context, 0, index as i32, N_BATCH as i32, true) {
+        Ok(n_past) => n_past,
+        Err(error) => {
+            tracing::error!(%error, "The images could not be decoded into the context");
+            let _ = context.clear_kv_cache_seq(Some(index as u32), None, None);
+            return refuse(job, "the images could not be processed");
+        }
+    };
+    let requested = job.body["max_completion_tokens"]
+        .as_u64()
+        .or_else(|| job.body["max_tokens"].as_u64())
+        .map_or(usize::MAX, |n| n as usize);
+    let max_new = requested.min(limit - total).max(1);
+    let prefilled = matches!(prompting.format, Format::Think | Format::QwenXml)
+        && text.trim_end().ends_with("<think>");
+    let mut sequence = Sequence {
+        tx: job.tx,
+        sampler,
+        parser: OutputParser::new(prompting.format, prefilled),
+        format: prompting.format,
+        stops: stop_sequences(&job.body),
+        held: String::new(),
+        pending_bytes: Vec::new(),
+        prompt: Vec::new(),
+        prompt_len: total,
+        base_pos: usize::try_from(n_past).unwrap_or(total),
+        vision: true,
+        fed: 0,
+        next: None,
+        generated: 0,
+        max_new,
+        limit,
+        finish: None,
+        stop_matched: false,
+        abandoned: false,
+    };
+    // The last logits of the decoded prompt give the first token.
+    let token = sequence.sampler.sample(context, -1);
+    accept(model, &mut sequence, token);
     slots[index].seq = Some(sequence);
     let _ = job.admitted.send(Ok(()));
 }
@@ -663,7 +899,7 @@ fn accept(model: &LlamaModel, seq: &mut Sequence, token: LlamaToken) {
         seq.finish = Some("stop");
         return;
     }
-    if seq.generated >= seq.max_new || seq.prompt.len() + seq.generated >= seq.limit {
+    if seq.generated >= seq.max_new || seq.prompt_len + seq.generated >= seq.limit {
         seq.finish = Some("length");
         return;
     }
@@ -794,7 +1030,7 @@ fn finish(mut seq: Sequence) {
         Some(reason) => reason,
         None => "stop",
     };
-    let (input_tokens, output_tokens) = (seq.prompt.len() as u64, seq.generated as u64);
+    let (input_tokens, output_tokens) = (seq.prompt_len as u64, seq.generated as u64);
     send(
         &mut seq,
         Chunk::Done {
