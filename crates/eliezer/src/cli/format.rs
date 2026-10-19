@@ -163,6 +163,7 @@ pub fn ps_text(models: &Value, status: &Value) -> String {
             vec![
                 m["key"].as_str().unwrap_or("-").to_owned(),
                 m["state"].as_str().unwrap_or("-").to_owned(),
+                m["device"].as_str().unwrap_or("gpu").to_owned(),
                 opt_bytes(&m["vram_bytes"]),
                 get("context_length"),
                 get("parallel"),
@@ -182,7 +183,8 @@ pub fn ps_text(models: &Value, status: &Value) -> String {
         &[
             "MODEL",
             "STATE",
-            "VRAM",
+            "DEVICE",
+            "MEMORY",
             "CONTEXT",
             "PARALLEL",
             "IDLE",
@@ -190,7 +192,7 @@ pub fn ps_text(models: &Value, status: &Value) -> String {
             "QUEUED",
         ],
         &rows,
-        &[2, 3, 4, 6, 7],
+        &[3, 4, 5, 7, 8],
     )
 }
 
@@ -241,6 +243,15 @@ pub fn status_text(base: &str, health: &str, status: &Value) -> String {
         ),
         _ => String::new(),
     };
+    let cpu = &status["cpu"];
+    let cpu_text = match cpu["budget_bytes"].as_u64() {
+        Some(budget) if budget > 0 => format!(
+            "CPU memory   {} used of {} budget\n",
+            opt_bytes(&cpu["used_bytes"]),
+            opt_bytes(&cpu["budget_bytes"])
+        ),
+        _ => String::new(),
+    };
     format!(
         "Service      {base} is running (health: {health})\n\
          Client       eliezer {}\n\
@@ -249,7 +260,7 @@ pub fn status_text(base: &str, health: &str, status: &Value) -> String {
          GPU used     {}{percent}\n\
          GPU free     {}\n\
          GPU budget   {}\n\
-         Models       {loaded} loaded of {} configured\n\
+         {cpu_text}Models       {loaded} loaded of {} configured\n\
          Queue        {queue_text}\n{hint}",
         env!("CARGO_PKG_VERSION"),
         opt_bytes(&gpu["total_bytes"]),

@@ -38,6 +38,21 @@ pub struct LoadSpec {
     pub context: u32,
     pub parallel: u32,
     pub bytes: u64,
+    /// What was asked for (`auto` leaves the choice to the supervisor). A running instance carries
+    /// the device it was actually placed on (`gpu` or `cpu`).
+    pub device: eliezer_core::config::DevicePolicy,
+}
+impl LoadSpec {
+    /// Whether an instance loaded with `self` already serves a request for `wanted`: same model,
+    /// context, parallelism and size, and the same device unless the request leaves it open.
+    pub fn satisfies(&self, wanted: &Self) -> bool {
+        use eliezer_core::config::DevicePolicy::Auto;
+        self.model == wanted.model
+            && self.context == wanted.context
+            && self.parallel == wanted.parallel
+            && self.bytes == wanted.bytes
+            && (wanted.device == Auto || wanted.device == self.device)
+    }
 }
 #[derive(Debug, Clone)]
 pub struct Running {

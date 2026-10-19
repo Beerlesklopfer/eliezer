@@ -82,6 +82,7 @@ fn env_kinds(models: &[(&str, f64, bool, &str)], fake: FakeConfig, keys: &[&str]
                     context: m.default_context,
                     parallel: 1,
                     bytes,
+                    device: eliezer_core::config::DevicePolicy::Auto,
                 },
                 max_context: m.max_context,
             }
@@ -93,6 +94,7 @@ fn env_kinds(models: &[(&str, f64, bool, &str)], fake: FakeConfig, keys: &[&str]
         clock.clone(),
         Settings {
             budget: 7_000_000_000,
+            ram_budget: 0,
             idle_ms: 1000,
             wait_ms: 100,
             queue_max: 4,
@@ -931,12 +933,14 @@ async fn reconfigure_adds_removes_and_unloads_idle_models() {
                 context: 1024,
                 parallel: 1,
                 bytes,
+                device: eliezer_core::config::DevicePolicy::Auto,
             },
             max_context: 4096,
         }
     };
     let settings = Settings {
         budget: 7_000_000_000,
+        ram_budget: 0,
         idle_ms: 1000,
         wait_ms: 100,
         queue_max: 4,
@@ -976,6 +980,7 @@ async fn reconfigure_adds_removes_and_unloads_idle_models() {
         context: 1024,
         parallel: 1,
         bytes: 1_000_000_000,
+        device: eliezer_core::config::DevicePolicy::Auto,
     };
     assert!(matches!(
         e.sup.load(spec("a")).await,

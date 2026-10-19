@@ -14,8 +14,9 @@ use eliezer_backend::{
     supervisor::{Error, Lease, Supervisor},
 };
 use eliezer_core::{
-    config::{Config, ModelKind},
+    config::{Config, DevicePolicy, ModelKind},
     memory::estimate,
+    scheduler::Place,
 };
 use serde_json::{Value, json};
 use std::{
@@ -145,17 +146,25 @@ fn error(error: Error, anth: bool) -> Response {
     let (status, code, message) = match error {
         Error::UnknownModel => (404, "not_found", "Model is not allowed".to_owned()),
         Error::InvalidLoad => (400, "invalid_request", "Invalid load parameters".to_owned()),
-        Error::InsufficientMemory { needed, free } => {
+        Error::InsufficientMemory {
+            needed,
+            free,
+            place,
+        } => {
             let gb = |bytes: u64| format!("{:.1}", bytes as f64 / 1e9);
-            (
-                409,
-                "insufficient_memory",
-                format!(
+            let message = match place {
+                Place::Gpu => format!(
                     "Not enough memory: needs {} GB, free {} GB",
                     gb(needed),
                     gb(free)
                 ),
-            )
+                Place::Cpu => format!(
+                    "Not enough memory on the CPU: needs {} GB, free {} GB; raise [cpu] ram_budget_gb",
+                    gb(needed),
+                    gb(free)
+                ),
+            };
+            (409, "insufficient_memory", message)
         }
         Error::QueueFull | Error::Timeout => (
             if anth { 529 } else { 503 },
@@ -318,6 +327,15 @@ fn spec(app: &App, body: &Value) -> Result<eliezer_backend::LoadSpec, Error> {
                 .ok_or(Error::InvalidLoad),
         }
     };
+    let device = match body.get("device") {
+        None => model.device,
+        Some(value) => match value.as_str() {
+            Some("auto") => DevicePolicy::Auto,
+            Some("gpu") => DevicePolicy::Gpu,
+            Some("cpu") => DevicePolicy::Cpu,
+            _ => return Err(Error::InvalidLoad),
+        },
+    };
     let context = number("context_length", model.default_context)?;
     let parallel = number("parallel", model.parallel)?;
     let file_size = model
@@ -333,6 +351,7 @@ fn spec(app: &App, body: &Value) -> Result<eliezer_backend::LoadSpec, Error> {
         context,
         parallel,
         bytes,
+        device,
     })
 }
 async fn load(
@@ -381,11 +400,30 @@ async fn status(State(app): State<App>) -> Response {
         Ok(info) => info,
         Err(e) => return error(e, false),
     };
+    let place_of = |key: &str| {
+        info.places
+            .iter()
+            .find(|(k, _)| k == key)
+            .map_or(Place::Gpu, |(_, p)| *p)
+    };
+    // Bookkeeping of the models on the GPU; models on the CPU use system memory.
     let used = info
         .instances
         .iter()
         .filter(|i| matches!(i.state, S::Loaded | S::Loading | S::Unloading))
+        .filter(|i| place_of(&i.key) == Place::Gpu)
         .fold(0_u64, |sum, i| sum.saturating_add(i.bytes));
+    let (ram_gb, reserve_gb) = {
+        let config = app.config.get();
+        (config.cpu.ram_budget_gb, config.cpu.reserve_gb)
+    };
+    let ram_budget = if ram_gb > 0.0 {
+        eliezer_core::memory::gb_bytes(ram_gb)
+            .and_then(|b| eliezer_core::memory::gb_bytes(reserve_gb).map(|r| b.saturating_sub(r)))
+            .unwrap_or(0)
+    } else {
+        0
+    };
     let budget = eliezer_core::memory::gb_bytes(app.config.get().gpu.vram_budget_gb).unwrap_or(0);
     // The measurement may start processes (nvidia-smi), so do not block in the async context.
     let probe = app.probe.clone();
@@ -408,6 +446,7 @@ async fn status(State(app): State<App>) -> Response {
             json!({
                 "key": i.key,
                 "state": format!("{:?}", i.state).to_lowercase(),
+                "device": place_of(&i.key).name(),
                 "vram_bytes": i.bytes,
                 "last_used_ms_ago": in_use.then(|| info.now_ms.saturating_sub(i.last_used_ms)),
                 "in_flight": i.in_flight,
@@ -425,6 +464,7 @@ async fn status(State(app): State<App>) -> Response {
     Json(json!({
         "gpu": {"probe": probe_name, "total_bytes": total, "used_bytes": used,
                 "free_bytes": total.saturating_sub(used), "budget_bytes": budget},
+        "cpu": {"budget_bytes": ram_budget, "used_bytes": info.ram_used},
         "models": models,
         "queue": queue,
     }))

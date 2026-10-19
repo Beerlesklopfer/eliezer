@@ -16,6 +16,8 @@ pub struct Config {
     pub storage: StorageConfig,
     pub gpu: GpuConfig,
     #[serde(default)]
+    pub cpu: CpuConfig,
+    #[serde(default)]
     pub scheduler: SchedulerConfig,
     #[serde(default)]
     pub huggingface: HuggingFaceConfig,
@@ -74,6 +76,36 @@ impl Default for GpuConfig {
         }
     }
 }
+/// Main memory that language models may use when the GPU is not available to them. Off by default.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CpuConfig {
+    /// Memory for models placed on the CPU; 0 turns CPU placement off.
+    pub ram_budget_gb: f64,
+    /// Kept free for the system out of the budget.
+    pub reserve_gb: f64,
+}
+impl Default for CpuConfig {
+    fn default() -> Self {
+        Self {
+            ram_budget_gb: 0.0,
+            reserve_gb: 4.0,
+        }
+    }
+}
+
+/// Where a model may run. Diffusion models cannot use the CPU in a useful time, so they always get
+/// the GPU; language and embedding models may fall back to the CPU (`auto`).
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DevicePolicy {
+    /// The GPU, unless an image model has priority on it or the model does not fit there.
+    #[default]
+    Auto,
+    Gpu,
+    Cpu,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GpuVendor {
@@ -189,6 +221,9 @@ pub struct ModelConfig {
     pub vision: bool,
     #[serde(default)]
     pub pinned: bool,
+    /// `auto` (default), `gpu` or `cpu`; image models always use the GPU.
+    #[serde(default)]
+    pub device: DevicePolicy,
     pub reasoning: Option<ReasoningConfig>,
     pub arch: Option<Architecture>,
     pub size_gb: Option<f64>,
@@ -272,7 +307,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb extra text_encoder vae";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb extra text_encoder vae";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -283,6 +318,7 @@ const SECTION_FIELDS: &[(&str, &str)] = &[
     ),
     ("storage", "models_dir"),
     ("gpu", "vendor index vram_budget_gb reserve_gb measure"),
+    ("cpu", "ram_budget_gb reserve_gb"),
     (
         "scheduler",
         "idle_unload_secs queue_max queue_wait_secs failed_retry_secs",
@@ -529,6 +565,18 @@ impl Config {
             "Reserve must be finite, non-negative and smaller than the budget",
         )?;
         check(
+            self.cpu.ram_budget_gb.is_finite() && self.cpu.ram_budget_gb >= 0.0,
+            "cpu.ram_budget_gb",
+            "Budget must be finite and not negative (0 turns CPU placement off)",
+        )?;
+        check(
+            self.cpu.reserve_gb.is_finite()
+                && self.cpu.reserve_gb >= 0.0
+                && (self.cpu.ram_budget_gb == 0.0 || self.cpu.reserve_gb < self.cpu.ram_budget_gb),
+            "cpu.reserve_gb",
+            "Reserve must be finite, not negative and smaller than the budget",
+        )?;
+        check(
             positive(self.huggingface.cache_limit_gb),
             "huggingface.cache_limit_gb",
             "Cache limit must be finite and greater than zero",
@@ -661,6 +709,11 @@ impl Config {
                 model.kind != ModelKind::Image || model.vram_gb.is_some(),
                 "vram_gb",
                 "Image models require a measured memory requirement",
+            )?;
+            check_model(
+                model.kind != ModelKind::Image || model.device != DevicePolicy::Cpu,
+                "device",
+                "Image models need the GPU; diffusion on the CPU is not supported",
             )?;
             check_model(
                 (model.backend == BackendKind::Sdcpp) == (model.kind == ModelKind::Image),

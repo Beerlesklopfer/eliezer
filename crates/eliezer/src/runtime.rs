@@ -95,6 +95,7 @@ fn models(config: &Config) -> Vec<Model> {
                 context: m.default_context,
                 parallel: m.parallel,
                 bytes,
+                device: m.device,
             },
             max_context: m.max_context,
         });
@@ -166,9 +167,18 @@ fn settings(config: &Config) -> Result<Settings, &'static str> {
     let budget = gb_bytes(config.gpu.vram_budget_gb)
         .and_then(|b| gb_bytes(config.gpu.reserve_gb).map(|r| b.saturating_sub(r)))
         .map_err(|_| "VRAM budget is invalid")?;
+    // Without a RAM budget nothing is placed on the CPU.
+    let ram_budget = if config.cpu.ram_budget_gb > 0.0 {
+        gb_bytes(config.cpu.ram_budget_gb)
+            .and_then(|b| gb_bytes(config.cpu.reserve_gb).map(|r| b.saturating_sub(r)))
+            .map_err(|_| "RAM budget is invalid")?
+    } else {
+        0
+    };
     let s = &config.scheduler;
     Ok(Settings {
         budget,
+        ram_budget,
         idle_ms: s.idle_unload_secs.saturating_mul(1000),
         wait_ms: s.queue_wait_secs.saturating_mul(1000),
         queue_max: s.queue_max,

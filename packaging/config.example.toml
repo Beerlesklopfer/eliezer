@@ -16,6 +16,11 @@ vram_budget_gb = 24.0
 reserve_gb = 2.0
 measure = "auto"
 
+# Optional: let language models run in system memory while a diffusion model holds the GPU.
+# [cpu]
+# ram_budget_gb = 0.0   # 0 turns CPU placement off
+# reserve_gb = 4.0
+
 [scheduler]
 idle_unload_secs = 1800
 queue_max = 64

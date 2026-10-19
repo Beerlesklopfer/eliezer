@@ -77,6 +77,10 @@ vram_budget_gb = 24.0               # total memory of the card (decimal GB, 10^9
 reserve_gb = 2.0                    # for display/system
 measure = "auto"                    # "auto" | "nvml" | "nvidia-smi" | "sysfs" | "rocm-smi" | "none"
 
+[cpu]                                # optional; language models may run in system memory (section 7a)
+ram_budget_gb = 0.0                  # memory for models on the CPU (decimal GB); 0 = CPU placement is off
+reserve_gb = 4.0                     # kept free for the system
+
 [scheduler]
 idle_unload_secs = 1800             # unload when idle (30 min)
 queue_max = 64
@@ -355,6 +359,26 @@ ago. This also applies to models loaded via `/api/v1/models/load` (no TTL from o
 **Recovery:** If a backend process dies, the instance becomes `failed`; running requests end
 with 502, the next request reloads. At service start nothing is loaded; orphaned child processes
 of an earlier instance are terminated (PID file in `/run/eliezer`).
+
+## 7a. GPU priority and CPU placement
+
+Language models run acceptably on the CPU, diffusion models do not. Therefore the GPU belongs to diffusion
+models first. There are two pools of memory: the VRAM budget (`[gpu]`) and, if `[cpu] ram_budget_gb` is above
+0, a RAM budget. Each model has `device = "auto" | "gpu" | "cpu"` (default `auto`), and a load request may
+override it with the field `device`.
+
+- Image models always take the GPU; `device = "cpu"` for them is a configuration error.
+- `gpu` and `cpu` are kept as asked.
+- `auto` takes the GPU, **except** while a diffusion model has priority there (one is loading or loaded, or a
+  request for one is waiting) and a RAM budget exists: then the language model is placed on the CPU instead of
+  evicting the image model or waiting for it. It also falls back to the CPU when it does not fit on the GPU
+  even after eviction.
+- The planner runs per pool: only the instances of one pool compete for its budget. A model is not moved
+  between pools while loaded; it changes pool on the next load.
+- Without a RAM budget nothing is placed on the CPU and the behavior is as before.
+- A rejection on the CPU reports `409 insufficient_memory` with a hint to raise `[cpu] ram_budget_gb`.
+- `GET /api/v1/status` reports `device` per model and `cpu.budget_bytes` / `cpu.used_bytes`;
+  `eliezer ps` shows a DEVICE column.
 
 ## 8. Backends
 

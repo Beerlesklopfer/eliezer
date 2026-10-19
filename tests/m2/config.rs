@@ -18,6 +18,20 @@ fn example_and_defaults_are_valid() {
 }
 
 #[test]
+fn cpu_placement_is_off_by_default_and_image_models_need_the_gpu() {
+    let config = Config::parse(EXAMPLE).unwrap();
+    assert_eq!(config.cpu.ram_budget_gb, 0.0);
+    let with = EXAMPLE.replace("[scheduler]", "[cpu]\nram_budget_gb = 32.0\n\n[scheduler]");
+    assert_eq!(Config::parse(&with).unwrap().cpu.ram_budget_gb, 32.0);
+    let negative = EXAMPLE.replace("[scheduler]", "[cpu]\nram_budget_gb = -1.0\n\n[scheduler]");
+    assert!(Config::parse(&negative).is_err());
+    let image = format!(
+        "{EXAMPLE}\n[[model]]\nkey=\"pic\"\nbackend=\"sdcpp\"\nkind=\"image\"\ndevice=\"cpu\"\nvram_gb=4.0\nsource={{file=\"/var/lib/eliezer/models/p.gguf\"}}\n"
+    );
+    let error = Config::parse(&image).unwrap_err().to_string();
+    assert!(error.contains("diffusion on the CPU"), "{error}");
+}
+#[test]
 fn schema_rejects_unknown_fields_without_echoing_values() {
     for (old, new) in [
         (

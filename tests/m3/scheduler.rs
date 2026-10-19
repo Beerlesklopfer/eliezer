@@ -131,3 +131,29 @@ fn fifo_round_robin_batch_and_cancel() {
         .unwrap();
     assert_eq!(queue.pop(None).unwrap().1.id, 6);
 }
+#[test]
+fn placement_follows_the_image_priority() {
+    use eliezer_core::config::DevicePolicy::*;
+    // Diffusion always takes the GPU.
+    assert_eq!(choose_place(Cpu, true, true, true), Place::Gpu);
+    assert_eq!(choose_place(Auto, true, false, false), Place::Gpu);
+    // Explicit devices are kept.
+    assert_eq!(choose_place(Gpu, false, true, true), Place::Gpu);
+    assert_eq!(choose_place(Cpu, false, false, false), Place::Cpu);
+    // Auto: CPU only with a RAM budget and an image model in charge of the GPU.
+    assert_eq!(choose_place(Auto, false, true, true), Place::Cpu);
+    assert_eq!(choose_place(Auto, false, true, false), Place::Gpu);
+    assert_eq!(choose_place(Auto, false, false, true), Place::Gpu);
+}
+#[test]
+fn image_priority_holds_while_an_image_model_loads_loaded_or_waits() {
+    let mut image = instance("img", 1, 10);
+    image.image = true;
+    assert!(image_priority(&[image.clone()], false));
+    image.state = State::Loading;
+    assert!(image_priority(&[image.clone()], false));
+    image.state = State::Unloaded;
+    assert!(!image_priority(&[image], false));
+    assert!(image_priority(&[], true));
+    assert!(!image_priority(&[instance("llm", 1, 1)], false));
+}

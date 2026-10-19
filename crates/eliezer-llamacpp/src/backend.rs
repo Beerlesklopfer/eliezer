@@ -4,6 +4,7 @@ use eliezer_backend::{
     Backend, BackendError, BackendFuture, ChatRequest, Chunk, EmbedRequest, Embeddings, LoadSpec,
     Running,
 };
+use eliezer_core::config::DevicePolicy;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -86,7 +87,12 @@ impl Backend for LlamaCppBackend {
                 context: spec.context,
                 parallel: spec.parallel,
                 embedding: file.embedding,
-                gpu_layers: self.gpu_layers,
+                // A load placed on the CPU keeps every layer in system memory.
+                gpu_layers: if spec.device == DevicePolicy::Cpu {
+                    0
+                } else {
+                    self.gpu_layers
+                },
             })
             .await?;
             let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);

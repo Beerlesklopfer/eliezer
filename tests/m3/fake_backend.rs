@@ -5,6 +5,7 @@ fn spec() -> LoadSpec {
         context: 1024,
         parallel: 1,
         bytes: 1000,
+        device: eliezer_core::config::DevicePolicy::Auto,
     }
 }
 fn request() -> ChatRequest {

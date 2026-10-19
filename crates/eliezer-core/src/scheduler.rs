@@ -1,4 +1,5 @@
 //! State transitions and load planning without side effects.
+use crate::config::DevicePolicy;
 use std::collections::{BTreeMap, VecDeque};
 
 pub trait Clock: Send + Sync {
@@ -51,6 +52,59 @@ pub struct Instance {
     pub in_flight: usize,
     pub last_used_ms: u64,
 }
+/// The pool of memory an instance lives in: the GPU (VRAM) or the CPU (RAM).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    Gpu,
+    Cpu,
+}
+impl Place {
+    /// The device a backend is told to use.
+    pub fn device(self) -> DevicePolicy {
+        match self {
+            Self::Gpu => DevicePolicy::Gpu,
+            Self::Cpu => DevicePolicy::Cpu,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Gpu => "gpu",
+            Self::Cpu => "cpu",
+        }
+    }
+}
+
+/// True while a diffusion model has priority on the GPU: one is loading or loaded, or a request
+/// for one is waiting. Diffusion cannot run on the CPU in a useful time, language models can.
+pub fn image_priority(instances: &[Instance], image_waiting: bool) -> bool {
+    image_waiting
+        || instances
+            .iter()
+            .any(|i| i.image && matches!(i.state, State::Loading | State::Loaded))
+}
+
+/// Where a model should go. Diffusion models always take the GPU. A language model asks for a
+/// device or leaves it to `auto`: it takes the GPU, except when CPU placement is available and
+/// a diffusion model has priority there, then it runs on the CPU instead of evicting the image
+/// model or waiting for it. A model already placed stays where it is until it is unloaded
+/// (no moving back and forth).
+pub fn choose_place(
+    policy: DevicePolicy,
+    image: bool,
+    cpu_enabled: bool,
+    image_priority: bool,
+) -> Place {
+    if image {
+        return Place::Gpu;
+    }
+    match policy {
+        DevicePolicy::Gpu => Place::Gpu,
+        DevicePolicy::Cpu => Place::Cpu,
+        DevicePolicy::Auto if cpu_enabled && image_priority => Place::Cpu,
+        DevicePolicy::Auto => Place::Gpu,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Plan {
     Load,

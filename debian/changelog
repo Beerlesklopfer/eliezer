@@ -5,6 +5,13 @@ eliezer (0.5.0) UNRELEASED; urgency=low
     in /usr/lib/<multiarch-triplet>/eliezer with relative library search paths,
     third-party license notices and a manifest. Check the package without host
     ROCm mounts; document Debian build-library availability and ABI differences.
+  * Prioritize diffusion models on the GPU: add `[cpu] ram_budget_gb` and a per-model
+    `device = "auto" | "gpu" | "cpu"` (also a `device` field of the load request). While an image model
+    loads, is loaded or is waiting, language models left to `auto` run on the CPU (llama.cpp with no GPU
+    layers) instead of evicting it, and they fall back to the CPU when the GPU is too small. The planner
+    works per memory pool, a 409 on the CPU names `[cpu] ram_budget_gb`, `/api/v1/status` and `eliezer ps`
+    show the device and the CPU memory. Without a RAM budget nothing changes.
+  * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.5.0-1_amd64.deb.
     M5 model acquisition is still pending; the Candle ROCm experiment remains
     on its separate branch and is not included in this package.

@@ -64,6 +64,7 @@ reasoning={options=["none","low","medium","high"],default="none"}
                 context: m.default_context,
                 parallel: 1,
                 bytes,
+                device: eliezer_core::config::DevicePolicy::Auto,
             },
             max_context: m.max_context,
         }],
@@ -71,6 +72,7 @@ reasoning={options=["none","low","medium","high"],default="none"}
         Arc::new(TestClock),
         Settings {
             budget: 7_000_000_000,
+            ram_budget: 0,
             idle_ms: 1000,
             wait_ms: 100,
             queue_max: 4,

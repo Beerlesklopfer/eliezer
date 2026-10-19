@@ -3,8 +3,12 @@ use crate::{
     Backend, BackendError, ChatRequest, Chunk, EmbedRequest, Embeddings, ImageRequest, LoadSpec,
     Running,
 };
-use eliezer_core::scheduler::{
-    Clock, Instance, Plan, Queue, Queued, State, idle_candidates, plan_load,
+use eliezer_core::{
+    config::DevicePolicy,
+    scheduler::{
+        Clock, Instance, Place, Plan, Queue, Queued, State, choose_place, idle_candidates,
+        image_priority, plan_load,
+    },
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot};
@@ -13,10 +17,12 @@ use tokio::sync::{mpsc, oneshot};
 pub enum Error {
     UnknownModel,
     InvalidLoad,
-    /// Requirement and the memory that would be free after permitted eviction, in bytes.
+    /// Requirement and the memory that would be free after permitted eviction, in bytes, in the
+    /// pool (GPU or CPU memory) the model was meant for.
     InsufficientMemory {
         needed: u64,
         free: u64,
+        place: Place,
     },
     QueueFull,
     Timeout,
@@ -38,6 +44,8 @@ pub struct Model {
 #[derive(Clone)]
 pub struct Settings {
     pub budget: u64,
+    /// Memory for models placed on the CPU; 0 turns CPU placement off.
+    pub ram_budget: u64,
     pub idle_ms: u64,
     pub wait_ms: u64,
     pub queue_max: usize,
@@ -48,6 +56,10 @@ pub struct Settings {
 pub struct StatusInfo {
     pub now_ms: u64,
     pub instances: Vec<Instance>,
+    /// Where each model lives (the pool of its last or current load).
+    pub places: Vec<(String, Place)>,
+    /// Bytes the instances on the CPU hold.
+    pub ram_used: u64,
     /// Waiting requests as (model, enqueued_ms), in queue order.
     pub queue: Vec<(String, u64)>,
 }
@@ -92,6 +104,8 @@ enum Command {
 }
 struct Entry {
     model: Model,
+    /// The pool of the current or last load.
+    place: Place,
     running: Option<Running>,
     failed_ms: u64,
     /// Removed from the configuration: refuses new requests and unloads once idle.
@@ -124,6 +138,7 @@ impl Supervisor {
                         Entry {
                             model,
                             running: None,
+                            place: Place::Gpu,
                             failed_ms: 0,
                             retired: false,
                         },
@@ -301,6 +316,7 @@ impl Actor {
                         Entry {
                             model,
                             running: None,
+                            place: Place::Gpu,
                             failed_ms: 0,
                             retired: false,
                         },
@@ -330,10 +346,13 @@ impl Actor {
             let _ = tx.send(Command::Stopped(key, result)).await;
         });
     }
-    fn start(&mut self, spec: LoadSpec) {
+    fn start(&mut self, mut spec: LoadSpec, place: Place) {
         let Some(entry) = self.entries.get_mut(&spec.model) else {
             return;
         };
+        entry.place = place;
+        // The backend is told where, never "auto".
+        spec.device = place.device();
         entry.model.instance.state = State::Loading;
         entry.model.instance.bytes = spec.bytes;
         let backend = self.backend.clone();
@@ -380,6 +399,35 @@ impl Actor {
             }
         }
     }
+    /// Plans a load inside one pool of memory: only the instances living there compete for its
+    /// budget, and the exclusivity of diffusion models applies to the GPU only. Returns the plan and,
+    /// for a rejection, the memory that would be free beside pinned or busy models.
+    fn plan_in(&self, place: Place, request: &Instance) -> (Plan, u64) {
+        let pool: Vec<Instance> = self
+            .entries
+            .values()
+            .filter(|e| e.place == place)
+            .map(|e| e.model.instance.clone())
+            .collect();
+        let budget = match place {
+            Place::Gpu => self.settings.budget,
+            Place::Cpu => self.settings.ram_budget,
+        };
+        let held =
+            |i: &&Instance| matches!(i.state, State::Loaded | State::Loading | State::Unloading);
+        let leases = pool
+            .iter()
+            .filter(held)
+            .fold(0_u64, |sum, i| sum.saturating_add(i.bytes));
+        let plan = plan_load(&pool, request, budget.saturating_sub(leases));
+        // Free is what remains beside pinned or busy models.
+        let fixed = pool
+            .iter()
+            .filter(held)
+            .filter(|i| i.pinned || i.in_flight > 0 || i.state != State::Loaded)
+            .fold(0_u64, |sum, i| sum.saturating_add(i.bytes));
+        (plan, budget.saturating_sub(fixed))
+    }
     fn drain(&mut self) {
         let preferred = self
             .entries
@@ -401,12 +449,12 @@ impl Actor {
             };
             let state = entry.model.instance.state;
             let mut keep = true;
-            let mut shortage = (pending.spec.bytes, 0);
+            let mut shortage = (pending.spec.bytes, 0, Place::Gpu);
             if self.unload.contains_key(&key) {
                 // An explicit unload takes precedence over new requests.
             } else if state == State::Loaded {
                 if let Some(running) = entry.running.as_ref() {
-                    if running.spec == pending.spec {
+                    if running.spec.satisfies(&pending.spec) {
                         let running = running.clone();
                         if let Some(entry) = self.entries.get_mut(&key) {
                             if pending.active {
@@ -424,19 +472,32 @@ impl Actor {
             } else if state == State::Unloaded {
                 let mut request = entry.model.instance.clone();
                 request.bytes = pending.spec.bytes;
-                let instances = self.snapshot();
-                let leases = instances
-                    .iter()
-                    .filter(|i| {
-                        matches!(i.state, State::Loaded | State::Loading | State::Unloading)
-                    })
-                    .fold(0_u64, |sum, i| sum.saturating_add(i.bytes));
-                match plan_load(
-                    &instances,
-                    &request,
-                    self.settings.budget.saturating_sub(leases),
-                ) {
-                    Plan::Load => self.start(pending.spec.clone()),
+                let cpu_enabled = self.settings.ram_budget > 0;
+                let image_waiting = self.queue.iter().any(|(model, _)| {
+                    self.entries
+                        .get(model)
+                        .is_some_and(|e| e.model.instance.image)
+                });
+                let priority = image_priority(&self.snapshot(), image_waiting);
+                let mut place =
+                    choose_place(pending.spec.device, request.image, cpu_enabled, priority);
+                let mut outcome = self.plan_in(place, &request);
+                // A language model left to `auto` that cannot fit on the GPU, even after evicting
+                // what may be evicted, uses the CPU instead.
+                if matches!(outcome.0, Plan::Reject)
+                    && place == Place::Gpu
+                    && pending.spec.device == DevicePolicy::Auto
+                    && cpu_enabled
+                    && !request.image
+                {
+                    let on_cpu = self.plan_in(Place::Cpu, &request);
+                    if !matches!(on_cpu.0, Plan::Reject) {
+                        place = Place::Cpu;
+                        outcome = on_cpu;
+                    }
+                }
+                match outcome.0 {
+                    Plan::Load => self.start(pending.spec.clone(), place),
                     Plan::LoadAfterUnload(keys) => {
                         for key in keys {
                             self.stop(&key);
@@ -445,15 +506,7 @@ impl Actor {
                     Plan::Wait => {}
                     Plan::Reject => {
                         keep = false;
-                        // Free is what remains beside pinned or busy models.
-                        let fixed = instances
-                            .iter()
-                            .filter(|i| {
-                                matches!(i.state, State::Loaded | State::Loading | State::Unloading)
-                                    && (i.pinned || i.in_flight > 0 || i.state != State::Loaded)
-                            })
-                            .fold(0_u64, |sum, i| sum.saturating_add(i.bytes));
-                        shortage = (request.bytes, self.settings.budget.saturating_sub(fixed));
+                        shortage = (request.bytes, outcome.1, place);
                     }
                 }
             }
@@ -467,10 +520,12 @@ impl Actor {
                     },
                 );
             } else {
-                let (needed, free) = shortage;
-                let _ = pending
-                    .reply
-                    .send(Err(Error::InsufficientMemory { needed, free }));
+                let (needed, free, place) = shortage;
+                let _ = pending.reply.send(Err(Error::InsufficientMemory {
+                    needed,
+                    free,
+                    place,
+                }));
             }
         }
     }
@@ -604,6 +659,22 @@ impl Actor {
                     let _ = reply.send(StatusInfo {
                         now_ms: self.clock.now_ms(),
                         instances: self.snapshot(),
+                        places: self
+                            .entries
+                            .iter()
+                            .map(|(key, e)| (key.clone(), e.place))
+                            .collect(),
+                        ram_used: self
+                            .entries
+                            .values()
+                            .filter(|e| {
+                                e.place == Place::Cpu
+                                    && matches!(
+                                        e.model.instance.state,
+                                        State::Loaded | State::Loading | State::Unloading
+                                    )
+                            })
+                            .fold(0_u64, |sum, e| sum.saturating_add(e.model.instance.bytes)),
                         queue: self
                             .queue
                             .iter()

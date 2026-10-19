@@ -234,6 +234,8 @@ fn eliezer(args: &[&str], envs: &[(&str, &str)], stdin: Option<&str>) -> Output 
         .env_remove("ELIEZER_HOST")
         .env_remove("ELIEZER_API_KEY")
         .env_remove("ELIEZER_API_KEY_FILE")
+        // The user's own key file must not leak into the tests.
+        .env("XDG_CONFIG_HOME", "/nonexistent/config")
         .env("ELIEZER_CONFIG", "/nonexistent/eliezer.toml")
         .env("NO_COLOR", "1")
         .args(args)
@@ -792,6 +794,7 @@ fn a_foreign_server_on_the_port_is_refused_not_listed() {
     });
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_eliezer"))
         .env_remove("ELIEZER_CONFIG")
+        .env("XDG_CONFIG_HOME", "/nonexistent/config")
         .args(["ls", "--host", &format!("http://127.0.0.1:{port}")])
         .output()
         .unwrap();
@@ -837,6 +840,7 @@ fn status_warns_when_the_budget_is_far_below_the_card() {
     });
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_eliezer"))
         .env_remove("ELIEZER_CONFIG")
+        .env("XDG_CONFIG_HOME", "/nonexistent/config")
         .args(["status", "--host", &format!("http://127.0.0.1:{port}")])
         .output()
         .unwrap();
@@ -856,6 +860,7 @@ fn a_server_that_accepts_but_never_answers_is_named_as_stopped_or_hung() {
     let started = std::time::Instant::now();
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_eliezer"))
         .env_remove("ELIEZER_CONFIG")
+        .env("XDG_CONFIG_HOME", "/nonexistent/config")
         .env("ELIEZER_TIMEOUT_SECS", "1")
         .args(["ls", "--host", &format!("http://127.0.0.1:{port}")])
         .output()
@@ -890,6 +895,7 @@ fn binding_an_occupied_address_names_the_address_and_the_reason() {
     .unwrap();
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_eliezer"))
         .env_remove("ELIEZER_CONFIG")
+        .env("XDG_CONFIG_HOME", "/nonexistent/config")
         .args(["--config", config.to_str().unwrap()])
         .output()
         .unwrap();
