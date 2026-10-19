@@ -1,4 +1,4 @@
-//! Ein einziger Task verwaltet Instanzen; Lade- und Entladearbeit läuft außerhalb.
+//! A single task manages instances; load and unload work runs outside of it.
 use crate::{Backend, BackendError, ChatRequest, Chunk, LoadSpec, Running};
 use eliezer_core::scheduler::{
     Clock, Instance, Plan, Queue, Queued, State, idle_candidates, plan_load,
@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot};
 pub enum Error {
     UnknownModel,
     InvalidLoad,
-    /// Bedarf und nach erlaubtem Verdrängen freier Speicher in Byte.
+    /// Requirement and the memory that would be free after permitted eviction, in bytes.
     InsufficientMemory {
         needed: u64,
         free: u64,
@@ -49,7 +49,7 @@ impl Drop for Lease {
             return;
         };
         let key = self.running.spec.model.clone();
-        // Das Freigeben muss auch bei voller Befehlswarteschlange erhalten bleiben.
+        // Releasing must keep working even when the command queue is full.
         tokio::spawn(async move {
             let _ = tx.send(Command::Release(key)).await;
         });
@@ -155,7 +155,7 @@ impl Supervisor {
             .map_err(|_| Error::Stopped)?;
         rx.await.map_err(|_| Error::Stopped)
     }
-    /// Die tatsächlich geladenen Konfigurationen (Kontextlänge und Parallelität).
+    /// The configurations actually loaded (context length and parallelism).
     pub async fn loaded(&self) -> Result<Vec<LoadSpec>, Error> {
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -282,7 +282,7 @@ impl Actor {
             let mut keep = true;
             let mut shortage = (pending.spec.bytes, 0);
             if self.unload.contains_key(&key) {
-                // Ein explizites Entladen erhält Vorrang vor neuen Anfragen.
+                // An explicit unload takes precedence over new requests.
             } else if state == State::Loaded {
                 if let Some(running) = entry.running.as_ref() {
                     if running.spec == pending.spec {
@@ -324,7 +324,7 @@ impl Actor {
                     Plan::Wait => {}
                     Plan::Reject => {
                         keep = false;
-                        // Frei ist, was neben angehefteten oder beschäftigten Modellen bleibt.
+                        // Free is what remains beside pinned or busy models.
                         let fixed = instances
                             .iter()
                             .filter(|i| {

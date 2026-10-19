@@ -1,4 +1,4 @@
-"""Manueller Vergleich Chat -> Bild -> Chat gegen einen isolierten llama-swap."""
+"""Manual comparison chat -> image -> chat against an isolated llama-swap."""
 import argparse
 import base64
 import importlib.util
@@ -24,11 +24,11 @@ def main():
     args = parser.parse_args()
     for name, value in vars(args).items():
         if name != 'output' and not value.is_file():
-            parser.error(f'Datei fehlt: {value}')
+            parser.error(f'File missing: {value}')
     args.output.mkdir(parents=True, exist_ok=True)
     chat_command = [str(args.chat_server), '--model', str(args.chat_model), '--host', '127.0.0.1', '--port', '24607', '--ctx-size', '1024', '--parallel', '1', '--n-gpu-layers', '999']
     image_command = [str(args.image_server), '--diffusion-model', str(args.diffusion), '--llm', str(args.encoder), '--vae', str(args.vae), '--listen-ip', '127.0.0.1', '--listen-port', '24608', '--offload-to-cpu', '--cfg-scale', '6.0', '--sampling-method', 'euler', '--steps', '4', '--log-level', 'warn']
-    # JSON ist gültiges YAML; Pfade werden als Argumente sicher zitiert.
+    # JSON is valid YAML; paths are safely quoted as arguments.
     config = {'healthCheckTimeout': 180, 'captureBuffer': 0, 'logLevel': 'warn',
               'logToStdout': 'none', 'models': {
                   'chat': {'cmd': shlex.join(chat_command), 'proxy': 'http://127.0.0.1:24607', 'checkEndpoint': '/health'},
@@ -48,16 +48,16 @@ def main():
                     break
                 except OSError:
                     if process.poll() is not None or time.monotonic()-start > 30:
-                        raise RuntimeError('llama-swap nicht bereit; siehe swap.log')
+                        raise RuntimeError('llama-swap not ready; see swap.log')
                     time.sleep(0.2)
             for kind in ('chat', 'image', 'chat'):
                 started = time.monotonic()
                 if kind == 'chat':
                     data = shared.request('http://127.0.0.1:24606/v1/chat/completions', {
-                        'model': 'chat', 'messages': [{'role': 'user', 'content': 'Antworte kurz: Was ist Rust?'}],
+                        'model': 'chat', 'messages': [{'role': 'user', 'content': 'Answer briefly: What is Rust?'}],
                         'max_tokens': 32, 'temperature': 0})
                     if not data['choices'][0]['message'].get('content'):
-                        raise ValueError('Leere Chatantwort')
+                        raise ValueError('Empty chat reply')
                     detail = {'usage': data.get('usage')}
                 else:
                     data = shared.request('http://127.0.0.1:24606/v1/images/generations', {
@@ -65,7 +65,7 @@ def main():
                         'n': 1, 'size': '512x512', 'output_format': 'png'})
                     image = base64.b64decode(data['data'][0]['b64_json'], validate=True)
                     if image[:8] != b'\x89PNG\r\n\x1a\n':
-                        raise ValueError('Kein PNG in der Bildantwort')
+                        raise ValueError('No PNG in the image reply')
                     (args.output/'image.png').write_bytes(image)
                     detail = {'image_size_bytes': len(image)}
                 results['requests'].append({'kind': kind, 'seconds_including_load_and_swap': time.monotonic()-started, 'vram_bytes': shared.memory(), **detail})

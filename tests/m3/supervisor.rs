@@ -92,7 +92,7 @@ async fn busy_wait_timeout_and_disconnect() {
         let s = s.clone();
         async move { s.load(model("b").default_spec).await }
     });
-    // Ein zweiter Befehl stellt sicher, dass der Task Gelegenheit zum Einreihen bekommt.
+    // A second command ensures that the task gets a chance to enqueue.
     for _ in 0..20 {
         tokio::task::yield_now().await;
         s.snapshot().await.unwrap();

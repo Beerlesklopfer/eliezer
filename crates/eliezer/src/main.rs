@@ -51,7 +51,7 @@ fn arguments() -> Result<Option<Arguments>, &'static str> {
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
             println!(
-                "Eliezer – Verwalter lokaler Modelle\n\nAufruf: eliezer [--config PFAD] [--check-config [PFAD]]\n\n--config PFAD       Konfiguration (sonst ELIEZER_CONFIG oder /etc/eliezer/config.toml)\n--check-config      Nur prüfen, danach beenden\n--version           Versionsnummer ausgeben"
+                "Eliezer – manager for local models\n\nUsage: eliezer [--config PATH] [--check-config [PATH]]\n\n--config PATH       Configuration (otherwise ELIEZER_CONFIG or /etc/eliezer/config.toml)\n--check-config      Only check, then exit\n--version           Print the version number"
             );
             return Ok(None);
         } else if arg == "--version" {
@@ -59,13 +59,13 @@ fn arguments() -> Result<Option<Arguments>, &'static str> {
             return Ok(None);
         } else if arg == "--config" {
             if explicit {
-                return Err("Konfigurationspfad darf nur einmal angegeben werden");
+                return Err("Configuration path may only be given once");
             }
-            config = PathBuf::from(args.next().ok_or("Nach --config fehlt der Pfad")?);
+            config = PathBuf::from(args.next().ok_or("Path missing after --config")?);
             explicit = true;
         } else if arg == "--check-config" {
             if check {
-                return Err("--check-config darf nur einmal angegeben werden");
+                return Err("--check-config may only be given once");
             }
             check = true;
             if args
@@ -73,9 +73,9 @@ fn arguments() -> Result<Option<Arguments>, &'static str> {
                 .is_some_and(|value| !value.as_encoded_bytes().starts_with(b"-"))
             {
                 if explicit {
-                    return Err("Konfigurationspfad darf nur einmal angegeben werden");
+                    return Err("Configuration path may only be given once");
                 }
-                config = PathBuf::from(args.next().ok_or("Konfigurationspfad fehlt")?);
+                config = PathBuf::from(args.next().ok_or("Configuration path missing")?);
                 explicit = true;
             }
         } else {
@@ -87,7 +87,7 @@ fn arguments() -> Result<Option<Arguments>, &'static str> {
 
 fn load(path: &Path) -> Result<Config, String> {
     let input = std::fs::read_to_string(path)
-        .map_err(|_| "Konfigurationsdatei kann nicht gelesen werden".to_owned())?;
+        .map_err(|_| "Configuration file cannot be read".to_owned())?;
     let config = Config::parse(&input).map_err(|e| e.to_string())?;
     config
         .validate_paths(&input, &FileSystem)
@@ -97,15 +97,14 @@ fn load(path: &Path) -> Result<Config, String> {
 
 async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str> {
     let mut terminate =
-        signal(SignalKind::terminate()).map_err(|_| "SIGTERM kann nicht registriert werden")?;
-    let mut hangup =
-        signal(SignalKind::hangup()).map_err(|_| "SIGHUP kann nicht registriert werden")?;
+        signal(SignalKind::terminate()).map_err(|_| "SIGTERM cannot be registered")?;
+    let mut hangup = signal(SignalKind::hangup()).map_err(|_| "SIGHUP cannot be registered")?;
     let keys = match &config.server.api_keys_file {
         Some(path) => runtime::read_keys(path)?,
         None => {
             tracing::warn!(
                 event = "no_auth",
-                "Keine Schlüsseldatei konfiguriert; die Schnittstelle ist ohne Anmeldung offen"
+                "No key file configured; the interface is open without authentication"
             );
             Vec::new()
         }
@@ -123,7 +122,7 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
     };
     let listener = TcpListener::bind(config.server.listen)
         .await
-        .map_err(|_| "HTTP-Adresse kann nicht gebunden werden")?;
+        .map_err(|_| "HTTP address cannot be bound")?;
     let (stop_tx, stop_rx) = oneshot::channel();
     let task = tokio::spawn(async move {
         axum::serve(listener, router)
@@ -132,39 +131,39 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
             })
             .await
     });
-    tracing::info!(event="start", address=%config.server.listen, models=config.model.len(), "Dienst gestartet; Laufzeiten folgen in M4");
+    tracing::info!(event="start", address=%config.server.listen, models=config.model.len(), "Service started; runtimes follow in M4");
     let mut task = task;
     loop {
         tokio::select! {
             result = &mut task => {
                 return match result {
                     Ok(Ok(())) => Ok(()),
-                    _ => Err("HTTP-Programmrahmen wurde unerwartet beendet"),
+                    _ => Err("HTTP framework terminated unexpectedly"),
                 };
             }
             _ = terminate.recv() => break,
             result = tokio::signal::ctrl_c() => {
-                result.map_err(|_| "Abbruchsignal kann nicht empfangen werden")?;
+                result.map_err(|_| "Interrupt signal cannot be received")?;
                 break;
             }
             _ = hangup.recv() => {
                 match load(&config_path) {
-                    Ok(_) => tracing::info!(event="config_check", "Neue Konfiguration ist gültig; Übernahme folgt mit dem Verwalter in M3"),
-                    Err(error) => tracing::warn!(event="config_rejected", %error, "Neue Konfiguration wurde abgelehnt; bisheriger Zustand bleibt erhalten"),
+                    Ok(_) => tracing::info!(event="config_check", "New configuration is valid; adoption follows with the supervisor in M3"),
+                    Err(error) => tracing::warn!(event="config_rejected", %error, "New configuration was rejected; previous state is kept"),
                 }
             }
         }
     }
-    tracing::info!(event = "stop", "Dienst wird geordnet beendet");
+    tracing::info!(event = "stop", "Service is shutting down in an orderly way");
     let _ = stop_tx.send(());
     ticker.abort();
     supervisor.shutdown().await;
     match tokio::time::timeout(Duration::from_secs(30), &mut task).await {
         Ok(Ok(Ok(()))) => Ok(()),
-        Ok(_) => Err("HTTP-Programmrahmen konnte nicht geordnet beendet werden"),
+        Ok(_) => Err("HTTP framework could not be shut down in an orderly way"),
         Err(_) => {
             task.abort();
-            Err("Zeitlimit beim Beenden des Dienstes überschritten")
+            Err("Timeout exceeded while shutting down the service")
         }
     }
 }
@@ -187,7 +186,7 @@ async fn main() -> ExitCode {
         }
     };
     if args.check {
-        println!("Konfiguration in Ordnung");
+        println!("Configuration OK");
         return ExitCode::SUCCESS;
     }
     if tracing_subscriber::fmt()
@@ -196,7 +195,7 @@ async fn main() -> ExitCode {
         .try_init()
         .is_err()
     {
-        eprintln!("Protokollierung kann nicht gestartet werden");
+        eprintln!("Logging cannot be started");
         return ExitCode::FAILURE;
     }
     match serve(args.config, config).await {

@@ -1,4 +1,4 @@
-//! Integrationstests aus Spezifikation 11 auf HTTP-Ebene, mit fake-backend, ohne Netz und GPU.
+//! Integration tests from specification 11 at HTTP level, with fake-backend, without network and GPU.
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -33,7 +33,7 @@ struct Env {
     clock: Arc<TestClock>,
     fake: Arc<FakeBackend>,
 }
-/// Modelle: (Schlüssel, VRAM in GB, angeheftet). Das Budget beträgt 7 GB.
+/// Models: (key, VRAM in GB, pinned). The budget is 7 GB.
 fn env(models: &[(&str, f64, bool)], fake: FakeConfig, keys: &[&str]) -> Env {
     let mut toml = String::from(
         "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\nmeasure=\"none\"\nvram_budget_gb=8.0\nreserve_gb=1.0\n[backend.mistralrs]\nenabled=true\n",
@@ -136,7 +136,7 @@ async fn call(router: &Router, path: &str, body: Option<Value>) -> (StatusCode, 
     (status, serde_json::from_str(&text).unwrap_or(Value::Null))
 }
 fn chat(model: &str) -> Value {
-    json!({"model":model,"messages":[{"role":"user","content":"Hallo"}]})
+    json!({"model":model,"messages":[{"role":"user","content":"Hello"}]})
 }
 async fn state_of(e: &Env, key: &str) -> State {
     e.sup
@@ -155,7 +155,7 @@ async fn wait_state(e: &Env, key: &str, state: State) {
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("{key} erreichte {state:?} nicht"));
+    .unwrap_or_else(|_| panic!("{key} did not reach {state:?}"));
 }
 
 #[tokio::test]
@@ -179,7 +179,7 @@ async fn load_reports_config_and_reload_with_other_context() {
     assert_eq!(
         models["models"][0]["loaded_instances"][0]["config"],
         json!({"context_length":4096,"parallel":2}),
-        "die Modellliste muss die tatsächlich geladene Konfiguration zeigen"
+        "the model list must show the configuration actually loaded"
     );
     let starts = e.fake.starts();
     let (status, load) = call(
@@ -190,7 +190,11 @@ async fn load_reports_config_and_reload_with_other_context() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(load["load_config"]["context_length"], 8192);
-    assert_eq!(e.fake.starts(), starts + 1, "andere Kontextlänge lädt neu");
+    assert_eq!(
+        e.fake.starts(),
+        starts + 1,
+        "a different context length reloads"
+    );
     let (_, models) = call(&e.router, "/api/v1/models", None).await;
     assert_eq!(
         models["models"][0]["loaded_instances"][0]["config"]["context_length"],
@@ -202,7 +206,7 @@ async fn load_reports_config_and_reload_with_other_context() {
         Some(json!({"model":"a","context_length":1_000_000})),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "Kontext über max_context");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "context above max_context");
     e.sup.shutdown().await;
 }
 
@@ -219,8 +223,8 @@ async fn insufficient_memory_names_needed_and_free() {
     assert_eq!(body["error"]["type"], "insufficient_memory");
     let message = body["error"]["message"].as_str().unwrap();
     assert!(
-        message.contains("benötigt 9") && message.contains("frei 7"),
-        "Meldung muss „benötigt X GB, frei Y GB“ nennen: {message}"
+        message.contains("needs 9.0") && message.contains("free 7.0"),
+        "message must state \"needs X GB, free Y GB\": {message}"
     );
     e.sup.shutdown().await;
 }
@@ -235,16 +239,12 @@ async fn eviction_and_pinning() {
     let load = |k: &'static str| call(&e.router, "/api/v1/models/load", Some(json!({"model":k})));
     assert_eq!(load("a").await.0, StatusCode::OK);
     assert_eq!(load("b").await.0, StatusCode::OK);
-    assert_eq!(
-        state_of(&e, "a").await,
-        State::Unloaded,
-        "a wurde verdrängt"
-    );
+    assert_eq!(state_of(&e, "a").await, State::Unloaded, "a was evicted");
     assert_eq!(state_of(&e, "b").await, State::Loaded);
     assert_eq!(load("p").await.0, StatusCode::OK);
     assert_eq!(state_of(&e, "b").await, State::Unloaded);
     let (status, body) = load("a").await;
-    assert_eq!(status, StatusCode::CONFLICT, "angeheftetes Modell bleibt");
+    assert_eq!(status, StatusCode::CONFLICT, "pinned model stays");
     assert_eq!(body["error"]["type"], "insufficient_memory");
     assert_eq!(state_of(&e, "p").await, State::Loaded);
     e.sup.shutdown().await;
@@ -256,7 +256,7 @@ async fn chat_to_unloaded_model_loads_and_answers() {
     assert_eq!(state_of(&e, "a").await, State::Unloaded);
     let (status, body) = call(&e.router, "/v1/chat/completions", Some(chat("a"))).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["choices"][0]["message"]["content"], "Prüfantwort");
+    assert_eq!(body["choices"][0]["message"]["content"], "test reply");
     assert_eq!(state_of(&e, "a").await, State::Loaded);
     e.sup.shutdown().await;
 }
@@ -267,11 +267,7 @@ async fn idle_unload_follows_the_test_clock() {
     call(&e.router, "/api/v1/models/load", Some(json!({"model":"a"}))).await;
     e.clock.0.store(999, Ordering::Relaxed);
     e.sup.tick().await.unwrap();
-    assert_eq!(
-        state_of(&e, "a").await,
-        State::Loaded,
-        "noch nicht im Leerlauf"
-    );
+    assert_eq!(state_of(&e, "a").await, State::Loaded, "not idle yet");
     e.clock.0.store(1001, Ordering::Relaxed);
     e.sup.tick().await.unwrap();
     wait_state(&e, "a", State::Unloaded).await;
@@ -280,7 +276,7 @@ async fn idle_unload_follows_the_test_clock() {
 
 #[tokio::test]
 async fn wait_timeout_is_503_for_openai_and_529_for_anthropic() {
-    // a (5 GB) ist beschäftigt, b (5 GB) passt nicht daneben und muss warten.
+    // a (5 GB) is busy, b (5 GB) does not fit beside it and must wait.
     let e = env(
         &[("a", 5.0, false), ("b", 5.0, false)],
         FakeConfig {
@@ -316,7 +312,7 @@ async fn wait_timeout_is_503_for_openai_and_529_for_anthropic() {
         e.sup.tick().await.unwrap();
         let (status, body) = tokio::time::timeout(Duration::from_secs(2), waiting)
             .await
-            .expect("Wartezeit-Überlauf muss antworten")
+            .expect("wait-time overflow must respond")
             .unwrap();
         assert_eq!(status.as_u16(), expect);
         assert_eq!(body["error"]["type"], kind);
@@ -343,7 +339,7 @@ async fn backend_crash_is_502_and_next_request_reloads() {
     e.clock.0.fetch_add(31, Ordering::Relaxed);
     let (status, _) = call(&e.router, "/v1/chat/completions", Some(chat("a"))).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert_eq!(e.fake.starts(), 2, "die nächste Anfrage lädt neu");
+    assert_eq!(e.fake.starts(), 2, "the next request reloads");
     e.sup.shutdown().await;
 }
 
@@ -402,21 +398,21 @@ async fn usage_block_only_with_include_usage() {
     let (_, _, without) = stream(false).await;
     assert!(
         !without.contains("\"usage\""),
-        "ohne include_usage kein usage-Block"
+        "no usage block without include_usage"
     );
     e.sup.shutdown().await;
 }
 
 #[tokio::test]
 async fn anthropic_authentication_models_and_errors() {
-    let e = env(&[("a", 1.0, false)], Default::default(), &["geheim-1"]);
+    let e = env(&[("a", 1.0, false)], Default::default(), &["secret-1"]);
     let body = json!({"model":"a","messages":[{"role":"user","content":"Hi"}],"max_tokens":5});
     let (status, _, text) = send(&e.router, "/v1/messages", Some(body.clone()), &[]).await;
     let err: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(err["type"], "error");
     assert_eq!(err["error"]["type"], "authentication_error");
-    assert!(!text.contains("geheim-1"));
+    assert!(!text.contains("secret-1"));
     let (status, _, _) = send(
         &e.router,
         "/v1/messages",
@@ -425,12 +421,12 @@ async fn anthropic_authentication_models_and_errors() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    // x-api-key und Bearer, mit und ohne anthropic-version
+    // x-api-key and Bearer, with and without anthropic-version
     for headers in [
-        vec![("x-api-key", "geheim-1")],
-        vec![("authorization", "Bearer geheim-1")],
+        vec![("x-api-key", "secret-1")],
+        vec![("authorization", "Bearer secret-1")],
         vec![
-            ("x-api-key", "geheim-1"),
+            ("x-api-key", "secret-1"),
             ("anthropic-version", "2023-06-01"),
         ],
     ] {
@@ -441,12 +437,12 @@ async fn anthropic_authentication_models_and_errors() {
             (msg["type"].as_str(), msg["role"].as_str()),
             (Some("message"), Some("assistant"))
         );
-        assert_eq!(msg["content"][0]["text"], "Prüfantwort");
+        assert_eq!(msg["content"][0]["text"], "test reply");
         assert_eq!(msg["stop_reason"], "end_turn");
         assert_eq!(msg["usage"]["input_tokens"], 1);
     }
     let auth = [
-        ("x-api-key", "geheim-1"),
+        ("x-api-key", "secret-1"),
         ("anthropic-version", "2023-06-01"),
     ];
     let (_, _, text) = send(&e.router, "/v1/models", None, &auth).await;
@@ -458,14 +454,14 @@ async fn anthropic_authentication_models_and_errors() {
         &e.router,
         "/v1/models",
         None,
-        &[("authorization", "Bearer geheim-1")],
+        &[("authorization", "Bearer secret-1")],
     )
     .await;
     assert_eq!(
         serde_json::from_str::<Value>(&text).unwrap()["object"],
         "list"
     );
-    // Fehlerfälle im Anthropic-Format
+    // Error cases in Anthropic format
     let cases = [
         (
             json!({"model":"a","messages":[],"max_tokens":5,"messages":[{"role":"user","content":[{"type":"document","source":{}}]}]}),
@@ -497,18 +493,18 @@ async fn anthropic_authentication_models_and_errors() {
         );
         assert!(err["error"]["message"].is_string());
     }
-    // unbekannte Felder werden ignoriert
+    // unknown fields are ignored
     let mut extra = body.clone();
-    extra["neues_feld"] = json!({"x":1});
+    extra["new_field"] = json!({"x":1});
     assert_eq!(
         send(&e.router, "/v1/messages", Some(extra), &auth).await.0,
         StatusCode::OK
     );
-    // count_tokens: Näherung Zeichen ÷ 3,5 mit Kennzeichnung
+    // count_tokens: approximation characters / 3.5 with a marker
     let (status, headers, text) = send(
         &e.router,
         "/v1/messages/count_tokens",
-        Some(json!({"model":"a","messages":[{"role":"user","content":"Hallo Welt"}]})),
+        Some(json!({"model":"a","messages":[{"role":"user","content":"Hello world"}]})),
         &auth,
     )
     .await;
@@ -526,20 +522,20 @@ async fn anthropic_authentication_models_and_errors() {
 #[tokio::test]
 async fn anthropic_stream_event_order_matches_expectation_file() {
     let chunks = vec![
-        Chunk::Thinking("Ich überlege".into()),
-        Chunk::Text("Hallo".into()),
-        Chunk::Text(" Welt".into()),
+        Chunk::Thinking("I am thinking".into()),
+        Chunk::Text("Hello".into()),
+        Chunk::Text(" world".into()),
         Chunk::Tool {
             index: 0,
             id: Some("toolu_1".into()),
-            name: Some("wetter".into()),
-            arguments: "{\"ort\":".into(),
+            name: Some("weather".into()),
+            arguments: "{\"place\":".into(),
         },
         Chunk::Tool {
             index: 0,
             id: None,
             name: None,
-            arguments: "\"Köln\"}".into(),
+            arguments: "\"Cologne\"}".into(),
         },
         Chunk::Done {
             finish_reason: "tool_calls".into(),
@@ -579,7 +575,7 @@ async fn anthropic_stream_event_order_matches_expectation_file() {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(data["type"], name, "Ereignisname und type stimmen überein");
+        assert_eq!(data["type"], name, "event name and type match");
         let detail = match name {
             "content_block_start" => format!(
                 "{} {}",
@@ -608,11 +604,11 @@ async fn anthropic_stream_event_order_matches_expectation_file() {
     assert_eq!(
         order.join("\n"),
         expected.trim(),
-        "Ereignisfolge weicht von der Erwartungsdatei ab"
+        "event sequence differs from the expectation file"
     );
     assert_eq!(
         serde_json::from_str::<Value>(&partial).unwrap(),
-        json!({"ort":"Köln"})
+        json!({"place":"Cologne"})
     );
     assert_eq!(last_delta["delta"]["stop_reason"], "tool_use");
     assert_eq!(last_delta["usage"]["output_tokens"], 9);

@@ -1,4 +1,4 @@
-# Rootloses Podman: Host-Benutzer auf die Containeridentität abbilden.
+# Rootless Podman: map the host user to the container identity.
 x-podman:
   in_pod: false
 services:

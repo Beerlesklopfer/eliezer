@@ -85,7 +85,7 @@ fn rocm_smi_script_gives_same_bytes_as_nvidia_smi() {
 }
 #[test]
 fn hanging_failing_and_garbled_programs_are_reported() {
-    let dir = temp("fehler");
+    let dir = temp("error");
     let smi = |body: &str| Smi {
         program: script(&dir, body),
         index: 0,
@@ -95,11 +95,11 @@ fn hanging_failing_and_garbled_programs_are_reported() {
     assert_eq!(smi("sleep 30").memory(), Err(ProbeError::Timeout));
     assert!(
         start.elapsed() < std::time::Duration::from_secs(4),
-        "Zeitlimit muss greifen"
+        "Timeout must take effect"
     );
     assert_eq!(smi("exit 3").memory(), Err(ProbeError::Unavailable));
     assert_eq!(
-        smi("printf 'Müll'").memory(),
+        smi("printf 'garbage'").memory(),
         Err(ProbeError::InvalidOutput)
     );
     assert_eq!(
@@ -107,7 +107,7 @@ fn hanging_failing_and_garbled_programs_are_reported() {
         GpuMemory::new(9 << 20, 1 << 20)
     );
     let missing = Smi {
-        program: dir.join("gibt-es-nicht"),
+        program: dir.join("does-not-exist"),
         index: 0,
         kind: SmiKind::Nvidia,
     };
@@ -124,13 +124,9 @@ fn vendor_detection_and_none_fallback() {
         std::fs::write(device.join("vendor"), vendor).unwrap();
     }
     assert_eq!(detect_vendor(&root, 0), GpuVendor::Nvidia);
-    assert_eq!(
-        detect_vendor(&root, 1),
-        GpuVendor::None,
-        "fremder Hersteller"
-    );
-    assert_eq!(detect_vendor(&root, 7), GpuVendor::None, "Karte fehlt");
-    // Verfahren none: nur Buchführung, gleiche Byte-Bedeutung
+    assert_eq!(detect_vendor(&root, 1), GpuVendor::None, "foreign vendor");
+    assert_eq!(detect_vendor(&root, 7), GpuVendor::None, "card missing");
+    // Method none: bookkeeping only, same byte meaning
     let none = sources(
         GpuVendor::None,
         ProbeMethod::None,
@@ -140,7 +136,7 @@ fn vendor_detection_and_none_fallback() {
     );
     assert_eq!(none.active_name(), "none");
     assert_eq!(none.memory(), GpuMemory::new(5_000_000_000, 0));
-    // Sysfs ausgewählt, aber Dateien fehlen: Rückfall auf die Buchführung
+    // Sysfs selected but files missing: fall back to bookkeeping
     let broken = sources(
         GpuVendor::Amd,
         ProbeMethod::Sysfs,
@@ -150,7 +146,7 @@ fn vendor_detection_and_none_fallback() {
     );
     assert_eq!(broken.memory(), GpuMemory::new(5_000_000_000, 0));
     assert_eq!(broken.active_name(), "none");
-    // Sysfs mit Dateien: Messung gewinnt vor der Buchführung
+    // Sysfs with files: measurement wins over bookkeeping
     let device = root.join("card0/device");
     std::fs::write(device.join("mem_info_vram_total"), "100").unwrap();
     std::fs::write(device.join("mem_info_vram_used"), "40").unwrap();

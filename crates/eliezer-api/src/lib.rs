@@ -1,4 +1,4 @@
-//! HTTP-Schnittstellen des Modellverwalters.
+//! HTTP interfaces of the model supervisor.
 pub mod anthropic;
 use axum::{
     Json, Router,
@@ -49,7 +49,7 @@ pub fn managed_router(app: App) -> Router {
                 failure(
                     StatusCode::NOT_FOUND,
                     "not_found",
-                    "Endpunkt nicht gefunden",
+                    "Endpoint not found",
                     false,
                 )
             })
@@ -82,15 +82,15 @@ fn failure(status: StatusCode, code: &str, message: &str, anthropic: bool) -> Re
 }
 fn error(error: Error, anth: bool) -> Response {
     let (status, code, message) = match error {
-        Error::UnknownModel => (404, "not_found", "Modell ist nicht freigegeben".to_owned()),
-        Error::InvalidLoad => (400, "invalid_request", "Ungültige Ladeparameter".to_owned()),
+        Error::UnknownModel => (404, "not_found", "Model is not allowed".to_owned()),
+        Error::InvalidLoad => (400, "invalid_request", "Invalid load parameters".to_owned()),
         Error::InsufficientMemory { needed, free } => {
-            let gb = |bytes: u64| format!("{:.1}", bytes as f64 / 1e9).replace('.', ",");
+            let gb = |bytes: u64| format!("{:.1}", bytes as f64 / 1e9);
             (
                 409,
                 "insufficient_memory",
                 format!(
-                    "Nicht genug Speicher: benötigt {} GB, frei {} GB",
+                    "Not enough memory: needs {} GB, free {} GB",
                     gb(needed),
                     gb(free)
                 ),
@@ -99,11 +99,11 @@ fn error(error: Error, anth: bool) -> Response {
         Error::QueueFull | Error::Timeout => (
             if anth { 529 } else { 503 },
             "overloaded",
-            "Warteschlange ist voll oder Wartezeit überschritten".to_owned(),
+            "Queue is full or wait time exceeded".to_owned(),
         ),
-        Error::Busy => (409, "busy", "Modell wird noch verwendet".to_owned()),
-        Error::Backend => (502, "backend_error", "Backend ist ausgefallen".to_owned()),
-        Error::Stopped => (503, "unavailable", "Dienst wird beendet".to_owned()),
+        Error::Busy => (409, "busy", "Model is still in use".to_owned()),
+        Error::Backend => (502, "backend_error", "Backend has failed".to_owned()),
+        Error::Stopped => (503, "unavailable", "Service is shutting down".to_owned()),
     };
     failure(
         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -133,7 +133,7 @@ async fn authorize(State(app): State<App>, request: Request, next: Next) -> Resp
         return failure(
             StatusCode::UNAUTHORIZED,
             "authentication_error",
-            "Anmeldung erforderlich",
+            "Authentication required",
             anth,
         );
     }
@@ -147,7 +147,7 @@ fn json_body(
         Box::new(failure(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "Ungültiger JSON-Anfragekörper",
+            "Invalid JSON request body",
             anth,
         ))
     })
@@ -271,7 +271,7 @@ async fn status(State(app): State<App>) -> Response {
                 })
                 .fold(0_u64, |s, i| s.saturating_add(i.bytes));
             let budget = eliezer_core::memory::gb_bytes(app.config.gpu.vram_budget_gb).unwrap_or(0);
-            // Die Messung kann Prozesse starten (nvidia-smi), daher nicht im Async-Kontext blocken.
+            // The measurement may start processes (nvidia-smi), so do not block in the async context.
             let probe = app.probe.clone();
             let measured = tokio::task::spawn_blocking(move || {
                 let memory = eliezer_gpu::GpuProbe::memory(&*probe).ok();
@@ -280,7 +280,7 @@ async fn status(State(app): State<App>) -> Response {
             .await
             .unwrap_or((None, "none".to_owned()));
             let (memory, probe_name) = measured;
-            // Ohne echte Messung (Verfahren "none") zählt die Buchführung des Verwalters.
+            // Without a real measurement (method "none") the supervisor's bookkeeping counts.
             let (total, used) = match memory {
                 Some(m) if probe_name != "none" => (m.total_bytes, m.used_bytes),
                 _ => (budget, used),
@@ -342,7 +342,7 @@ async fn count_tokens(
     else {
         return error(Error::UnknownModel, true);
     };
-    // count_tokens benötigt anders als messages kein max_tokens.
+    // count_tokens, unlike messages, does not need max_tokens.
     let mut input = body;
     input["max_tokens"] = json!(1);
     let translated = match anthropic::request(
@@ -387,7 +387,7 @@ async fn complete(app: App, mut body: Value, anth: bool) -> Response {
             return failure(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
-                "Denkoption wird vom Modell nicht unterstützt",
+                "Reasoning option is not supported by the model",
                 anth,
             );
         }
@@ -396,7 +396,7 @@ async fn complete(app: App, mut body: Value, anth: bool) -> Response {
         return failure(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "Modell unterstützt keine Denkoptionen",
+            "Model does not support reasoning options",
             anth,
         );
     }
@@ -535,7 +535,7 @@ async fn stream_response(
             Ok(v) => v,
             Err(_) => {
                 app.supervisor.report_crash(model.clone()).await;
-                let _=send(&tx,if anth {Some("error")}else{None},json!({"type":"error","error":{"type":"api_error","message":"Backend ist ausgefallen"}})).await;
+                let _=send(&tx,if anth {Some("error")}else{None},json!({"type":"error","error":{"type":"api_error","message":"Backend has failed"}})).await;
                 return;
             }
         };
@@ -642,5 +642,5 @@ async fn stream_response(
         }
     }
     app.supervisor.report_crash(model).await;
-    let _=send(&tx,if anth{Some("error")}else{None},json!({"type":"error","error":{"type":"api_error","message":"Backend-Antwort ist unvollständig"}})).await;
+    let _=send(&tx,if anth{Some("error")}else{None},json!({"type":"error","error":{"type":"api_error","message":"Backend response is incomplete"}})).await;
 }

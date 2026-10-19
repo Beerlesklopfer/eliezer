@@ -1,4 +1,4 @@
-"""Manueller GPU-Versuch; lädt ausschließlich explizit übergebene lokale Dateien."""
+"""Manual GPU experiment; loads only explicitly supplied local files."""
 import argparse
 import base64
 import json
@@ -69,9 +69,9 @@ def main():
     args = parser.parse_args()
     for path in (args.server, args.diffusion, args.encoder, args.vae):
         if not path.is_file():
-            parser.error(f'Datei fehlt: {path}')
+            parser.error(f'File missing: {path}')
     if bool(args.chat_probe) != bool(args.chat_model):
-        parser.error('Chat-Probe und Chat-Modell müssen gemeinsam angegeben werden')
+        parser.error('Chat probe and chat model must be given together')
     args.output.mkdir(parents=True, exist_ok=True)
     results = {}
     if args.chat_probe:
@@ -93,13 +93,13 @@ def main():
             url = f'http://127.0.0.1:{args.port}'
             while True:
                 if process.poll() is not None:
-                    raise RuntimeError(f'Bildserver beendet: {process.returncode}; siehe server.log')
+                    raise RuntimeError(f'Image server exited: {process.returncode}; see server.log')
                 try:
                     models = request(url+'/v1/models', timeout=2)
                     break
                 except (OSError, urllib.error.URLError):
                     if time.monotonic()-started > 180:
-                        raise TimeoutError('Bildserver nicht innerhalb von 180 Sekunden bereit')
+                        raise TimeoutError('Image server not ready within 180 seconds')
                     time.sleep(0.2)
             results['server_ready_seconds'] = time.monotonic()-started
             results['model_list_received'] = isinstance(models.get('data'), list)
@@ -111,10 +111,10 @@ def main():
             results['first_image_seconds_including_model_load'] = time.monotonic()-started_image
             data = base64.b64decode(response['data'][0]['b64_json'], validate=True)
             if data[:8] != b'\x89PNG\r\n\x1a\n':
-                raise ValueError('Antwort enthält kein PNG')
+                raise ValueError('Reply contains no PNG')
             dimensions = struct.unpack('>II', data[16:24])
             if dimensions != (512, 512):
-                raise ValueError(f'Unerwartete Bildgröße: {dimensions}')
+                raise ValueError(f'Unexpected image size: {dimensions}')
             (args.output/'image.png').write_bytes(data)
             results['image_dimensions'] = dimensions
             results['image_size_bytes'] = len(data)

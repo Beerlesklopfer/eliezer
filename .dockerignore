@@ -5,7 +5,7 @@
 **/target
 **/__pycache__
 models
-docs/Stand.md
+docs/Status.md
 .env
 .env.*
 tests/runtime

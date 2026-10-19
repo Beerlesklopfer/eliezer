@@ -1,5 +1,5 @@
 [Unit]
-Description=Eliezer – Verwalter lokaler Modelle
+Description=Eliezer – manager for local models
 After=network.target
 
 [Service]

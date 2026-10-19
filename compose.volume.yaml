@@ -1,4 +1,4 @@
-# Ergänzung: ersetzt den Modell-Bind-Mount durch ein persistentes Volume.
+# Addition: replaces the model bind mount with a persistent volume.
 services:
   eliezer:
     volumes:

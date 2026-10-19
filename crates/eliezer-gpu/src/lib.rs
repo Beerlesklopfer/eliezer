@@ -1,4 +1,4 @@
-//! Herstellerunabhängige VRAM-Messung und Rückfall auf Buchführung.
+//! Vendor-independent VRAM measurement with fallback to bookkeeping.
 use eliezer_core::config::{GpuVendor, ProbeMethod};
 use std::{
     io::Read,
@@ -233,7 +233,7 @@ impl GpuProbe for Fallback {
                     tracing::warn!(
                         event = "gpu_fallback",
                         probe = source.name(),
-                        "GPU-Messung fehlgeschlagen; nächste Quelle wird verwendet"
+                        "GPU measurement failed; next source will be used"
                     );
                     *current += 1;
                 }
@@ -245,7 +245,7 @@ impl GpuProbe for Fallback {
         "fallback"
     }
 }
-/// Die Reihenfolge entspricht der Konfiguration; fehlendes NVML wird als nicht verfügbar behandelt.
+/// The order matches the configuration; missing NVML is treated as unavailable.
 pub fn sources(
     vendor: GpuVendor,
     method: ProbeMethod,

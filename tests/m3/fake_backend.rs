@@ -10,7 +10,7 @@ fn spec() -> LoadSpec {
 fn request() -> ChatRequest {
     ChatRequest {
         model: "test".into(),
-        input: "Hallo".into(),
+        input: "Hello".into(),
         reasoning: None,
     }
 }
@@ -21,7 +21,7 @@ async fn load_stream_stop_reload() {
     let mut stream = backend.chat(&running, request()).await.unwrap();
     assert_eq!(
         stream.recv().await.unwrap().unwrap(),
-        Chunk::Text("Prüfantwort".into())
+        Chunk::Text("test reply".into())
     );
     assert!(matches!(
         stream.recv().await.unwrap().unwrap(),
@@ -68,6 +68,6 @@ async fn disconnect_cancels_producer() {
     let running = backend.start(&spec()).await.unwrap();
     let stream = backend.chat(&running, request()).await.unwrap();
     drop(stream);
-    // Abbruch beendet nur die Anfrage, nicht die geladene Instanz.
+    // Cancellation ends only the request, not the loaded instance.
     assert!(backend.health(&running).await.unwrap());
 }

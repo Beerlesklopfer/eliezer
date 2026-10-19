@@ -1,4 +1,4 @@
-"""Manuelle Compose-Abnahme mit ausschließlich eigenen temporären Testdaten."""
+"""Manual compose acceptance test using only its own temporary test data."""
 import json
 import os
 from pathlib import Path
@@ -39,7 +39,7 @@ def main():
                     output = subprocess.check_output(['podman', 'ps', '-q', '--filter',
                         f'label=io.podman.compose.project={project}'], text=True, timeout=10).strip().splitlines()
                     if len(output) != 1:
-                        raise RuntimeError('Genau ein eigener Testcontainer erwartet')
+                        raise RuntimeError('Exactly one own test container expected')
                     return output[0]
 
                 def health():
@@ -52,14 +52,14 @@ def main():
                             return
                         except OSError:
                             if time.monotonic() > deadline:
-                                raise TimeoutError('Container nicht bereit')
+                                raise TimeoutError('Container not ready')
                             time.sleep(0.1)
                 try:
                     compose('up', '-d', '--no-build')
                     health()
                     first = container_id()
                     subprocess.run(['podman', 'exec', first, 'sh', '-c',
-                        'printf muster > /var/lib/eliezer/models/m2-sentinel; printf zustand > /var/lib/eliezer/m2-state'], check=True, timeout=10)
+                        'printf pattern > /var/lib/eliezer/models/m2-sentinel; printf state > /var/lib/eliezer/m2-state'], check=True, timeout=10)
                     compose('down')
                     compose('up', '-d', '--no-build')
                     health()
@@ -67,14 +67,14 @@ def main():
                     assert first != second
                     values = subprocess.check_output(['podman', 'exec', second, 'sh', '-c',
                         'cat /var/lib/eliezer/models/m2-sentinel /var/lib/eliezer/m2-state'], text=True, timeout=10)
-                    assert values == 'musterzustand'
+                    assert values == 'patternstate'
                     results[variant] = {'healthz': 'ok', 'recreated': True,
                         'model_persisted': True, 'state_persisted': True}
                 except Exception:
                     print(log_path.read_text())
                     raise
                 finally:
-                    # Ausschließlich die hier neu erzeugten Projekt-Volumes entfernen.
+                    # Remove only the project volumes newly created here.
                     compose('down', '--volumes', check=False)
     print(json.dumps(results, indent=2))
 

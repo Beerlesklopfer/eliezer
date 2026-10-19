@@ -1,5 +1,5 @@
 #!/bin/sh
-# Privates Laufzeitverzeichnis auf dem flüchtigen /run-Dateisystem anlegen.
+# Create a private runtime directory on the volatile /run file system.
 set -eu
 umask 077
 mkdir -p /run/eliezer

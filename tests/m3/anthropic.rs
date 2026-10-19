@@ -3,7 +3,7 @@ use serde_json::json;
 #[test]
 fn all_request_mappings() {
     let input = json!({"model":"a","max_tokens":42,"system":[{"type":"text","text":"System"}],"messages":[
-        {"role":"user","content":[{"type":"text","text":"Hallo"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]},
+        {"role":"user","content":[{"type":"text","text":"Hello"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]},
         {"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"read","input":{"file":"a"}}]},
         {"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"Ergebnis"}]}],
         "tools":[{"name":"read","input_schema":{"type":"object"}}],"tool_choice":{"type":"any"},"thinking":{"type":"enabled","budget_tokens":4096},"stop_sequences":["STOP"],"unknown":true});

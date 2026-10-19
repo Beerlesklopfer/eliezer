@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# Prüft lokale Voraussetzungen ohne Downloads, Modellladen oder Geheimniszugriff.
+# Checks local prerequisites without downloads, model loading or secret access.
 set -euo pipefail
 
-printf 'Rust-Werkzeuge\n'
+printf 'Rust tools\n'
 for tool in rustc cargo; do
     if [[ -x "$HOME/.cargo/bin/$tool" ]]; then
         "$HOME/.cargo/bin/$tool" --version
     elif command -v "$tool" >/dev/null 2>&1; then
         "$tool" --version
     else
-        printf '%s: nicht gefunden\n' "$tool"
+        printf '%s: not found\n' "$tool"
     fi
 done
 
-printf '\nGPU-Geräte\n'
+printf '\nGPU devices\n'
 for device in /dev/dri /dev/kfd; do
     if [[ -e "$device" ]]; then
         ls -ld "$device"
     else
-        printf '%s: fehlt\n' "$device"
+        printf '%s: missing\n' "$device"
     fi
 done
 
-printf '\nGPU-Angaben aus sysfs (keine Laufzeitmessung)\n'
+printf '\nGPU data from sysfs (not a runtime measurement)\n'
 for card in /sys/class/drm/card[0-9]*; do
     [[ "${card##*/}" =~ ^card[0-9]+$ ]] || continue
     [[ -d "$card/device" ]] || continue
@@ -34,16 +34,16 @@ for card in /sys/class/drm/card[0-9]*; do
     done
 done
 
-printf '\nWerkzeuge im PATH\n'
+printf '\nTools in PATH\n'
 for tool in hipcc rocminfo vulkaninfo cmake cc glslc hf sd-server podman docker; do
     if command -v "$tool" >/dev/null 2>&1; then
         command -v "$tool"
     else
-        printf '%s: nicht gefunden\n' "$tool"
+        printf '%s: not found\n' "$tool"
     fi
 done
 
-printf '\nLaufzeiten in der LM-Studio-Benutzerinstallation\n'
+printf '\nRuntimes in the LM Studio user installation\n'
 if [[ -d "$HOME/.lmstudio/extensions/backends" ]]; then
     find "$HOME/.lmstudio/extensions/backends" -maxdepth 2 -type f -name llama-server -print
 fi

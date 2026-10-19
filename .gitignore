@@ -1,26 +1,26 @@
-# Rust-Bauausgaben (auch in Probeprogrammen)
+# Rust build output (also in probe programs)
 **/target/
 
-# Sicherungen von rustfmt
+# Backups from rustfmt
 **/*.rs.bk
 
-# Python-Hilfsprogramme der manuellen Prüfungen
+# Python helpers of the manual checks
 **/__pycache__/
 
-# Lokaler Projektstand
-/docs/Stand.md
+# Local project state
+/docs/Status.md
 
-# Lokale Umgebungsvariablen und Geheimnisse
+# Local environment variables and secrets
 .env
 .env.*
 !.env.example
 
-# Temporäre Editor-Dateien
+# Temporary editor files
 *.swp
 *.swo
 *~
 
-# Cargo.lock bleibt für diesen Anwendungs-Workspace versioniert.
+# Cargo.lock stays versioned for this application workspace.
 
-# Lokale Modellablage
+# Local model store
 /models/

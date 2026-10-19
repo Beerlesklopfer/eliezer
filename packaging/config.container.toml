@@ -1,4 +1,4 @@
-# Programmrahmen ohne geladene Modelle; Modellverwaltung folgt in M3.
+# Program framework without loaded models; model management follows in M3.
 [server]
 listen = "0.0.0.0:1234"
 [storage]

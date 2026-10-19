@@ -1,4 +1,4 @@
-//! Austauschbare Laufzeit und Prüfstand ohne GPU oder Netzwerk.
+//! Interchangeable runtime and test bench without GPU or network.
 use std::{
     future::Future,
     pin::Pin,
@@ -21,10 +21,10 @@ pub enum BackendError {
 impl std::fmt::Display for BackendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Unavailable => "Backend ist nicht verfügbar",
-            Self::Crashed => "Backend wurde unerwartet beendet",
-            Self::Cancelled => "Anfrage wurde abgebrochen",
-            Self::InvalidRequest => "Ungültige Backend-Anfrage",
+            Self::Unavailable => "Backend is not available",
+            Self::Crashed => "Backend terminated unexpectedly",
+            Self::Cancelled => "Request was cancelled",
+            Self::InvalidRequest => "Invalid backend request",
         })
     }
 }
@@ -69,7 +69,7 @@ pub struct ChatRequest {
     pub input: String,
     pub reasoning: Option<String>,
 }
-/// Eingebettete Laufzeiten verwenden Handles; die Schnittstelle verlangt keinen HTTP-Endpunkt.
+/// Embedded runtimes use handles; the interface does not require an HTTP endpoint.
 pub trait Backend: Send + Sync {
     fn start<'a>(&'a self, spec: &'a LoadSpec) -> BackendFuture<'a, Running>;
     fn stop<'a>(&'a self, running: &'a Running) -> BackendFuture<'a, ()>;
@@ -94,7 +94,7 @@ impl Default for FakeConfig {
             load_delay: Duration::ZERO,
             chunk_delay: Duration::ZERO,
             chunks: vec![
-                Chunk::Text("Prüfantwort".into()),
+                Chunk::Text("test reply".into()),
                 Chunk::Done {
                     finish_reason: "stop".into(),
                     input_tokens: 1,
@@ -119,7 +119,7 @@ impl FakeBackend {
     }
 }
 impl FakeBackend {
-    /// Anzahl bisher gestarteter Instanzen (für Tests von Neuladen nach Absturz).
+    /// Number of instances started so far (for tests of reloading after a crash).
     pub fn starts(&self) -> u64 {
         self.generation.load(Ordering::Relaxed)
     }

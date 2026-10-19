@@ -132,13 +132,13 @@ async fn management_and_both_chat_protocols() {
     let (_, oa) = call(
         app.clone(),
         "/v1/chat/completions",
-        Some(json!({"model":"a","messages":[{"role":"user","content":"Hallo"}]})),
+        Some(json!({"model":"a","messages":[{"role":"user","content":"Hello"}]})),
     )
     .await;
     let (_, anth) = call(
         app.clone(),
         "/v1/messages",
-        Some(json!({"model":"a","messages":[{"role":"user","content":"Hallo"}],"max_tokens":10})),
+        Some(json!({"model":"a","messages":[{"role":"user","content":"Hello"}],"max_tokens":10})),
     )
     .await;
     assert_eq!(
@@ -171,7 +171,7 @@ async fn management_and_both_chat_protocols() {
 }
 #[tokio::test]
 async fn health_is_public_and_auth_is_required() {
-    // Zufälliger Laufzeitwert statt eines Schlüssels in Testdaten.
+    // Random runtime value instead of a key in test data.
     let key = format!("{:?}", std::time::SystemTime::now());
     let (app, s) = app(Default::default(), vec![key.clone()]);
     assert_eq!(

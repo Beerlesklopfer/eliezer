@@ -1,4 +1,4 @@
-"""Manuelle Prüfung des Programmrahmens über Loopback, ohne externes Netz/GPU."""
+"""Manual check of the program framework over loopback, without external network/GPU."""
 import argparse
 import json
 import os
@@ -37,22 +37,22 @@ def main():
                         break
                     except OSError:
                         if time.monotonic() > deadline:
-                            raise TimeoutError('Dienst nicht bereit')
+                            raise TimeoutError('Service not ready')
                         time.sleep(0.05)
-                config.write_text(valid.replace(f'127.0.0.1:{port}', 'VERTRAULICHER_WERT'))
+                config.write_text(valid.replace(f'127.0.0.1:{port}', 'CONFIDENTIAL_VALUE'))
                 os.kill(process.pid, signal.SIGHUP)
                 deadline = time.monotonic()+5
                 while 'config_rejected' not in log.read_text():
                     if time.monotonic() > deadline:
-                        raise TimeoutError('Ungültiger Reload nicht gemeldet')
+                        raise TimeoutError('Invalid reload not reported')
                     time.sleep(0.05)
-                assert 'VERTRAULICHER_WERT' not in log.read_text()
+                assert 'CONFIDENTIAL_VALUE' not in log.read_text()
                 config.write_text(valid)
                 os.kill(process.pid, signal.SIGHUP)
                 deadline = time.monotonic()+5
                 while 'config_check' not in log.read_text():
                     if time.monotonic() > deadline:
-                        raise TimeoutError('Gültiger Reload nicht gemeldet')
+                        raise TimeoutError('Valid reload not reported')
                     time.sleep(0.05)
                 os.kill(process.pid, signal.SIGTERM)
                 assert process.wait(timeout=5) == 0

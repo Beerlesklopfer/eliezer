@@ -49,17 +49,17 @@ fn cli_checks_example_and_reports_safe_errors() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert!(String::from_utf8_lossy(&result.stdout).contains("in Ordnung"));
+    assert!(String::from_utf8_lossy(&result.stdout).contains("Configuration OK"));
     let temp = Temp::new();
-    let path = temp.config(&minimal().replace("127.0.0.1:1234", "VERTRAULICHER_WERT"));
+    let path = temp.config(&minimal().replace("127.0.0.1:1234", "CONFIDENTIAL_VALUE"));
     let result = run(&["--config", path.to_str().unwrap(), "--check-config"]);
     assert_eq!(result.status.code(), Some(2));
     let error = String::from_utf8_lossy(&result.stderr);
     assert!(
-        error.contains("Zeile 2") && error.contains("server.listen"),
+        error.contains("line 2") && error.contains("server.listen"),
         "{error}"
     );
-    assert!(!error.contains("VERTRAULICHER_WERT"));
+    assert!(!error.contains("CONFIDENTIAL_VALUE"));
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn explicit_config_overrides_environment_and_bad_arguments_fail() {
     let temp = Temp::new();
     let path = temp.config(&minimal());
     let result = Command::new(env!("CARGO_BIN_EXE_eliezer"))
-        .env("ELIEZER_CONFIG", "/nicht/vorhanden")
+        .env("ELIEZER_CONFIG", "/does/not/exist")
         .args(["--config", path.to_str().unwrap(), "--check-config"])
         .output()
         .unwrap();

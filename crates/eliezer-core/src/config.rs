@@ -1,4 +1,4 @@
-//! Strikte Konfiguration; Dateisystemzugriffe erfolgen über einen Resolver des Aufrufers.
+//! Strict configuration; file system access goes through a resolver supplied by the caller.
 use serde::Deserialize;
 use serde_path_to_error::Segment;
 use std::{
@@ -244,7 +244,7 @@ pub struct ExtraConfig {
     pub vae: Option<PathBuf>,
 }
 
-/// Der Aufrufer löst auch vorhandene symbolische Links in noch nicht existierenden Pfaden auf.
+/// The caller also resolves existing symbolic links within paths that do not exist yet.
 pub trait PathResolver {
     fn resolve(&self, path: &Path) -> Result<PathBuf, PathResolutionError>;
 }
@@ -261,7 +261,7 @@ impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Konfigurationsfehler in Zeile {}, Feld {}: {}",
+            "Configuration error in line {}, field {}: {}",
             self.line, self.field, self.message
         )
     }
@@ -282,13 +282,13 @@ fn safe_path(path: &serde_path_to_error::Path) -> String {
             }
             Segment::Seq { index } => result.push_str(&format!("[{index}]")),
             _ => {
-                result.push_str(".<unbekannt>");
+                result.push_str(".<unknown>");
                 break;
             }
         }
     }
     if result.is_empty() {
-        "<Konfiguration>".into()
+        "<configuration>".into()
     } else {
         result
     }
@@ -304,7 +304,7 @@ impl ConfigError {
     }
 }
 
-/// Fehlerposition ohne Wiedergabe von Werten; berücksichtigt Tabellen und Modellindizes.
+/// Error position without echoing values; takes tables and model indices into account.
 fn field_line(input: &str, field: &str) -> usize {
     let mut table = String::new();
     let mut model_index = 0_usize;
@@ -367,8 +367,8 @@ impl Config {
                 .filter(|b| **b == b'\n')
                 .count()
                 + 1,
-            field: "<Konfiguration>".into(),
-            message: "Ungültige TOML-Syntax",
+            field: "<configuration>".into(),
+            message: "Invalid TOML syntax",
         })?;
         let config: Self = serde_path_to_error::deserialize(de).map_err(|e| ConfigError {
             line: input.as_bytes()[..e.inner().span().map_or(0, |s| s.start).min(input.len())]
@@ -377,7 +377,7 @@ impl Config {
                 .count()
                 + 1,
             field: safe_path(e.path()),
-            message: "Unbekanntes Feld, fehlender Wert oder ungültiger Datentyp",
+            message: "Unknown field, missing value or invalid data type",
         })?;
         config.validate(input)?;
         Ok(config)
@@ -394,29 +394,29 @@ impl Config {
         check(
             self.server.listen.port() != 0,
             "server.listen",
-            "Port muss größer als null sein",
+            "Port must be greater than zero",
         )?;
         check(
             self.server.request_timeout_secs > 0,
             "server.request_timeout_secs",
-            "Zeitlimit muss größer als null sein",
+            "Timeout must be greater than zero",
         )?;
         check(
             positive(self.gpu.vram_budget_gb),
             "gpu.vram_budget_gb",
-            "Budget muss endlich und größer als null sein",
+            "Budget must be finite and greater than zero",
         )?;
         check(
             self.gpu.reserve_gb.is_finite()
                 && self.gpu.reserve_gb >= 0.0
                 && self.gpu.reserve_gb < self.gpu.vram_budget_gb,
             "gpu.reserve_gb",
-            "Reserve muss endlich, nicht negativ und kleiner als das Budget sein",
+            "Reserve must be finite, non-negative and smaller than the budget",
         )?;
         check(
             positive(self.huggingface.cache_limit_gb),
             "huggingface.cache_limit_gb",
-            "Cache-Limit muss endlich und größer als null sein",
+            "Cache limit must be finite and greater than zero",
         )?;
         for (value, field) in [
             (self.scheduler.idle_unload_secs, "idle_unload_secs"),
@@ -426,13 +426,13 @@ impl Config {
             check(
                 value > 0,
                 &format!("scheduler.{field}"),
-                "Zeitlimit muss größer als null sein",
+                "Timeout must be greater than zero",
             )?;
         }
         check(
             self.scheduler.queue_max > 0,
             "scheduler.queue_max",
-            "Warteschlange muss mindestens einen Eintrag erlauben",
+            "Queue must allow at least one entry",
         )?;
         for (backend, name) in [
             (&self.backend.mistralrs, "mistralrs"),
@@ -442,7 +442,7 @@ impl Config {
                 check(
                     backend.max_loaded > 0,
                     &format!("backend.{name}.max_loaded"),
-                    "Obergrenze muss größer als null sein",
+                    "Upper limit must be greater than zero",
                 )?;
             }
         }
@@ -450,17 +450,17 @@ impl Config {
             check(
                 clean_absolute(&sd.program),
                 "backend.sdcpp.program",
-                "Absoluter Programmpfad ohne Elternkomponenten erforderlich",
+                "Absolute program path without parent components required",
             )?;
             check(
                 sd.port_range[0] > 0 && sd.port_range[0] <= sd.port_range[1],
                 "backend.sdcpp.port_range",
-                "Portbereich muss aufsteigend sein und oberhalb null beginnen",
+                "Port range must be ascending and start above zero",
             )?;
             check(
                 !(sd.port_range[0]..=sd.port_range[1]).contains(&self.server.listen.port()),
                 "backend.sdcpp.port_range",
-                "Portbereich überschneidet sich mit dem Dienstport",
+                "Port range overlaps the service port",
             )?;
         }
         for (path, field) in [
@@ -476,7 +476,7 @@ impl Config {
                 check(
                     clean_absolute(path),
                     field,
-                    "Absoluter Pfad ohne Elternkomponenten erforderlich",
+                    "Absolute path without parent components required",
                 )?;
             }
         }
@@ -484,22 +484,22 @@ impl Config {
         for (index, model) in self.model.iter().enumerate() {
             let prefix = format!("model[{index}]");
             let check_model = |ok, field, message| check(ok, &format!("{prefix}.{field}"), message);
-            check_model(identifier(&model.key), "key", "Ungültiger Modellschlüssel")?;
+            check_model(identifier(&model.key), "key", "Invalid model key")?;
             check_model(
                 keys.insert(&model.key),
                 "key",
-                "Modellschlüssel ist mehrfach vorhanden",
+                "Model key appears more than once",
             )?;
             check_model(
                 model.source.file.is_some() != model.source.hf.is_some(),
                 "source",
-                "Genau eine Quelle (file oder hf) ist erforderlich",
+                "Exactly one source (file or hf) is required",
             )?;
             if let Some(hf) = &model.source.hf {
                 check_model(
                     identifier(hf),
                     "source.hf",
-                    "Ungültige Hugging-Face-Kennung",
+                    "Invalid Hugging Face identifier",
                 )?;
             }
             check_model(
@@ -509,7 +509,7 @@ impl Config {
                     .as_ref()
                     .is_none_or(|rev| model.source.hf.is_some() && identifier(rev)),
                 "source.revision",
-                "Revision ist nur als gültige Kennung einer HF-Quelle erlaubt",
+                "Revision is only allowed as a valid identifier of an HF source",
             )?;
             let enabled = match model.backend {
                 BackendKind::Mistralrs => {
@@ -521,36 +521,36 @@ impl Config {
             check_model(
                 enabled,
                 "backend",
-                "Backend ist nicht konfiguriert oder deaktiviert",
+                "Backend is not configured or is disabled",
             )?;
             check_model(
                 model.max_context > 0
                     && model.default_context > 0
                     && model.default_context <= model.max_context,
                 "default_context",
-                "Kontext muss positiv sein und darf die Obergrenze nicht überschreiten",
+                "Context must be positive and must not exceed the upper limit",
             )?;
             check_model(
                 model.parallel > 0 && model.parallel <= model.default_context,
                 "parallel",
-                "Parallelität muss positiv sein und in den Kontext passen",
+                "Parallelism must be positive and fit into the context",
             )?;
             for (value, field) in [(model.size_gb, "size_gb"), (model.vram_gb, "vram_gb")] {
                 check_model(
                     value.is_none_or(positive),
                     field,
-                    "Speichergröße muss endlich und größer als null sein",
+                    "Memory size must be finite and greater than zero",
                 )?;
             }
             check_model(
                 model.kind != ModelKind::Image || model.vram_gb.is_some(),
                 "vram_gb",
-                "Bildmodelle benötigen einen gemessenen Speicherbedarf",
+                "Image models require a measured memory requirement",
             )?;
             check_model(
                 (model.backend == BackendKind::Sdcpp) == (model.kind == ModelKind::Image),
                 "kind",
-                "Bildmodelle benötigen sdcpp; sdcpp bedient nur Bildmodelle",
+                "Image models require sdcpp; sdcpp serves only image models",
             )?;
             if let Some(reasoning) = &model.reasoning {
                 let mut options = BTreeSet::new();
@@ -563,44 +563,44 @@ impl Config {
                         })
                         && reasoning.options.contains(&reasoning.default),
                     "reasoning",
-                    "Denkoptionen müssen eindeutig und bekannt sein und den Standard enthalten",
+                    "Reasoning options must be unique and known and must include the default",
                 )?;
             }
             if let Some(arch) = &model.arch {
                 check_model(
                     arch.layers > 0 && arch.kv_heads > 0 && arch.head_dim > 0,
                     "arch",
-                    "Architekturgrößen müssen positiv sein",
+                    "Architecture sizes must be positive",
                 )?;
                 let swa = arch.swa_layers.unwrap_or(0);
                 let linear = arch.linear_layers.unwrap_or(0);
                 check_model(
                     u64::from(swa) + u64::from(linear) <= u64::from(arch.layers),
                     "arch",
-                    "Spezielle Schichten überschreiten die Gesamtzahl",
+                    "Special layers exceed the total count",
                 )?;
                 check_model(
                     swa == 0 || arch.window.is_some_and(|v| v > 0),
                     "arch.window",
-                    "Sliding-Window-Schichten benötigen ein positives Fenster",
+                    "Sliding-window layers require a positive window",
                 )?;
                 check_model(
                     linear == 0 || arch.state_bytes.is_some_and(|v| v > 0),
                     "arch.state_bytes",
-                    "Lineare Schichten benötigen einen positiven Zustandsspeicher",
+                    "Linear layers require a positive state size",
                 )?;
                 check_model(
                     arch.full_kv_heads.is_none_or(|v| v > 0)
                         && arch.full_head_dim.is_none_or(|v| v > 0),
                     "arch",
-                    "Optionale Kopfgrößen müssen positiv sein",
+                    "Optional head sizes must be positive",
                 )?;
             }
             for (path, field) in model_paths(model) {
                 check_model(
                     clean_absolute(path),
                     field,
-                    "Absoluter Modellpfad ohne Elternkomponenten erforderlich",
+                    "Absolute model path without parent components required",
                 )?;
             }
         }
@@ -613,13 +613,9 @@ impl Config {
         resolver: &impl PathResolver,
     ) -> Result<(), ConfigError> {
         let resolve = |path: &Path, field: &str| {
-            resolver.resolve(path).map_err(|_| {
-                ConfigError::at(
-                    input,
-                    field.into(),
-                    "Pfad kann nicht sicher aufgelöst werden",
-                )
-            })
+            resolver
+                .resolve(path)
+                .map_err(|_| ConfigError::at(input, field.into(), "Path cannot be resolved safely"))
         };
         let root = resolve(&self.storage.models_dir, "storage.models_dir")?;
         let mut paths = vec![(
@@ -639,7 +635,7 @@ impl Config {
                 return Err(ConfigError::at(
                     input,
                     field,
-                    "Modellpfad liegt außerhalb der zentralen Modellablage",
+                    "Model path lies outside the central model store",
                 ));
             }
         }
@@ -656,7 +652,7 @@ impl Config {
                 return Err(ConfigError::at(
                     input,
                     field.into(),
-                    "Geheimnisdateien müssen außerhalb der Modellablage liegen",
+                    "Secret files must lie outside the model store",
                 ));
             }
         }

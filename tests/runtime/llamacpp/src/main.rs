@@ -16,7 +16,7 @@ use std::{
 
 type ProbeResult<T> = Result<T, Box<dyn Error>>;
 
-// Signatur und NULL-Verhalten aus dem installierten hip_runtime_api.h (ROCm 7.2).
+// Signature and NULL behavior from the installed hip_runtime_api.h (ROCm 7.2).
 #[link(name = "amdhip64")]
 unsafe extern "C" {
     fn hipFree(ptr: *mut std::ffi::c_void) -> i32;
@@ -36,7 +36,7 @@ fn generate(model: &LlamaModel, backend: &LlamaBackend, parallel: usize) -> Prob
         &template,
         &[LlamaChatMessage::new(
             "user".into(),
-            "Antworte kurz: Was ist Rust?".into(),
+            "Answer briefly: What is Rust?".into(),
         )?],
         true,
     )?;
@@ -95,7 +95,7 @@ fn generate(model: &LlamaModel, backend: &LlamaBackend, parallel: usize) -> Prob
         context.decode(&mut batch)?;
     }
     println!(
-        "Parallelität {parallel}: Prompt je {} Token; Ausgabe {counts:?}; erstes Token {first:?} ms; Gesamtzeit {} ms; VRAM {} Byte",
+        "Parallelism {parallel}: prompt of {} tokens each; output {counts:?}; first token {first:?} ms; total time {} ms; VRAM {} bytes",
         tokens.len(),
         generation.elapsed().as_millis(),
         memory()?
@@ -105,22 +105,22 @@ fn generate(model: &LlamaModel, backend: &LlamaBackend, parallel: usize) -> Prob
 
 fn run(model_path: &Path) -> ProbeResult<()> {
     let initial = memory()?;
-    // SICHERHEIT: hipFree(NULL) initialisiert laut HIP-Header nur die Laufzeit;
-    // kein Speicher wird dereferenziert und kein fremder Zeiger freigegeben.
+    // SAFETY: according to the HIP header, hipFree(NULL) only initializes the runtime;
+    // no memory is dereferenced and no foreign pointer is freed.
     let status = unsafe { hipFree(std::ptr::null_mut()) };
     if status != 0 {
-        return Err(format!("HIP-Initialisierung fehlgeschlagen, Fehlercode {status}").into());
+        return Err(format!("HIP initialization failed, error code {status}").into());
     }
     println!(
-        "Nach HIP-Initialisierung: {} Byte; vor Initialisierung {initial} Byte",
+        "After HIP initialization: {} bytes; before initialization {initial} bytes",
         memory()?
     );
     let mut backend = LlamaBackend::init()?;
     backend.void_logs();
     if !backend.supports_gpu_offload() {
-        return Err("GPU-Auslagerung nicht verfügbar".into());
+        return Err("GPU offload not available".into());
     }
-    println!("GPU-Auslagerung verfügbar; VRAM vor Backend {initial} Byte");
+    println!("GPU offload available; VRAM before backend {initial} bytes");
     for round in 1..=3 {
         let before = memory()?;
         let start = Instant::now();
@@ -130,7 +130,7 @@ fn run(model_path: &Path) -> ProbeResult<()> {
             &LlamaModelParams::default().with_n_gpu_layers(999),
         )?;
         println!(
-            "Durchlauf {round}: Laden {} ms; VRAM vorher {before}, geladen {} Byte",
+            "Round {round}: load {} ms; VRAM before {before}, loaded {} bytes",
             start.elapsed().as_millis(),
             memory()?
         );
@@ -142,26 +142,26 @@ fn run(model_path: &Path) -> ProbeResult<()> {
         }
         let after = memory()?;
         println!(
-            "Durchlauf {round}: VRAM nach Entladen {after} Byte nach {} ms; Restdifferenz {} Byte",
+            "Round {round}: VRAM after unload {after} bytes after {} ms; residual difference {} bytes",
             stop.elapsed().as_millis(),
             i128::from(after) - i128::from(before)
         );
     }
     drop(backend);
     println!(
-        "Nach Backend-Drop: {} Byte, Ausgangswert {initial} Byte",
+        "After backend drop: {} bytes, initial value {initial} bytes",
         memory()?
     );
     Ok(())
 }
 
 fn main() -> ProbeResult<()> {
-    let path = std::env::args().nth(1).ok_or("Modellpfad fehlt")?;
+    let path = std::env::args().nth(1).ok_or("Model path missing")?;
     run(Path::new(&path))
 }
 
 #[test]
-#[ignore = "Benötigt eine AMD-GPU, ROCm und ein lokales GGUF-Modell in ELIEZER_TEST_MODEL"]
+#[ignore = "Requires an AMD GPU, ROCm and a local GGUF model in ELIEZER_TEST_MODEL"]
 fn gpu_lifecycle() -> ProbeResult<()> {
     let path = std::env::var("ELIEZER_TEST_MODEL")?;
     run(Path::new(&path))

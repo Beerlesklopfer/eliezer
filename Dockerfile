@@ -1,6 +1,6 @@
 FROM docker.io/library/rust:1.88-slim-bookworm AS build
 WORKDIR /build
-# Die Host-Toolchain-Datei wird nicht kopiert: hier gilt die Image-Toolchain.
+# The host toolchain file is not copied: the image toolchain applies here.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY tests/m2 ./tests/m2

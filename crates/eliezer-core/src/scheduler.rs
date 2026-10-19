@@ -1,4 +1,4 @@
-//! Zustandsübergänge und Ladeplanung ohne Seiteneffekte.
+//! State transitions and load planning without side effects.
 use std::collections::{BTreeMap, VecDeque};
 
 pub trait Clock: Send + Sync {
@@ -59,7 +59,7 @@ pub enum Plan {
     Reject,
 }
 
-/// `free` enthält bereits Reserve, Leases und fremde GPU-Belegung.
+/// `free` already accounts for the reserve, leases and foreign GPU usage.
 pub fn plan_load(instances: &[Instance], request: &Instance, free: u64) -> Plan {
     let exclusive_conflict = |i: &&Instance| {
         (request.image || i.image)
@@ -144,7 +144,7 @@ pub struct Queued<T> {
     pub enqueued_ms: u64,
     pub value: T,
 }
-/// FIFO je Modell, Round-Robin über Modelle. Bündelung wird durch `preferred` explizit angefordert.
+/// FIFO per model, round-robin across models. Batching is requested explicitly via `preferred`.
 pub struct Queue<T> {
     models: BTreeMap<String, VecDeque<Queued<T>>>,
     order: VecDeque<String>,
@@ -192,7 +192,7 @@ impl<T> Queue<T> {
         self.len -= 1;
         Some((model, item))
     }
-    /// Der Supervisor entfernt hier getrennte Clients und abgelaufene Aufträge.
+    /// The supervisor removes disconnected clients and expired jobs here.
     pub fn remove_if(&mut self, mut predicate: impl FnMut(&Queued<T>) -> bool) -> Vec<Queued<T>> {
         let mut removed = Vec::new();
         for queue in self.models.values_mut() {

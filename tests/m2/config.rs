@@ -22,18 +22,18 @@ fn schema_rejects_unknown_fields_without_echoing_values() {
     for (old, new) in [
         (
             "priority = 10",
-            "priority = 10\nmisspelled = 'VERTRAULICHER_WERT'",
+            "priority = 10\nmisspelled = 'CONFIDENTIAL_VALUE'",
         ),
         (
             "listen = \"127.0.0.1:1234\"",
-            "listen = 'VERTRAULICHER_WERT'",
+            "listen = 'CONFIDENTIAL_VALUE'",
         ),
-        ("layers = 48", "layers = 'VERTRAULICHER_WERT'"),
+        ("layers = 48", "layers = 'CONFIDENTIAL_VALUE'"),
         ("text_encoder =", "unbekannt ="),
     ] {
         let error = Config::parse(&EXAMPLE.replace(old, new)).unwrap_err();
         assert!(error.line > 1, "{error}");
-        assert!(!error.to_string().contains("VERTRAULICHER_WERT"));
+        assert!(!error.to_string().contains("CONFIDENTIAL_VALUE"));
         assert!(!error.field.is_empty());
     }
 }
@@ -126,7 +126,7 @@ fn rejects_paths_outside_storage_and_resolved_symlinks() {
 #[test]
 fn semantic_locations_accept_comments_and_quoted_table_names() {
     let input = EXAMPLE
-        .replace("[[model]]", "[[\"model\"]] # Ein Modell")
+        .replace("[[model]]", "[[\"model\"]] # A model")
         .replace("default_context = 32768", "default_context = 999999");
     let error = Config::parse(&input).unwrap_err();
     assert_eq!(error.field, "model[0].default_context");
@@ -146,10 +146,10 @@ fn duplicate_model_keys_and_duplicate_toml_keys_name_the_place() {
     let head = "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\nmeasure=\"none\"\nvram_budget_gb=8.0\nreserve_gb=1.0\n[backend.mistralrs]\nenabled=true\n";
     let two = format!("{head}{model}{model}");
     let message = Config::parse(&two).unwrap_err().to_string();
-    assert!(message.contains("mehrfach"), "{message}");
+    assert!(message.contains("more than once"), "{message}");
     assert!(message.contains("model[1].key"), "{message}");
-    // doppelter TOML-Schlüssel im selben Abschnitt
+    // duplicate TOML key in the same section
     let dup = format!("{head}vram_budget_gb=9.0\n{model}");
     let message = Config::parse(&dup).unwrap_err().to_string();
-    assert!(message.contains("Zeile"), "{message}");
+    assert!(message.contains("line"), "{message}");
 }

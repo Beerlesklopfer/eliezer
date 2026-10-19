@@ -1,4 +1,4 @@
-//! Konservative VRAM-Rechnung ohne Dateisystem- oder GPU-Zugriff.
+//! Conservative VRAM calculation without file system or GPU access.
 use crate::config::{Architecture, ModelConfig, ModelKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,10 +11,10 @@ pub enum MemoryError {
 impl std::fmt::Display for MemoryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::InvalidSize => "Ungültige Speichergröße oder Ladeparameter",
-            Self::MissingWeights => "Gewichtsgröße fehlt",
-            Self::InvalidArchitecture => "Ungültige Architektur",
-            Self::Overflow => "Speicherrechnung überschreitet den Zahlenbereich",
+            Self::InvalidSize => "Invalid memory size or load parameters",
+            Self::MissingWeights => "Weight size missing",
+            Self::InvalidArchitecture => "Invalid architecture",
+            Self::Overflow => "Memory calculation exceeds the numeric range",
         })
     }
 }
@@ -94,7 +94,7 @@ pub fn cache_bytes(arch: &Architecture, context: u32, parallel: u32) -> Result<u
     sum(&[full_cache, window_cache, state])
 }
 
-/// Messwerte beschreiben die gesamte Instanz; Dateigrößen werden vom Aufrufer geliefert.
+/// Measured values describe the whole instance; file sizes are supplied by the caller.
 pub fn estimate(
     model: &ModelConfig,
     context: u32,
@@ -147,7 +147,7 @@ pub fn estimate(
     ])
 }
 
-/// Fremdbelegung und eigene Leases werden nicht doppelt abgezogen.
+/// Foreign usage and own leases are not subtracted twice.
 pub fn available(budget: u64, reserve: u64, total: u64, used: u64, leases: u64, own: u64) -> u64 {
     budget
         .min(total)

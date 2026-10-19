@@ -1,4 +1,4 @@
-# Zusätzlich zu compose.podman.yaml; erfordert die OCI-Runtime crun.
+# In addition to compose.podman.yaml; requires the OCI runtime crun.
 services:
   eliezer:
     runtime: crun

@@ -1,9 +1,9 @@
-//! Reine Übersetzung der Messages-Schnittstelle.
+//! Pure translation of the Messages interface.
 use serde_json::{Value, json};
 
 pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str> {
     if !input["max_tokens"].as_u64().is_some_and(|n| n > 0) {
-        return Err("max_tokens muss positiv sein");
+        return Err("max_tokens must be positive");
     }
     let mut messages = Vec::new();
     if let Some(system) = input.get("system") {
@@ -12,9 +12,9 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
         } else {
             system
                 .as_array()
-                .ok_or("Ungültiger Systemtext")?
+                .ok_or("Invalid system text")?
                 .iter()
-                .map(|b| b["text"].as_str().ok_or("Ungültiger Systemblock"))
+                .map(|b| b["text"].as_str().ok_or("Invalid system block"))
                 .collect::<Result<Vec<_>, _>>()?
                 .join("\n")
         };
@@ -24,7 +24,7 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
         let role = message["role"]
             .as_str()
             .filter(|v| ["user", "assistant"].contains(v))
-            .ok_or("Ungültige Nachrichtenrolle")?;
+            .ok_or("Invalid message role")?;
         if let Some(text) = message["content"].as_str() {
             messages.push(json!({"role":role,"content":text}));
             continue;
@@ -34,14 +34,14 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
         let mut results = Vec::new();
         for block in message["content"]
             .as_array()
-            .ok_or("Ungültiger Nachrichteninhalt")?
+            .ok_or("Invalid message content")?
         {
             match block["type"].as_str() {
                 Some("text") => content.push(json!({"type":"text","text":block["text"].as_str().ok_or("Text fehlt")?})),
                 Some("image") => {
                     let source = &block["source"];
-                    if source["type"] != "base64" { return Err("Nur Base64-Bilder werden unterstützt"); }
-                    let mime = source["media_type"].as_str().filter(|v| ["image/png","image/jpeg","image/gif","image/webp"].contains(v)).ok_or("Ungültiges Bildformat")?;
+                    if source["type"] != "base64" { return Err("Only base64 images are supported"); }
+                    let mime = source["media_type"].as_str().filter(|v| ["image/png","image/jpeg","image/gif","image/webp"].contains(v)).ok_or("Invalid image format")?;
                     let data = source["data"].as_str().ok_or("Bilddaten fehlen")?;
                     content.push(json!({"type":"image_url","image_url":{"url":format!("data:{mime};base64,{data}")}}));
                 }
@@ -50,7 +50,7 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
                 Some("tool_result") => results.push(json!({"role":"tool","tool_call_id":block["tool_use_id"].as_str().ok_or("Werkzeug-ID fehlt")?,
                     "content": if let Some(text) = block["content"].as_str() { Value::String(text.into()) } else { block["content"].clone() }})),
                 Some("thinking") => {},
-                _ => return Err("Dieser Inhaltsblock wird nicht unterstützt"),
+                _ => return Err("This content block is not supported"),
             }
         }
         if !content.is_empty() || !calls.is_empty() {
@@ -73,8 +73,8 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
         output["stop"] = stops.clone();
     }
     if let Some(tools) = input.get("tools") {
-        output["tools"] = Value::Array(tools.as_array().ok_or("Ungültige Werkzeuge")?.iter().map(|t| {
-            if t.get("type").is_some() { return Err("Serverseitige Werkzeuge werden nicht unterstützt"); }
+        output["tools"] = Value::Array(tools.as_array().ok_or("Invalid tools")?.iter().map(|t| {
+            if t.get("type").is_some() { return Err("Server-side tools are not supported"); }
             Ok(json!({"type":"function","function":{"name":t["name"].as_str().ok_or("Werkzeugname fehlt")?,"description":t["description"],"parameters":t["input_schema"]}}))
         }).collect::<Result<Vec<_>, _>>()?);
     }
@@ -86,7 +86,7 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
             Some("tool") => {
                 json!({"type":"function","function":{"name":choice["name"].as_str().ok_or("Werkzeugname fehlt")?}})
             }
-            _ => return Err("Ungültige Werkzeugauswahl"),
+            _ => return Err("Invalid tool choice"),
         };
     }
     if let Some(thinking) = input.get("thinking") {
@@ -101,7 +101,7 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
                 1025..=8192 => "medium",
                 _ => "high",
             },
-            _ => return Err("Ungültige Denkoption"),
+            _ => return Err("Invalid reasoning option"),
         };
         let ranks = ["none", "minimal", "low", "medium", "high", "xhigh"];
         let rank = ranks.iter().position(|s| *s == target).unwrap_or(0);
@@ -115,7 +115,7 @@ pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str>
             })
             .min_by_key(|(distance, rank, _)| (*distance, *rank))
             .map(|(_, _, o)| o)
-            .ok_or("Modell unterstützt keine Denkoptionen")?;
+            .ok_or("Model does not support reasoning options")?;
         output["reasoning_effort"] = json!(selected);
     }
     Ok(output)
@@ -147,7 +147,7 @@ pub fn response(openai: &Value) -> Result<Value, &'static str> {
                     .as_str()
                     .ok_or("Werkzeugargumente fehlen")?,
             )
-            .map_err(|_| "Ungültige Werkzeugargumente")?;
+            .map_err(|_| "Invalid tool arguments")?;
             content.push(json!({"type":"tool_use","id":call["id"],"name":call["function"]["name"],"input":arguments}));
         }
     }

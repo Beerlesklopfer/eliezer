@@ -1,5 +1,5 @@
-//! Vertragstest (Spezifikation 11): Die Modellliste von LM Studio 0.4 und die von Eliezer
-//! gehen durch dieselben Prüfungen. Fehlende Felder sind erlaubt, falsche Typen nicht.
+//! Contract test (specification 11): the model list of LM Studio 0.4 and that of Eliezer
+//! go through the same checks. Missing fields are allowed, wrong types are not.
 use axum::{
     body::{Body, to_bytes},
     http::Request,
@@ -21,34 +21,32 @@ impl Clock for TestClock {
     }
 }
 
-/// `null` zählt als fehlend: LM Studio liefert es etwa für `params_string` bei Embedding-Modellen.
+/// `null` counts as missing: LM Studio returns it for `params_string` of embedding models, for example.
 fn check_optional(value: &Value, key: &str, ok: fn(&Value) -> bool, what: &str, path: &str) {
     if let Some(v) = value.get(key).filter(|v| !v.is_null()) {
-        assert!(ok(v), "{path}.{key} muss {what} sein, ist aber {v}");
+        assert!(ok(v), "{path}.{key} must be {what}, but is {v}");
     }
 }
 
-/// Felder und Typen aus Spezifikation 5.2, so wie MultiGPT sie liest.
+/// Fields and types from specification 5.2, as MultiGPT reads them.
 fn check_models(body: &Value) -> usize {
-    let models = body["models"]
-        .as_array()
-        .expect("`models` muss eine Liste sein");
+    let models = body["models"].as_array().expect("`models` must be a list");
     for (i, m) in models.iter().enumerate() {
         let p = format!("models[{i}]");
-        let kind = m["type"].as_str().expect("`type` ist Pflicht");
+        let kind = m["type"].as_str().expect("`type` is mandatory");
         assert!(
             ["llm", "embedding", "image"].contains(&kind),
-            "{p}.type unbekannt: {kind}"
+            "{p}.type unknown: {kind}"
         );
         assert!(
             m["key"].as_str().is_some_and(|k| !k.is_empty()),
-            "{p}.key ist Pflicht"
+            "{p}.key is mandatory"
         );
         for key in ["display_name", "architecture", "params_string"] {
             check_optional(m, key, Value::is_string, "Text", &p);
         }
         for key in ["size_bytes", "max_context_length"] {
-            check_optional(m, key, Value::is_u64, "ganze Zahl", &p);
+            check_optional(m, key, Value::is_u64, "integer", &p);
         }
         if let Some(q) = m.get("quantization") {
             check_optional(
@@ -69,22 +67,22 @@ fn check_models(body: &Value) -> usize {
                     r,
                     "allowed_options",
                     |v| v.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
-                    "Liste von Texten",
+                    "list of strings",
                     &rp,
                 );
             }
         }
         for (j, inst) in m["loaded_instances"]
             .as_array()
-            .expect("loaded_instances ist Pflicht")
+            .expect("loaded_instances is mandatory")
             .iter()
             .enumerate()
         {
             let ip = format!("{p}.loaded_instances[{j}]");
-            assert!(inst["id"].is_string(), "{ip}.id ist Pflicht");
+            assert!(inst["id"].is_string(), "{ip}.id is mandatory");
             if let Some(c) = inst.get("config") {
                 for key in ["context_length", "parallel"] {
-                    check_optional(c, key, Value::is_u64, "ganze Zahl", &format!("{ip}.config"));
+                    check_optional(c, key, Value::is_u64, "integer", &format!("{ip}.config"));
                 }
             }
         }
@@ -101,7 +99,7 @@ fn lmstudio_reference_passes() {
 #[test]
 fn checks_reject_wrong_types() {
     let bad =
-        json!({"models":[{"type":"llm","key":"a","size_bytes":"groß","loaded_instances":[]}]});
+        json!({"models":[{"type":"llm","key":"a","size_bytes":"large","loaded_instances":[]}]});
     assert!(std::panic::catch_unwind(|| check_models(&bad)).is_err());
 }
 
@@ -200,11 +198,7 @@ reasoning={options=["none","low","medium","high"],default="none"}
     let after = get(router, "/api/v1/models", None).await;
     assert_eq!(check_models(&after), 1);
     let instances = after["models"][0]["loaded_instances"].as_array().unwrap();
-    assert_eq!(
-        instances.len(),
-        1,
-        "nach dem Laden muss eine Instanz erscheinen"
-    );
+    assert_eq!(instances.len(), 1, "an instance must appear after loading");
     assert_eq!(instances[0]["id"], "a");
     supervisor.shutdown().await;
 }
