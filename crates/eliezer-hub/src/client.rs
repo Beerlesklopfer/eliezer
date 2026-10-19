@@ -68,28 +68,38 @@ fn license_of(tags: &Value) -> Option<String> {
 impl Hub for HfClient {
     fn search<'a>(&'a self, query: &'a Query) -> HubFuture<'a, Vec<Summary>> {
         Box::pin(async move {
-            let mut params = vec![
-                ("search", query.text.clone()),
-                ("filter", query.format.name().to_owned()),
-                ("sort", "downloads".to_owned()),
-                ("direction", "-1".to_owned()),
-                ("limit", query.limit.to_string()),
-            ];
-            if let Some(license) = &query.license {
-                params.push(("filter", format!("license:{license}")));
-            }
-            if let Some(tag) = query.task.pipeline_tag() {
-                params.push(("pipeline_tag", tag.to_owned()));
-            }
-            let list = self
-                .get(format!("{}/api/models", self.base), &params)
-                .await?;
-            let items = list.as_array().ok_or(HubError::BadResponse)?;
-            Ok(items
-                .iter()
-                .filter_map(|item| {
-                    let repo = item["id"].as_str().filter(|r| valid_repo(r))?;
-                    Some(Summary {
+            // One request per pipeline tag of the task (embedding models have two); no tag asks once.
+            let tags: Vec<Option<&str>> = match query.task.pipeline_tags() {
+                [] => vec![None],
+                tags => tags.iter().map(|t| Some(*t)).collect(),
+            };
+            let mut hits: Vec<Summary> = Vec::new();
+            for tag in tags {
+                let mut params = vec![
+                    ("search", query.text.clone()),
+                    ("filter", query.format.name().to_owned()),
+                    ("sort", "downloads".to_owned()),
+                    ("direction", "-1".to_owned()),
+                    ("limit", query.limit.to_string()),
+                ];
+                if let Some(license) = &query.license {
+                    params.push(("filter", format!("license:{license}")));
+                }
+                if let Some(tag) = tag {
+                    params.push(("pipeline_tag", tag.to_owned()));
+                }
+                let list = self
+                    .get(format!("{}/api/models", self.base), &params)
+                    .await?;
+                let items = list.as_array().ok_or(HubError::BadResponse)?;
+                for item in items {
+                    let Some(repo) = item["id"].as_str().filter(|r| valid_repo(r)) else {
+                        continue;
+                    };
+                    if hits.iter().any(|h| h.repo == repo) {
+                        continue;
+                    }
+                    hits.push(Summary {
                         repo: repo.to_owned(),
                         downloads: item["downloads"].as_u64().unwrap_or(0),
                         likes: item["likes"].as_u64().unwrap_or(0),
@@ -98,9 +108,13 @@ impl Hub for HfClient {
                         gguf: item["tags"]
                             .as_array()
                             .is_some_and(|t| t.iter().any(|t| t == "gguf")),
-                    })
-                })
-                .collect())
+                    });
+                }
+            }
+            // The merged lists keep the order of Hugging Face: most downloaded first.
+            hits.sort_by_key(|h| std::cmp::Reverse(h.downloads));
+            hits.truncate(query.limit);
+            Ok(hits)
         })
     }
 

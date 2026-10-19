@@ -49,14 +49,15 @@ impl Task {
             Self::Image => "image",
         }
     }
-    /// The `pipeline_tag` Hugging Face uses for this task.
-    pub fn pipeline_tag(self) -> Option<&'static str> {
+    /// The `pipeline_tag` values Hugging Face uses for this task. Embedding models carry either of
+    /// two (the official nomic-embed-text GGUF is a `sentence-similarity` model); `Any` has none.
+    pub fn pipeline_tags(self) -> &'static [&'static str] {
         match self {
-            Self::Any => None,
-            Self::Llm => Some("text-generation"),
-            Self::Vision => Some("image-text-to-text"),
-            Self::Embedding => Some("feature-extraction"),
-            Self::Image => Some("text-to-image"),
+            Self::Any => &[],
+            Self::Llm => &["text-generation"],
+            Self::Vision => &["image-text-to-text"],
+            Self::Embedding => &["feature-extraction", "sentence-similarity"],
+            Self::Image => &["text-to-image"],
         }
     }
 }

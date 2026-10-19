@@ -264,7 +264,7 @@ The `eliezer` binary is also a client of the running service (synchronous HTTP/1
 
 | Command | API | Output |
 |---|---|---|
-| `ls` | `GET /api/v1/models`, `GET /api/v1/status` | key, type, size, max context, state |
+| `ls` | `GET /api/v1/models`, `GET /api/v1/status` | key, type, capabilities (`vision`, `reasoning`), size, max context, state |
 | `ps` | `GET /api/v1/status`, `GET /api/v1/models` | loaded models: VRAM, context, parallel, idle, in-flight, queued |
 | `status` | `GET /healthz`, `GET /api/v1/status` | reachability, health, GPU memory with measurement method, models, queue |
 | `show MODEL` | `GET /api/v1/models`, `GET /api/v1/status` | details of one model and the endpoints serving it |

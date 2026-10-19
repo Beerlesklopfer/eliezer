@@ -126,6 +126,7 @@ pub fn ls_text(models: &Value, status: Option<&Value>) -> String {
             vec![
                 m["key"].as_str().unwrap_or("-").to_owned(),
                 m["type"].as_str().unwrap_or("-").to_owned(),
+                capabilities(m),
                 opt_bytes(&m["size_bytes"]),
                 opt_num(&m["max_context_length"]),
                 state_of(m, status),
@@ -133,10 +134,31 @@ pub fn ls_text(models: &Value, status: Option<&Value>) -> String {
         })
         .collect();
     out + &table(
-        &["MODEL", "TYPE", "SIZE", "CONTEXT", "STATE"],
+        &["MODEL", "TYPE", "CAPABILITIES", "SIZE", "CONTEXT", "STATE"],
         &rows,
-        &[2, 3],
+        &[3, 4],
     )
+}
+
+/// What a model can do beyond text in and text out: `vision` (reads images) and `reasoning`
+/// (has thinking options). `-` when it has none.
+fn capabilities(model: &Value) -> String {
+    let caps = &model["capabilities"];
+    let mut found = Vec::new();
+    if caps["vision"].as_bool() == Some(true) {
+        found.push("vision");
+    }
+    if caps["reasoning"]["allowed_options"]
+        .as_array()
+        .is_some_and(|options| !options.is_empty())
+    {
+        found.push("reasoning");
+    }
+    if found.is_empty() {
+        "-".to_owned()
+    } else {
+        found.join(", ")
+    }
 }
 
 /// `eliezer ps`: models that occupy memory (loading, loaded, unloading).

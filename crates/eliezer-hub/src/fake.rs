@@ -34,10 +34,8 @@ impl Hub for FakeHub {
                         .is_none_or(|l| s.license.as_ref() == Some(l))
                 })
                 .filter(|s| {
-                    query
-                        .task
-                        .pipeline_tag()
-                        .is_none_or(|t| s.task.as_deref() == Some(t))
+                    let tags = query.task.pipeline_tags();
+                    tags.is_empty() || tags.iter().any(|t| s.task.as_deref() == Some(*t))
                 })
                 .take(query.limit)
                 .cloned()

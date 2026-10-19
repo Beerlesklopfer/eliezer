@@ -247,6 +247,71 @@ async fn the_real_client_asks_huggingface_the_way_it_was_probed() {
 }
 
 #[tokio::test]
+async fn embedding_search_asks_for_both_pipeline_tags_and_merges_by_downloads() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut lines = Vec::new();
+        for body in [
+            r#"[{"id":"a/feature-GGUF","downloads":10,"tags":["gguf"],"pipeline_tag":"feature-extraction"},
+                {"id":"a/both-GGUF","downloads":5,"tags":["gguf"]}]"#,
+            r#"[{"id":"nomic-ai/nomic-embed-text-v1.5-GGUF","downloads":474086,"tags":["gguf","license:apache-2.0"],
+                 "pipeline_tag":"sentence-similarity"},
+                {"id":"a/both-GGUF","downloads":5,"tags":["gguf"]}]"#,
+        ] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = vec![0_u8; 4096];
+            let n = stream.read(&mut buffer).await.unwrap();
+            lines.push(
+                String::from_utf8_lossy(&buffer[..n])
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .to_owned(),
+            );
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(reply.as_bytes()).await.unwrap();
+        }
+        lines
+    });
+    let client = HfClient::new(&base, Duration::from_secs(5)).unwrap();
+    let hits = client
+        .search(&Query {
+            text: "nomic".into(),
+            task: Task::Embedding,
+            format: Format::Gguf,
+            license: None,
+            limit: 3,
+        })
+        .await
+        .unwrap();
+    let lines = server.await.unwrap();
+    assert!(
+        lines[0].contains("pipeline_tag=feature-extraction"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains("pipeline_tag=sentence-similarity"),
+        "{}",
+        lines[1]
+    );
+    let repos: Vec<&str> = hits.iter().map(|h| h.repo.as_str()).collect();
+    assert_eq!(
+        repos,
+        [
+            "nomic-ai/nomic-embed-text-v1.5-GGUF",
+            "a/feature-GGUF",
+            "a/both-GGUF"
+        ],
+        "a repository found twice counts once, most downloaded first"
+    );
+}
+
+#[tokio::test]
 async fn the_real_client_reads_details_and_maps_errors() {
     let (base, request) = canned(
         "200 OK",

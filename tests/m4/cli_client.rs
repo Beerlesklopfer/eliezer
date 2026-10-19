@@ -66,6 +66,36 @@ fn sample_status() -> Value {
 }
 
 #[test]
+fn ls_lists_the_capabilities_of_each_model() {
+    let models = json!({"models": [
+        {"type": "llm", "key": "ocr", "size_bytes": 4_700_000_000_u64, "max_context_length": 128000,
+         "capabilities": {"vision": true}, "loaded_instances": []},
+        {"type": "llm", "key": "thinker", "size_bytes": 16_800_000_000_u64, "max_context_length": 262144,
+         "capabilities": {"vision": true, "reasoning": {"allowed_options": ["none", "medium"], "default": "none"}},
+         "loaded_instances": []},
+        {"type": "llm", "key": "chat", "size_bytes": 4_400_000_000_u64, "max_context_length": 32768,
+         "capabilities": {"vision": false, "reasoning": {"allowed_options": [], "default": "none"}},
+         "loaded_instances": []},
+        {"type": "embedding", "key": "embed", "size_bytes": 270_000_000_u64, "max_context_length": 2048,
+         "loaded_instances": []}]});
+    let ls = format::ls_text(&models, None);
+    assert!(ls.contains("CAPABILITIES"), "{ls}");
+    let row = |key: &str| ls.lines().find(|l| l.starts_with(key)).unwrap().to_owned();
+    assert!(
+        row("ocr").contains("vision") && !row("ocr").contains("reasoning"),
+        "{ls}"
+    );
+    assert!(row("thinker").contains("vision, reasoning"), "{ls}");
+    for key in ["chat", "embed"] {
+        let row = row(key);
+        assert!(
+            !row.contains("vision") && !row.contains("reasoning"),
+            "{row}"
+        );
+    }
+}
+
+#[test]
 fn model_status_and_stats_texts() {
     let ls = format::ls_text(&sample_models(), Some(&sample_status()));
     assert!(
