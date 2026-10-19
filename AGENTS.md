@@ -8,12 +8,15 @@ Eliezer ist ein Modellverwalter in **Rust** und ersetzt LM Studio für
 ## Arbeitsweise
 
 - Meilensteine der Reihe nach (M1 … M6). Je Meilenstein: umsetzen, Tests, kurze Notiz in
-  `docs/Stand.md` (was läuft, was nicht, Messwerte), dann stoppen und auf Freigabe warten.
+  `docs/Stand.md` (was läuft, was nicht, Messwerte) und Ergebnisse in `debian/changelog`, dann stoppen und auf Freigabe warten.
 - Nichts erfinden: Schnittstellen und Kommandozeilen fremder Programme und Crates (mistral.rs und llama.cpp als Crates,
   stable-diffusion.cpp) **zuerst am installierten Programm bzw. an der Crate-Dokumentation und einem Probeprogramm prüfen** und das
   Ergebnis in `docs/Laufzeiten.md` festhalten. Die Spezifikation nennt dort nur, was zu klären ist.
 - Kleine, nachvollziehbare Commits mit deutscher Beschreibung im Imperativ.
 - Versionsnummern legt der Nutzer fest. Keine Tags, keine Releases, kein `cargo publish`.
+
+- Sämtliche Prüfungen und Probeprogramme einschließlich ihrer Dokumentation liegen unter
+  `tests/` in passenden Unterverzeichnissen. Bauausgaben werden nicht versioniert.
 
 ## Sprache und Stil
 

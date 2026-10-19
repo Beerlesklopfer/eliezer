@@ -1,0 +1,23 @@
+# Rust-Bauausgaben (auch in Probeprogrammen)
+**/target/
+
+# Sicherungen von rustfmt
+**/*.rs.bk
+
+# Python-Hilfsprogramme der manuellen Prüfungen
+**/__pycache__/
+
+# Lokaler Projektstand
+/docs/Stand.md
+
+# Lokale Umgebungsvariablen und Geheimnisse
+.env
+.env.*
+!.env.example
+
+# Temporäre Editor-Dateien
+*.swp
+*.swo
+*~
+
+# Cargo.lock bleibt für diesen Anwendungs-Workspace versioniert.
