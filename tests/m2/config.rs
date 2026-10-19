@@ -153,3 +153,31 @@ fn duplicate_model_keys_and_duplicate_toml_keys_name_the_place() {
     let message = Config::parse(&dup).unwrap_err().to_string();
     assert!(message.contains("line"), "{message}");
 }
+
+#[test]
+fn a_known_field_in_the_wrong_section_says_where_it_belongs() {
+    let head = "[server]\nlisten = \"127.0.0.1:1234\"\n";
+    // the real-life slip: cache_dir written into [storage]
+    let text = format!("{head}[storage]\nmodels_dir = \"/m\"\ncache_dir = \"/m/hf\"\n[gpu]\n");
+    let error = Config::parse(&text).unwrap_err().to_string();
+    assert!(error.contains("storage.cache_dir"), "{error}");
+    assert!(
+        error.contains("[huggingface]") && error.contains("not of [storage]"),
+        "{error}"
+    );
+    assert!(error.contains("line 5"), "{error}");
+    // a field that exists nowhere is still not echoed
+    let text = format!("{head}[storage]\nVERTRAULICH = 1\n[gpu]\n");
+    let error = Config::parse(&text).unwrap_err().to_string();
+    assert!(
+        !error.contains("VERTRAULICH") && !error.contains("belongs"),
+        "{error}"
+    );
+    // a field in its own section is not touched by the hint
+    let text = format!("{head}[huggingface]\ncache_dir = 5\n[gpu]\n");
+    let error = Config::parse(&text).unwrap_err().to_string();
+    assert!(
+        error.contains("huggingface.cache_dir") && !error.contains("not of"),
+        "{error}"
+    );
+}

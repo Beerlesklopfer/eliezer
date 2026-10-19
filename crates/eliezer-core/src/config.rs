@@ -274,6 +274,49 @@ impl std::error::Error for ConfigError {}
 
 const FIELDS: &str = "server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb extra text_encoder vae";
 
+/// Which section each known field belongs to. Used only to say "this field is in another section";
+/// names that are not in this table are never echoed.
+const SECTION_FIELDS: &[(&str, &str)] = &[
+    (
+        "server",
+        "listen api_keys_file run_user run_group request_timeout_secs",
+    ),
+    ("storage", "models_dir"),
+    ("gpu", "vendor index vram_budget_gb reserve_gb measure"),
+    (
+        "scheduler",
+        "idle_unload_secs queue_max queue_wait_secs failed_retry_secs",
+    ),
+    (
+        "huggingface",
+        "token_file cache_dir cache_limit_gb downloads",
+    ),
+];
+
+/// Adds a hint when a known field stands in the wrong section (`storage.cache_dir`).
+fn with_section_hint(field: String) -> String {
+    let Some((section, key)) = field.split_once('.') else {
+        return field;
+    };
+    let owns = |name: &str| {
+        SECTION_FIELDS
+            .iter()
+            .any(|(s, fields)| *s == name && fields.split_whitespace().any(|f| f == key))
+    };
+    if owns(section) {
+        return field;
+    }
+    match SECTION_FIELDS
+        .iter()
+        .find(|(s, fields)| *s != section && fields.split_whitespace().any(|f| f == key))
+    {
+        Some((right, _)) if SECTION_FIELDS.iter().any(|(s, _)| *s == section) => {
+            format!("{field} (a field of [{right}], not of [{section}])")
+        }
+        _ => field,
+    }
+}
+
 fn safe_path(path: &serde_path_to_error::Path) -> String {
     let mut result = String::new();
     for segment in path {
@@ -396,7 +439,7 @@ impl Config {
                 .filter(|b| **b == b'\n')
                 .count()
                 + 1,
-            field: safe_path(e.path()),
+            field: with_section_hint(safe_path(e.path())),
             message: "Unknown field, missing value or invalid data type",
         })?;
         config.validate(input)?;
