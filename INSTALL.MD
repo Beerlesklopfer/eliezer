@@ -125,6 +125,40 @@ existing files are never overwritten, and a rename within one file system takes 
 At the end the command prints a `[[model]]` block per model; check it and add it to the
 configuration, then reload with `systemctl reload eliezer`.
 
+## Command line client
+
+The `eliezer` program is also a client of the running service, in the style of `ollama` and `lms`.
+It talks to the HTTP API; the address and the API key are taken from the configuration
+(`server.listen`, `server.api_keys_file`) if it is readable, so on the machine that runs the
+service no options are needed:
+
+```bash
+eliezer ls                          # configured models: key, type, size, max context, state
+eliezer ps                          # loaded models: VRAM, context, parallel, idle time, requests
+eliezer status                      # service, GPU memory (total/used/free/budget), queue
+eliezer show qwen/qwen3-coder-30b   # details of one model and the endpoints serving it
+eliezer load qwen/qwen3-coder-30b --context 32768 --parallel 2
+eliezer unload qwen/qwen3-coder-30b # or: eliezer unload --all
+eliezer run qwen/qwen3-coder-30b "Explain mutexes in two sentences" --stats
+eliezer run qwen/qwen3-coder-30b    # interactive chat; an empty line or Ctrl-D ends it
+echo "Summarize this" | eliezer run qwen/qwen3-coder-30b
+```
+
+`run` prints the answer while it is generated. Reasoning ("thinking") text is dimmed on a terminal
+and goes to stderr when the output is piped, so stdout holds only the answer. `--stats` prints the
+token statistics to stderr. Further options: `--system TEXT`, `--temperature F`, `--max-tokens N`,
+`--reasoning none|low|medium|high`.
+
+Options for every command: `--host URL` (otherwise `ELIEZER_HOST`, the configured listen address,
+or `http://127.0.0.1:1234`), `--key-file PATH` (otherwise `ELIEZER_API_KEY_FILE`, `ELIEZER_API_KEY`
+or the key file named in the configuration), `--json` (print the JSON of the API) and
+`--config PATH`. The key is never accepted as a command-line argument and never printed.
+
+From another machine: `ELIEZER_HOST=http://server:1234 ELIEZER_API_KEY_FILE=~/.eliezer-key eliezer ls`.
+
+Exit codes: 0 ok, 1 request failed or server error (the message of the service is printed), 2 usage
+error, 3 service not reachable (start it with `systemctl start eliezer`).
+
 ## Debian package
 
 The package is built with `cargo-deb` (`cargo install cargo-deb`, Rust from rustup):

@@ -1,3 +1,4 @@
+mod cli;
 mod runtime;
 
 use eliezer_core::{
@@ -58,9 +59,7 @@ fn arguments() -> Result<Option<Arguments>, &'static str> {
     let mut explicit = false;
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
-            println!(
-                "Eliezer – manager for local models\n\nUsage: eliezer [--config PATH] [--check-config [PATH]]\n       eliezer [--config PATH] --import DIR [--copy] [--dry-run]\n\n--config PATH       Configuration (otherwise ELIEZER_CONFIG or /etc/eliezer/config.toml)\n--check-config      Only check, then exit\n--import DIR        Move the .gguf files below DIR into storage.models_dir and hand them to\n                    server.run_user / server.run_group (usually needs root); then print\n                    [[model]] suggestions\n--copy              With --import: copy instead of move\n--dry-run           With --import: only show what would happen\n--version           Print the version number"
-            );
+            println!("{}", cli::usage());
             return Ok(None);
         } else if arg == "--version" {
             println!("Eliezer {}", env!("CARGO_PKG_VERSION"));
@@ -317,8 +316,24 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
     }
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    // Client commands (`eliezer ls`, `ps`, ...) run synchronously, before any async runtime exists.
+    if let Some(code) = cli::dispatch() {
+        return code;
+    }
+    match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(service_main()),
+        Err(_) => {
+            eprintln!("Async runtime cannot be started");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn service_main() -> ExitCode {
     let args = match arguments() {
         Ok(Some(args)) => args,
         Ok(None) => return ExitCode::SUCCESS,

@@ -1,0 +1,825 @@
+//! Command line client: `eliezer ls|ps|load|unload|status|run|show|help` talk to the running
+//! service over its HTTP API. Everything here is synchronous and runs before the async runtime
+//! of the service is started.
+mod format;
+mod http;
+
+use eliezer_core::config::Config;
+use http::{Client, Endpoint, HttpError};
+use serde_json::{Value, json};
+use std::{
+    collections::{HashMap, HashSet},
+    io::{BufRead, IsTerminal, Read, Write},
+    path::{Path, PathBuf},
+    process::ExitCode,
+    time::Duration,
+};
+
+const DEFAULT_HOST: &str = "http://127.0.0.1:1234";
+const SHORT: Duration = Duration::from_secs(15);
+const LONG: Duration = Duration::from_secs(3600);
+
+const COMMANDS: &[&str] = &[
+    "ls", "ps", "load", "unload", "status", "run", "show", "help",
+];
+
+/// Complete help text of the program: service flags and client commands.
+pub fn usage() -> String {
+    "Eliezer – manager for local models\n\
+\n\
+Usage: eliezer [--config PATH] [--check-config [PATH]]      start the service\n\
+       eliezer [--config PATH] --import DIR [--copy] [--dry-run]\n\
+       eliezer COMMAND [OPTIONS]                              talk to the running service\n\
+\n\
+Service options:\n\
+  --config PATH       Configuration (otherwise ELIEZER_CONFIG or /etc/eliezer/config.toml)\n\
+  --check-config      Only check, then exit\n\
+  --import DIR        Move the .gguf files below DIR into storage.models_dir and hand them to\n\
+                      server.run_user / server.run_group (usually needs root); then print\n\
+                      [[model]] suggestions\n\
+  --copy              With --import: copy instead of move\n\
+  --dry-run           With --import: only show what would happen\n\
+  --version           Print the version number\n\
+\n\
+Commands (they use the HTTP API of the running service):\n\
+  ls                              List the configured models (key, type, size, context, state)\n\
+  ps                              List the loaded models (VRAM, context, parallel, idle, requests)\n\
+  load MODEL [--context N] [--parallel N]\n\
+                                  Load a model and print the load time\n\
+  unload [MODEL | --all]          Unload one model, all models, or the only loaded one\n\
+  status                          Service, GPU memory and queue\n\
+  show MODEL                      Details of one configured model and the endpoints serving it\n\
+  run MODEL [PROMPT]              Chat with a model; streams the answer. Without PROMPT on a terminal\n\
+                                  an interactive chat starts (empty line or Ctrl-D ends it); with\n\
+                                  piped input the prompt is read from stdin\n\
+      --system TEXT               System prompt\n\
+      --temperature F             Sampling temperature\n\
+      --max-tokens N              Limit the answer length\n\
+      --reasoning LEVEL           none, low, medium or high\n\
+      --stats                     Print token statistics at the end (to stderr)\n\
+  help                            This text\n\
+\n\
+Options for all commands:\n\
+  --host URL          Service address (otherwise ELIEZER_HOST, the server.listen of the\n\
+                      configuration, or http://127.0.0.1:1234)\n\
+  --key-file PATH     File with the API key (otherwise ELIEZER_API_KEY_FILE, ELIEZER_API_KEY or\n\
+                      the server.api_keys_file of the configuration). The key is never taken\n\
+                      from the command line.\n\
+  --json              Print the JSON of the API instead of a table\n\
+  --config PATH       Configuration file to read the address and the key file from\n\
+\n\
+Exit codes: 0 ok, 1 request failed or server error, 2 usage error, 3 service not reachable"
+        .to_owned()
+}
+
+enum Failure {
+    Usage(String),
+    Request(String),
+    Unreachable(String),
+}
+type Res<T> = Result<T, Failure>;
+
+fn usage_err<T>(message: impl Into<String>) -> Res<T> {
+    Err(Failure::Usage(message.into()))
+}
+
+/// Recognizes `eliezer [--config X|--host X|--key-file X|--json]... COMMAND ...`.
+/// Returns `None` when the arguments belong to the service (flags only).
+pub fn dispatch() -> Option<ExitCode> {
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| a.into_string())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        match arg.as_str() {
+            "--config" | "--host" | "--key-file" => i += 2,
+            "--json" => i += 1,
+            a if a.starts_with("--config=")
+                || a.starts_with("--host=")
+                || a.starts_with("--key-file=") =>
+            {
+                i += 1;
+            }
+            _ => break,
+        }
+    }
+    let word = args.get(i).filter(|a| !a.starts_with('-'))?;
+    let code = match run(word, &args, i) {
+        Ok(()) => 0,
+        Err(Failure::Usage(m)) => {
+            eprintln!("{m}\nSee `eliezer help`.");
+            2
+        }
+        Err(Failure::Request(m)) => {
+            eprintln!("Error: {m}");
+            1
+        }
+        Err(Failure::Unreachable(m)) => {
+            eprintln!("Error: {m}");
+            3
+        }
+    };
+    Some(ExitCode::from(code))
+}
+
+struct Spec {
+    values: &'static [&'static str],
+    flags: &'static [&'static str],
+    positional: (usize, usize),
+}
+#[derive(Default)]
+struct Parsed {
+    positional: Vec<String>,
+    values: HashMap<String, String>,
+    flags: HashSet<String>,
+}
+impl Parsed {
+    fn flag(&self, name: &str) -> bool {
+        self.flags.contains(name)
+    }
+    fn value(&self, name: &str) -> Option<&str> {
+        self.values.get(name).map(String::as_str)
+    }
+    fn number(&self, name: &str) -> Res<Option<u64>> {
+        self.value(name)
+            .map(|v| match v.parse::<u64>() {
+                Ok(n) if n > 0 => Ok(n),
+                _ => usage_err(format!("{name} needs a positive whole number")),
+            })
+            .transpose()
+    }
+}
+
+const GLOBAL_VALUES: &[&str] = &["--host", "--key-file", "--config"];
+
+fn parse(words: &[String], spec: &Spec) -> Res<Parsed> {
+    let mut out = Parsed::default();
+    let mut iter = words.iter();
+    let mut literal = false;
+    while let Some(word) = iter.next() {
+        if literal || !word.starts_with('-') || word == "-" {
+            out.positional.push(word.clone());
+            continue;
+        }
+        if word == "--" {
+            literal = true;
+            continue;
+        }
+        if word == "-h" || word == "--help" {
+            out.flags.insert("--help".to_owned());
+            continue;
+        }
+        let word = if word == "-c" { "--context" } else { word };
+        let (name, inline) = match word.split_once('=') {
+            Some((n, v)) if n.starts_with("--") => (n, Some(v.to_owned())),
+            _ => (word, None),
+        };
+        if GLOBAL_VALUES.contains(&name) || spec.values.contains(&name) {
+            let value = match inline {
+                Some(v) => v,
+                None => iter
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| Failure::Usage(format!("Value missing after {name}")))?,
+            };
+            if out.values.insert(name.to_owned(), value).is_some() {
+                return usage_err(format!("{name} may only be given once"));
+            }
+        } else if name == "--json" || spec.flags.contains(&name) {
+            if inline.is_some() {
+                return usage_err(format!("{name} takes no value"));
+            }
+            out.flags.insert(name.to_owned());
+        } else if name == "--key" || name == "--api-key" {
+            return usage_err(
+                "The API key is never accepted on the command line; use --key-file, ELIEZER_API_KEY_FILE or ELIEZER_API_KEY",
+            );
+        } else {
+            return usage_err(format!("Unknown option {name}"));
+        }
+    }
+    let (min, max) = spec.positional;
+    if out.positional.len() < min {
+        return usage_err("A model name is missing");
+    }
+    if out.positional.len() > max {
+        return usage_err(format!("Unexpected argument {}", out.positional[max]));
+    }
+    Ok(out)
+}
+
+fn spec_for(command: &str) -> Spec {
+    match command {
+        "load" => Spec {
+            values: &["--context", "--parallel"],
+            flags: &[],
+            positional: (1, 1),
+        },
+        "unload" => Spec {
+            values: &[],
+            flags: &["--all"],
+            positional: (0, 1),
+        },
+        "show" => Spec {
+            values: &[],
+            flags: &[],
+            positional: (1, 1),
+        },
+        "run" => Spec {
+            values: &["--system", "--temperature", "--max-tokens", "--reasoning"],
+            flags: &["--stats"],
+            positional: (1, 2),
+        },
+        _ => Spec {
+            values: &[],
+            flags: &[],
+            positional: (0, 0),
+        },
+    }
+}
+
+fn run(command: &str, args: &[String], at: usize) -> Res<()> {
+    if !COMMANDS.contains(&command) {
+        return usage_err(format!("Unknown command '{command}'"));
+    }
+    // Global options before the command word and everything after it are parsed alike.
+    let mut words: Vec<String> = args[..at].to_vec();
+    words.extend(args[at + 1..].iter().cloned());
+    let parsed = parse(&words, &spec_for(command))?;
+    if command == "help" || parsed.flag("--help") {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let json = parsed.flag("--json");
+    let client = connect(&parsed)?;
+    match command {
+        "ls" => cmd_ls(&client, json),
+        "ps" => cmd_ps(&client, json),
+        "status" => cmd_status(&client, json),
+        "show" => cmd_show(&client, json, &parsed.positional[0]),
+        "load" => cmd_load(&client, json, &parsed),
+        "unload" => cmd_unload(&client, json, &parsed),
+        _ => cmd_run(&client, json, &parsed),
+    }
+}
+
+// ---- connection settings -------------------------------------------------------------------
+
+fn read_config(explicit: Option<&str>) -> Res<Option<Config>> {
+    let path = explicit.map(PathBuf::from).or_else(|| {
+        Some(
+            std::env::var_os("ELIEZER_CONFIG")
+                .map_or_else(|| PathBuf::from("/etc/eliezer/config.toml"), PathBuf::from),
+        )
+    });
+    let Some(path) = path else { return Ok(None) };
+    let read = std::fs::read_to_string(&path).map_err(|_| "Configuration file cannot be read");
+    let config = read.and_then(|text| Config::parse(&text).map_err(|_| "Configuration is invalid"));
+    match (config, explicit.is_some()) {
+        (Ok(config), _) => Ok(Some(config)),
+        (Err(message), true) => usage_err(format!("{message}: {}", path.display())),
+        (Err(_), false) => Ok(None),
+    }
+}
+
+fn first_key(path: &Path) -> Result<String, &'static str> {
+    let text = std::fs::read_to_string(path).map_err(|_| "Key file cannot be read")?;
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_owned)
+        .ok_or("Key file contains no key")
+}
+
+fn connect(parsed: &Parsed) -> Res<Client> {
+    let config = read_config(parsed.value("--config"))?;
+    let host = match parsed.value("--host") {
+        Some(h) => h.to_owned(),
+        None => match std::env::var("ELIEZER_HOST").ok().filter(|h| !h.is_empty()) {
+            Some(h) => h,
+            None => config.as_ref().map_or_else(
+                || DEFAULT_HOST.to_owned(),
+                |c| {
+                    let mut addr = c.server.listen;
+                    if addr.ip().is_unspecified() {
+                        addr.set_ip(if addr.is_ipv6() {
+                            std::net::Ipv6Addr::LOCALHOST.into()
+                        } else {
+                            std::net::Ipv4Addr::LOCALHOST.into()
+                        });
+                    }
+                    format!("http://{addr}")
+                },
+            ),
+        },
+    };
+    let endpoint = Endpoint::parse(&host).map_err(Failure::Usage)?;
+    let explicit_file = parsed.value("--key-file").map(PathBuf::from).or_else(|| {
+        std::env::var_os("ELIEZER_API_KEY_FILE")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    });
+    let key = if let Some(path) = explicit_file {
+        Some(first_key(&path).map_err(|m| Failure::Usage(format!("{m}: {}", path.display())))?)
+    } else if let Some(key) = std::env::var("ELIEZER_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+    {
+        Some(key)
+    } else {
+        // Silent fallback: a key file named by the configuration, if readable.
+        config
+            .and_then(|c| c.server.api_keys_file)
+            .and_then(|p| first_key(&p).ok())
+    };
+    if key
+        .as_deref()
+        .is_some_and(|k| k.chars().any(char::is_control))
+    {
+        return usage_err("The API key contains control characters");
+    }
+    Ok(Client::new(endpoint, key))
+}
+
+// ---- requests ------------------------------------------------------------------------------
+
+fn transport(client: &Client, error: HttpError) -> Failure {
+    match error {
+        HttpError::Unreachable(reason) => Failure::Unreachable(format!(
+            "The Eliezer service is not reachable at {} ({reason}).\n\
+             Start it with `systemctl start eliezer` or `eliezer --config /etc/eliezer/config.toml`,\n\
+             or name the address with --host or ELIEZER_HOST.",
+            client.endpoint.url()
+        )),
+        HttpError::Protocol(m) => {
+            Failure::Request(format!("Connection to the service failed: {m}"))
+        }
+    }
+}
+
+/// Turns an error answer of the service into the message for the user.
+fn api_error(client: &Client, status: u16, body: &str) -> Failure {
+    let parsed: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let error = &parsed["error"];
+    let message = error["message"]
+        .as_str()
+        .or_else(|| error.as_str())
+        .map_or_else(|| format!("HTTP {status}"), str::to_owned);
+    let kind = error["type"]
+        .as_str()
+        .map(|t| format!(", {t}"))
+        .unwrap_or_default();
+    let hint = if status == 401 {
+        if client.has_key() {
+            "\nThe service did not accept the API key. Check --key-file, ELIEZER_API_KEY_FILE or ELIEZER_API_KEY."
+        } else {
+            "\nThe service requires an API key. Name its file with --key-file or ELIEZER_API_KEY_FILE, or set ELIEZER_API_KEY."
+        }
+    } else {
+        ""
+    };
+    Failure::Request(format!("{message} [HTTP {status}{kind}]{hint}"))
+}
+
+fn call(
+    client: &Client,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timeout: Duration,
+) -> Res<Value> {
+    let payload = body.map(Value::to_string);
+    let response = client
+        .send(method, path, payload.as_deref(), timeout)
+        .map_err(|e| transport(client, e))?;
+    let status = response.status;
+    let text = response
+        .text()
+        .map_err(|e| Failure::Request(format!("Reading the answer failed: {e}")))?;
+    if !(200..300).contains(&status) {
+        return Err(api_error(client, status, &text));
+    }
+    serde_json::from_str(&text)
+        .map_err(|_| Failure::Request("The answer is not valid JSON".to_owned()))
+}
+
+fn print_json(value: &Value) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).unwrap_or_default()
+    );
+}
+
+// ---- commands ------------------------------------------------------------------------------
+
+fn cmd_ls(client: &Client, json: bool) -> Res<()> {
+    let models = call(client, "GET", "/api/v1/models", None, SHORT)?;
+    if json {
+        print_json(&models);
+        return Ok(());
+    }
+    let status = call(client, "GET", "/api/v1/status", None, SHORT).ok();
+    print!("{}", format::ls_text(&models, status.as_ref()));
+    Ok(())
+}
+
+fn cmd_ps(client: &Client, json: bool) -> Res<()> {
+    let status = call(client, "GET", "/api/v1/status", None, SHORT)?;
+    if json {
+        print_json(&status);
+        return Ok(());
+    }
+    let models = call(client, "GET", "/api/v1/models", None, SHORT)?;
+    print!("{}", format::ps_text(&models, &status));
+    Ok(())
+}
+
+fn cmd_status(client: &Client, json: bool) -> Res<()> {
+    let health = client
+        .send("GET", "/healthz", None, SHORT)
+        .map_err(|e| transport(client, e))?;
+    let ok = health.status == 200;
+    let health = health.text().unwrap_or_default().trim().to_owned();
+    if !ok {
+        return Err(Failure::Request(format!(
+            "The service answers, but its health check failed: {health}"
+        )));
+    }
+    let status = call(client, "GET", "/api/v1/status", None, SHORT)?;
+    if json {
+        print_json(&json!({"url": client.endpoint.url(), "health": health, "status": status}));
+    } else {
+        print!(
+            "{}",
+            format::status_text(&client.endpoint.url(), &health, &status)
+        );
+    }
+    Ok(())
+}
+
+fn cmd_show(client: &Client, json: bool, key: &str) -> Res<()> {
+    let models = call(client, "GET", "/api/v1/models", None, SHORT)?;
+    let Some(model) = models["models"]
+        .as_array()
+        .and_then(|l| l.iter().find(|m| m["key"] == key))
+    else {
+        return Err(Failure::Request(format!(
+            "Model '{key}' is not configured. `eliezer ls` lists the configured models."
+        )));
+    };
+    let status = call(client, "GET", "/api/v1/status", None, SHORT).ok();
+    let entry = status
+        .as_ref()
+        .and_then(|s| s["models"].as_array())
+        .and_then(|l| l.iter().find(|m| m["key"] == key));
+    if json {
+        print_json(&json!({"model": model, "status": entry}));
+    } else {
+        print!(
+            "{}",
+            format::show_text(model, entry, &client.endpoint.url())
+        );
+    }
+    Ok(())
+}
+
+fn cmd_load(client: &Client, json: bool, parsed: &Parsed) -> Res<()> {
+    let key = &parsed.positional[0];
+    let mut body = json!({"model": key, "echo_load_config": true});
+    if let Some(n) = parsed.number("--context")? {
+        body["context_length"] = json!(n);
+    }
+    if let Some(n) = parsed.number("--parallel")? {
+        body["parallel"] = json!(n);
+    }
+    if !json {
+        eprintln!("Loading {key} ...");
+    }
+    let answer = call(client, "POST", "/api/v1/models/load", Some(&body), LONG)?;
+    if json {
+        print_json(&answer);
+        return Ok(());
+    }
+    let seconds = answer["load_time_seconds"].as_f64().unwrap_or(f64::NAN);
+    let config = &answer["load_config"];
+    let mut details = Vec::new();
+    if let Some(c) = config["context_length"].as_u64() {
+        details.push(format!("context {c}"));
+    }
+    if let Some(p) = config["parallel"].as_u64() {
+        details.push(format!("parallel {p}"));
+    }
+    let details = if details.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", details.join(", "))
+    };
+    println!(
+        "Model loaded successfully in {}: {}{details}",
+        format::duration_secs(seconds),
+        answer["instance_id"].as_str().unwrap_or(key)
+    );
+    Ok(())
+}
+
+fn cmd_unload(client: &Client, json: bool, parsed: &Parsed) -> Res<()> {
+    let all = parsed.flag("--all");
+    if all && !parsed.positional.is_empty() {
+        return usage_err("Give either a model or --all, not both");
+    }
+    let targets: Vec<String> = if let Some(key) = parsed.positional.first() {
+        vec![key.clone()]
+    } else {
+        let status = call(client, "GET", "/api/v1/status", None, SHORT)?;
+        let loaded: Vec<String> = status["models"]
+            .as_array()
+            .map(|l| {
+                l.iter()
+                    .filter(|m| matches!(m["state"].as_str(), Some("loaded" | "loading")))
+                    .filter_map(|m| m["key"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !all && loaded.len() > 1 {
+            return usage_err(format!(
+                "Several models are loaded ({}); name one or use --all",
+                loaded.join(", ")
+            ));
+        }
+        loaded
+    };
+    if targets.is_empty() {
+        if json {
+            print_json(&json!({"unloaded": []}));
+        } else {
+            println!("No models are currently loaded.");
+        }
+        return Ok(());
+    }
+    let (mut done, mut first_error) = (Vec::new(), None);
+    for key in &targets {
+        match call(
+            client,
+            "POST",
+            "/api/v1/models/unload",
+            Some(&json!({"instance_id": key})),
+            LONG,
+        ) {
+            Ok(_) => {
+                if !json {
+                    println!("Model unloaded: {key}");
+                }
+                done.push(key.clone());
+            }
+            Err(Failure::Request(m)) if targets.len() > 1 => {
+                eprintln!("Error: {key}: {m}");
+                first_error.get_or_insert(m);
+            }
+            Err(other) => return Err(other),
+        }
+    }
+    if json {
+        print_json(&json!({"unloaded": done}));
+    }
+    match first_error {
+        Some(m) => Err(Failure::Request(format!(
+            "Not all models could be unloaded ({m})"
+        ))),
+        None => Ok(()),
+    }
+}
+
+// ---- run (chat) ----------------------------------------------------------------------------
+
+struct ChatOptions {
+    system: Option<String>,
+    temperature: Option<f64>,
+    max_tokens: Option<u64>,
+    reasoning: Option<String>,
+    stats: bool,
+    json: bool,
+}
+
+/// How reasoning text is made visible: dim on a terminal, a prefix without colors, stderr when piped.
+struct Styler {
+    tty: bool,
+    color: bool,
+}
+impl Styler {
+    fn begin(&self) -> &'static str {
+        match (self.tty, self.color) {
+            (true, true) => "\x1b[2m",
+            (true, false) => "[thinking] ",
+            _ => "",
+        }
+    }
+    fn end(&self) -> &'static str {
+        match (self.tty, self.color) {
+            (true, true) => "\x1b[0m\n\n",
+            _ => "\n\n",
+        }
+    }
+}
+
+/// One streamed answer: returns the answer text (without reasoning).
+fn stream_chat(client: &Client, body: &Value, options: &ChatOptions) -> Res<String> {
+    let payload = body.to_string();
+    let response = client
+        .send("POST", "/v1/chat/completions", Some(&payload), LONG)
+        .map_err(|e| transport(client, e))?;
+    if response.status != 200 {
+        let status = response.status;
+        let text = response.text().unwrap_or_default();
+        return Err(api_error(client, status, &text));
+    }
+    let stdout_tty = std::io::stdout().is_terminal();
+    let styler = Styler {
+        tty: stdout_tty,
+        color: std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+    };
+    let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
+    let (mut content, mut thinking) = (String::new(), false);
+    let (mut usage, mut stats) = (None, None);
+    for line in response.lines() {
+        let line =
+            line.map_err(|e| Failure::Request(format!("The answer was interrupted: {e}")))?;
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            continue; // comments (": ping"), event names and blank lines
+        };
+        if data == "[DONE]" {
+            break;
+        }
+        if options.json {
+            println!("{data}");
+            continue;
+        }
+        let Ok(frame) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        if frame.get("error").is_some() {
+            let message = frame["error"]["message"]
+                .as_str()
+                .unwrap_or("unknown error");
+            return Err(Failure::Request(format!(
+                "The service reported an error: {message}"
+            )));
+        }
+        if !frame["usage"].is_null() {
+            usage = Some(frame["usage"].clone());
+        }
+        if !frame["eliezer"].is_null() {
+            stats = Some(frame["eliezer"].clone());
+        }
+        let delta = &frame["choices"][0]["delta"];
+        if let Some(text) = delta["reasoning_content"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+        {
+            if stdout_tty {
+                if !thinking {
+                    let _ = write!(out, "{}", styler.begin());
+                }
+                let _ = write!(out, "{text}");
+                let _ = out.flush();
+            } else {
+                let _ = write!(err, "{text}");
+                let _ = err.flush();
+            }
+            thinking = true;
+        }
+        if let Some(text) = delta["content"].as_str().filter(|t| !t.is_empty()) {
+            if thinking {
+                let _ = write!(
+                    if stdout_tty {
+                        &mut out as &mut dyn Write
+                    } else {
+                        &mut err
+                    },
+                    "{}",
+                    styler.end()
+                );
+                thinking = false;
+            }
+            let _ = write!(out, "{text}");
+            let _ = out.flush();
+            content.push_str(text);
+        }
+    }
+    if options.json {
+        return Ok(content);
+    }
+    if thinking {
+        let _ = write!(
+            if stdout_tty {
+                &mut out as &mut dyn Write
+            } else {
+                &mut err
+            },
+            "{}",
+            styler.end()
+        );
+    }
+    if !content.ends_with('\n') {
+        let _ = writeln!(out);
+    }
+    if options.stats {
+        eprint!("{}", format::stats_text(usage.as_ref(), stats.as_ref()));
+    }
+    Ok(content)
+}
+
+fn cmd_run(client: &Client, json: bool, parsed: &Parsed) -> Res<()> {
+    let model = &parsed.positional[0];
+    let reasoning = parsed.value("--reasoning").map(str::to_owned);
+    if let Some(level) = &reasoning
+        && !["none", "low", "medium", "high"].contains(&level.as_str())
+    {
+        return usage_err("--reasoning must be none, low, medium or high");
+    }
+    let temperature = parsed
+        .value("--temperature")
+        .map(|t| match t.parse::<f64>() {
+            Ok(v) if v.is_finite() && v >= 0.0 => Ok(v),
+            _ => usage_err("--temperature needs a number of at least 0"),
+        })
+        .transpose()?;
+    let options = ChatOptions {
+        system: parsed.value("--system").map(str::to_owned),
+        temperature,
+        max_tokens: parsed.number("--max-tokens")?,
+        reasoning,
+        stats: parsed.flag("--stats"),
+        json,
+    };
+    let mut messages = Vec::new();
+    if let Some(system) = &options.system {
+        messages.push(json!({"role": "system", "content": system}));
+    }
+    let request = |messages: &[Value]| {
+        let mut body = json!({
+            "model": model,
+            "messages": messages,
+            "stream": true,
+            "stream_options": {"include_usage": true},
+        });
+        if let Some(t) = options.temperature {
+            body["temperature"] = json!(t);
+        }
+        if let Some(n) = options.max_tokens {
+            body["max_tokens"] = json!(n);
+        }
+        if let Some(r) = &options.reasoning {
+            body["reasoning_effort"] = json!(r);
+        }
+        body
+    };
+    let stdin_tty = std::io::stdin().is_terminal();
+    let prompt = match parsed.positional.get(1) {
+        Some(p) => Some(p.clone()),
+        None if !stdin_tty => {
+            let mut text = String::new();
+            std::io::stdin()
+                .lock()
+                .take(16 << 20)
+                .read_to_string(&mut text)
+                .map_err(|_| Failure::Usage("The prompt cannot be read from stdin".to_owned()))?;
+            let text = text.trim_end().to_owned();
+            if text.is_empty() {
+                return usage_err("No prompt: give PROMPT or pipe text into stdin");
+            }
+            Some(text)
+        }
+        None => None,
+    };
+    if let Some(prompt) = prompt {
+        messages.push(json!({"role": "user", "content": prompt}));
+        stream_chat(client, &request(&messages), &options)?;
+        return Ok(());
+    }
+    if json {
+        return usage_err("--json needs a PROMPT or piped input");
+    }
+    eprintln!("Chatting with {model}. An empty line or Ctrl-D ends the conversation.");
+    let stdin = std::io::stdin();
+    loop {
+        print!(">>> ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+            println!();
+            return Ok(());
+        }
+        messages.push(json!({"role": "user", "content": line.trim_end()}));
+        match stream_chat(client, &request(&messages), &options) {
+            Ok(answer) => messages.push(json!({"role": "assistant", "content": answer})),
+            Err(failure) => {
+                // The failed turn is dropped so the history stays consistent.
+                messages.pop();
+                return Err(failure);
+            }
+        }
+        println!();
+    }
+}

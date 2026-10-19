@@ -111,8 +111,8 @@ models_dir = "{model.parent}"
 cache_dir = "{model.parent}/hf"
 [gpu]
 vendor = "auto"
-vram_budget_gb = 20.0
-reserve_gb = 1.0
+vram_budget_gb = 24.0
+reserve_gb = 0.5
 [backend.llamacpp]
 enabled = true
 [[model]]
@@ -123,7 +123,7 @@ kind = "llm"
 max_context = {args.context}
 default_context = {args.context}
 parallel = {args.parallel}
-vram_gb = {max(1.0, model.stat().st_size / 1e9 * 1.3):.1f}
+vram_gb = {model.stat().st_size / 1e9 + 1.5:.1f}
 """
         )
         log = root / "service.log"
@@ -157,6 +157,8 @@ vram_gb = {max(1.0, model.stat().st_size / 1e9 * 1.3):.1f}
 
 
 def run(port, args):
+    _, before = call(port, "/api/v1/status")
+    baseline = before["gpu"]["used_bytes"] if before["gpu"]["probe"] != "none" else None
     status, models = call(port, "/api/v1/models")
     check("model is listed, not loaded", status == 200 and models["models"][0]["loaded_instances"] == [])
 
@@ -168,7 +170,7 @@ def run(port, args):
     cfg = (models["models"][0]["loaded_instances"] or [{}])[0].get("config", {})
     check("loaded config is reported", cfg == {"context_length": args.context, "parallel": args.parallel}, str(cfg))
 
-    status, reply, seconds = chat(port, "Reply with exactly one word: pong", max_tokens=16)
+    status, reply, seconds = chat(port, "Reply with exactly one word: pong", max_tokens=400)
     text = reply["choices"][0]["message"]["content"] if status == 200 else ""
     check("chat answers", status == 200 and text.strip() != "", repr(text[:60]))
     if status == 200:
@@ -192,7 +194,7 @@ def run(port, args):
     check("first SSE frame arrives before the end", first is not None and first < total, f"{first:.2f} s of {total:.2f} s")
     check("final usage frame", bool(frames) and "usage" in frames[-1] and frames[-1]["usage"]["completion_tokens"] > 0)
 
-    status, stopped, _ = chat(port, "Count from 1 to 9, separated by commas.", max_tokens=64, stop=["5"])
+    status, stopped, _ = chat(port, "Count from 1 to 9, separated by commas.", max_tokens=400, stop=["5"])
     content = stopped["choices"][0]["message"]["content"] if status == 200 else "5"
     check("stop sequence cuts the answer", status == 200 and "5" not in content and "4" in content, repr(content))
 
@@ -253,7 +255,22 @@ def run(port, args):
     status, _ = call(port, "/api/v1/models/unload", {"instance_id": "m"})
     check("unload", status == 200)
     _, state = call(port, "/api/v1/status")
-    check("status shows unloaded", state["models"][0]["state"] == "unloaded", f"probe={state['gpu']['probe']}, used={state['gpu']['used_bytes']}")
+    check("status shows unloaded", state["models"][0]["state"] == "unloaded", f"probe={state['gpu']['probe']}")
+    if baseline is not None:
+        # Unloading must give the GPU memory back inside the running service (spec: unload_leak).
+        started = time.monotonic()
+        used = state["gpu"]["used_bytes"]
+        # A constant 0.2-0.35 GB stays: the ROCm runtime context of the process. It does not grow
+        # with repeated loads (see tests/m4/vram-cycles.py); model memory must be gone.
+        while used > baseline + 512_000_000 and time.monotonic() - started < 10:
+            time.sleep(0.2)
+            used = call(port, "/api/v1/status")[1]["gpu"]["used_bytes"]
+        waited = time.monotonic() - started
+        check(
+            "unload returns the model memory (within 512 MB of the baseline, 10 s)",
+            used <= baseline + 512_000_000,
+            f"baseline {baseline / 1e9:.2f} GB, now {used / 1e9:.2f} GB, waited {waited:.1f} s",
+        )
 
 
 if __name__ == "__main__":

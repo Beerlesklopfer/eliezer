@@ -28,13 +28,12 @@ axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# JSON bodies of the command line client (already part of the dependency tree).
+serde_json.workspace = true
 
 [[test]]
 name = "cli"
 path = "../../tests/m2/cli.rs"
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [[test]]
 name = "reload"
@@ -48,7 +47,7 @@ license-file = ["../../LICENSE", "0"]
 changelog = "../../debian/changelog"
 section = "utils"
 priority = "optional"
-depends = "$auto, adduser"
+depends = "$auto, adduser, libstdc++6"
 extended-description = """\
 Eliezer replaces LM Studio as the model server of MultiGPT. It loads chat, vision, \
 embedding and image models on demand, unloads them when idle and lets them take turns \
@@ -71,3 +70,24 @@ assets = [
 [[test]]
 name = "import_cli"
 path = "../../tests/m4/import_cli.rs"
+
+# One package per GPU API: `cargo deb --variant rocm` (see scripts/build-deb.sh). The plain build
+# has no model runtime.
+# AMD's ROCm libraries come from AMD's own installer (/opt/rocm, found through an rpath), not from
+# Debian, so dpkg-shlibdeps cannot resolve them and the system libraries are listed by hand.
+[package.metadata.deb.variants.rocm]
+features = ["rocm"]
+depends = "adduser, libc6 (>= 2.39), libgcc-s1, libstdc++6, libelf1t64, libnuma1, zlib1g, libzstd1"
+
+[package.metadata.deb.variants.vulkan]
+features = ["vulkan"]
+
+[package.metadata.deb.variants.cuda]
+features = ["cuda"]
+
+[package.metadata.deb.variants.cpu]
+features = ["cpu"]
+
+[[test]]
+name = "cli_client"
+path = "../../tests/m4/cli_client.rs"

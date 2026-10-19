@@ -1,5 +1,8 @@
 eliezer (0.3.0) UNRELEASED; urgency=low
 
+  * Add a command line client to the eliezer binary (ls, ps, load, unload, status, run, show,
+    help) in the style of ollama and lms; it talks to the running service over HTTP and uses
+    --host, --key-file, --json and exit codes 0/1/2/3.
   * Calculate the VRAM requirement per architecture type and schedule loading, eviction,
     pinning, batching and idle handling via a state machine with a clock trait.
   * Measure GPU usage uniformly via a trait (NVML, sysfs, nvidia-smi,

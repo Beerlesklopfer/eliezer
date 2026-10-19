@@ -232,6 +232,29 @@ The minimum requirement is **8 GB VRAM**. The concrete model selection, quantiza
 context length must fit the available budget; the 24 GB examples are not a
 minimum requirement. The model search also takes the 8 GB target class into account.
 
+### 5.4 Command line client
+
+The `eliezer` binary is also a client of the running service (synchronous HTTP/1.1 over
+`std::net`, dispatched before the async runtime starts; the flags of the service keep working).
+
+| Command | API | Output |
+|---|---|---|
+| `ls` | `GET /api/v1/models`, `GET /api/v1/status` | key, type, size, max context, state |
+| `ps` | `GET /api/v1/status`, `GET /api/v1/models` | loaded models: VRAM, context, parallel, idle, in-flight, queued |
+| `status` | `GET /healthz`, `GET /api/v1/status` | reachability, health, GPU memory with measurement method, models, queue |
+| `show MODEL` | `GET /api/v1/models`, `GET /api/v1/status` | details of one model and the endpoints serving it |
+| `load MODEL [--context N] [--parallel N]` | `POST /api/v1/models/load` | load time and applied configuration |
+| `unload [MODEL \| --all]` | `POST /api/v1/models/unload` | unloaded models; without argument the only loaded model |
+| `run MODEL [PROMPT]` | `POST /v1/chat/completions` (SSE) | tokens as they arrive; reasoning dimmed (stderr when piped); `--stats` |
+| `help` | – | overview |
+
+Global options: `--host URL` (else `ELIEZER_HOST`, else `server.listen` of the configuration with
+`0.0.0.0` read as `127.0.0.1`, else `http://127.0.0.1:1234`), `--key-file PATH` (else
+`ELIEZER_API_KEY_FILE`, `ELIEZER_API_KEY`, else the first key of `server.api_keys_file`), `--json`,
+`--config PATH`. The key is never a command-line argument and never printed. Exit codes: 0 ok,
+1 request failed or server error (the service's message is printed), 2 usage error, 3 service not
+reachable. Sizes are decimal GB with one decimal (MB below 0.1 GB).
+
 ## 6. VRAM calculation
 
 All sizes in bytes, 1 GB = 10⁹ bytes. Usage of an instance (deliberately conservative):

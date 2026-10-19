@@ -272,6 +272,8 @@ struct Sequence {
     /// Positions available to this sequence.
     limit: usize,
     finish: Option<&'static str>,
+    /// A stop sequence ended the answer; whatever the parser still holds is dropped.
+    stop_matched: bool,
     /// The client went away or the stream failed: no final chunk is sent.
     abandoned: bool,
 }
@@ -630,6 +632,7 @@ fn admit(
         max_new,
         limit,
         finish: None,
+        stop_matched: false,
         abandoned: false,
     };
     slots[index].seq = Some(sequence);
@@ -646,6 +649,7 @@ fn accept(model: &LlamaModel, seq: &mut Sequence, token: LlamaToken) {
     seq.generated += 1;
     let piece = vocab.token_to_piece(token, true, None);
     if !push_text(seq, &piece) {
+        seq.stop_matched = true;
         seq.finish = Some("stop");
         return;
     }
@@ -669,17 +673,74 @@ fn send(seq: &mut Sequence, chunk: Chunk) {
     }
 }
 
-fn emit(seq: &mut Sequence, text: &str) {
-    if text.is_empty() {
-        return;
+/// Sends visible text unless a stop sequence ends it. Stop sequences apply to the visible
+/// answer only (as in the OpenAI API): thinking and tool calls pass through untouched. A tail
+/// that could still grow into a stop sequence is held back. Returns false once one matched.
+fn visible(seq: &mut Sequence, text: &str) -> bool {
+    let mut text = format!("{}{text}", std::mem::take(&mut seq.held));
+    if seq.stops.is_empty() {
+        if !text.is_empty() {
+            send(seq, Chunk::Text(text));
+        }
+        return true;
     }
-    for chunk in seq.parser.push(text) {
-        send(seq, chunk);
+    let hit = seq
+        .stops
+        .iter()
+        .filter_map(|stop| text.find(stop.as_str()))
+        .min();
+    if let Some(at) = hit {
+        text.truncate(at);
+        if !text.is_empty() {
+            send(seq, Chunk::Text(text));
+        }
+        return false;
+    }
+    let mut keep = 0;
+    for stop in &seq.stops {
+        for (start, _) in text.char_indices() {
+            let tail = &text[start..];
+            if tail.len() < stop.len() && stop.starts_with(tail) {
+                keep = keep.max(tail.len());
+                break;
+            }
+        }
+    }
+    seq.held = text.split_off(text.len() - keep);
+    if !text.is_empty() {
+        send(seq, Chunk::Text(text));
+    }
+    true
+}
+
+/// Text held back for a stop sequence that never completed is real output.
+fn flush_held(seq: &mut Sequence) {
+    let held = std::mem::take(&mut seq.held);
+    if !held.is_empty() {
+        send(seq, Chunk::Text(held));
     }
 }
 
-/// Turns bytes into text (holding back an incomplete character), applies stop sequences and
-/// feeds the rest to the output parser. Returns false once a stop sequence matched.
+/// Routes parsed chunks to the client. Returns false once a stop sequence matched.
+fn dispatch(seq: &mut Sequence, chunks: Vec<Chunk>) -> bool {
+    for chunk in chunks {
+        match chunk {
+            Chunk::Text(text) => {
+                if !visible(seq, &text) {
+                    return false;
+                }
+            }
+            other => {
+                flush_held(seq);
+                send(seq, other);
+            }
+        }
+    }
+    true
+}
+
+/// Turns bytes into text (holding back an incomplete character), parses it into text, thinking
+/// and tool calls and sends the result. Returns false once a stop sequence matched.
 fn push_text(seq: &mut Sequence, bytes: &[u8]) -> bool {
     seq.pending_bytes.extend_from_slice(bytes);
     let decoded = match std::str::from_utf8(&seq.pending_bytes) {
@@ -700,53 +761,24 @@ fn push_text(seq: &mut Sequence, bytes: &[u8]) -> bool {
             text
         }
     };
-    let mut text = std::mem::take(&mut seq.held);
-    text.push_str(&decoded);
-    if seq.stops.is_empty() {
-        emit(seq, &text);
+    if decoded.is_empty() {
         return true;
     }
-    let hit = seq
-        .stops
-        .iter()
-        .filter_map(|stop| text.find(stop.as_str()))
-        .min();
-    if let Some(at) = hit {
-        let head = text[..at].to_owned();
-        emit(seq, &head);
-        return false;
-    }
-    // Hold back the longest tail that could still grow into a stop sequence.
-    let mut keep = 0;
-    for stop in &seq.stops {
-        for (start, _) in text.char_indices() {
-            let tail = &text[start..];
-            if tail.len() < stop.len() && stop.starts_with(tail) {
-                keep = keep.max(tail.len());
-                break;
-            }
-        }
-    }
-    let cut = text.len() - keep;
-    let (ready, held) = text.split_at(cut);
-    let (ready, held) = (ready.to_owned(), held.to_owned());
-    emit(seq, &ready);
-    seq.held = held;
-    true
+    let chunks = seq.parser.push(&decoded);
+    dispatch(seq, chunks)
 }
 
-/// Flushes held text and the parser, then sends the final chunk.
+/// Flushes the parser and held text, then sends the final chunk.
 fn finish(mut seq: Sequence) {
     if seq.abandoned {
         return;
     }
-    // Text held back for a stop sequence that never completed is real output; after a match
-    // the held text is already empty.
-    let held = std::mem::take(&mut seq.held);
-    emit(&mut seq, &held);
-    for chunk in seq.parser.finish() {
-        send(&mut seq, chunk);
+    // After a stop-sequence match the rest of the answer is dropped on purpose.
+    let chunks = seq.parser.finish();
+    if !seq.stop_matched {
+        dispatch(&mut seq, chunks);
     }
+    flush_held(&mut seq);
     let reason = match seq.finish {
         Some("stop") if seq.parser.saw_tool_call() => "tool_calls",
         Some(reason) => reason,
