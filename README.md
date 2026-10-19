@@ -1,6 +1,6 @@
 # Eliezer
 
-**Ersatz für LM Studio** im Familienbetrieb: Verwalter für lokale KI-Modelle auf einem Rechner mit knapper GPU. Benannt nach Eliezer, dem Knecht
+**Ersatz für LM Studio** im Familienbetrieb (NVIDIA und AMD): Verwalter für lokale KI-Modelle auf einem Rechner mit knapper GPU. Benannt nach Eliezer, dem Knecht
 Abrahams, der das Haus verwaltet und Aufträge ausführt.
 
 Eliezer teilt den Grafikspeicher zu: Chat-, Vision- und Bildmodelle laden bei Bedarf, werden im

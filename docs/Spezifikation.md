@@ -5,7 +5,7 @@ MultiGPT zu kennen. Alles, was MultiGPT von Eliezer erwartet, steht in Abschnitt
 
 ## 1. Zweck
 
-Eliezer läuft als Dienst auf einem Rechner mit **einer** GPU (Ziel: 24 GB VRAM, Linux, NVIDIA/CUDA) und
+Eliezer läuft als Dienst auf einem Rechner mit **einer** GPU (Ziel: 24 GB VRAM, Linux, **NVIDIA (CUDA) oder AMD (ROCm/HIP, ersatzweise Vulkan)**) und
 bedient lokale Modelle:
 
 - Chat- und Vision-Modelle (Sprachmodelle) über mistral.rs,
@@ -65,10 +65,12 @@ api_keys_file = "/etc/eliezer/keys" # optional; eine Zeile je Schlüssel, 0600. 
 request_timeout_secs = 600
 
 [gpu]
+vendor = "nvidia"                   # "nvidia" | "amd" | "none" (nur Buchführung, ohne Messung)
 index = 0
 vram_budget_gb = 24.0               # Gesamtspeicher der Karte (Dezimal-GB, 10^9 Byte)
 reserve_gb = 2.0                    # für Anzeige/System
-measure = "nvml"                    # "nvml" | "nvidia-smi" | "none" (nur Buchführung)
+measure = "nvml"                    # nvidia: "nvml" | "nvidia-smi"; amd: "sysfs" | "rocm-smi"; sonst "none"
+# amd + sysfs: liest /sys/class/drm/card<index>/device/mem_info_vram_total und mem_info_vram_used (Byte, amdgpu-Kerneltreiber)
 
 [scheduler]
 idle_unload_secs = 1800             # Leerlauf-Entladen (30 min)
@@ -85,6 +87,10 @@ downloads = "on_request"            # "on_request" | "never"
 program = "/usr/local/bin/mistralrs"   # Aufruf wird in M1 geprüft (docs/Laufzeiten.md)
 mode = "process"                       # "process" (ein Prozess je Modell); Bibliothek ist später möglich
 port_range = [24500, 24599]            # nur 127.0.0.1
+
+[backend.llamacpp]                     # optional: Ersatz-Laufzeit für Sprachmodelle, falls mistral.rs die GPU des Rechners nicht unterstützt
+program = "/usr/local/bin/llama-server"   # Router-Modus oder ein Prozess je Modell; wird in M1 geprüft
+port_range = [24550, 24559]
 
 [backend.sdcpp]
 program = "/usr/local/bin/sd-server"
@@ -262,12 +268,15 @@ trait Backend: Send + Sync {
   Programm festgestellt und in `docs/Laufzeiten.md` festgehalten. Eliezer reicht Chat-Anfragen an den
   lokalen Port weiter. Denkoptionen (`reasoning_effort`) setzt Eliezer, soweit das Backend sie nicht selbst
   versteht, in die Chatvorlage bzw. in Parameter um (M4).
+- **llamacpp (optional, vor allem für AMD):** Kindprozess `llama-server` je Modell (GGUF), Port aus `port_range`.
+  Nur zu bauen, wenn M1 zeigt, dass mistral.rs auf der vorhandenen GPU nicht läuft (Herstellerunterstützung
+  von mistral.rs ist **nicht geprüft**: CUDA ist belegt, ROCm/Vulkan nicht). Gleiche Schnittstelle nach außen.
 - **sdcpp:** Kindprozess für ein Bildmodell; Anfragen `/v1/images/generations` werden in dessen Schnittstelle
   übersetzt (in M1 am Programm festgestellt). Das GGUF enthält nur den Transformer: Textencoder und VAE
   kommen aus `extra`. Exklusiv (Abschnitt 7, Punkt 4).
 - **fake:** Prüfstand: konfigurierbare Ladezeit, VRAM-Bedarf, Antworten, Abstürze; Grundlage aller Tests.
 - Umgebung der Kindprozesse: nur `HF_HOME`, `HF_TOKEN` (aus Datei gelesen, nicht aus der Eltern-Umgebung
-  durchgereicht), `PATH`, `CUDA_VISIBLE_DEVICES`. Nie Tokens in Argumenten.
+  durchgereicht), `PATH` und die Gerätewahl des Herstellers (`CUDA_VISIBLE_DEVICES` bzw. `HIP_VISIBLE_DEVICES`/`ROCR_VISIBLE_DEVICES`). Nie Tokens in Argumenten.
 
 ## 9. Modellbezug (Hugging Face)
 
@@ -300,6 +309,9 @@ trait Backend: Send + Sync {
   SSE wird ohne Puffern weitergegeben (Zeitstempel der Teile); `reasoning_effort` ungültig → 400.
 - **Vertragstest gegen MultiGPT:** `tests/contract/lmstudio_models.json` enthält eine echte Antwort von LM Studio 0.4
   und eine von Eliezer; beide müssen durch dieselben Prüfungen gehen (Felder und Typen aus 5.2).
+- **GPU-Messung (`eliezer-gpu`):** NVIDIA-Anbindung gegen den Prüfstand; AMD-Anbindung gegen ein **nachgebautes
+  sysfs-Verzeichnis** in einem temporären Ordner (Dateien `mem_info_vram_total`/`mem_info_vram_used` mit Byte-Zahlen),
+  ohne echte Karte.
 - **GPU-Tests (`#[ignore]`):** echte Messung (Abschnitt 6, Gegenprobe der Rechnung), Wechsel Chat ↔ Bild.
 
 ## 12. Abnahme (gesamt)
