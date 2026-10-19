@@ -37,7 +37,7 @@ eliezer/
 ├─ Cargo.toml                 (workspace)
 ├─ crates/
 │  ├─ eliezer-core/           Typen, Konfiguration, VRAM-Rechnung, Zustandsautomat, Planer (ohne I/O)
-│  ├─ eliezer-backend/        Backend-Trait, mistral.rs-Steuerung, sd.cpp-Steuerung, fake-backend
+│  ├─ eliezer-backend/        Backend-Trait; mistral.rs eingebettet (Feature `mistralrs`), llama.cpp-/sd.cpp-Prozesssteuerung, fake-backend
 │  ├─ eliezer-api/            axum-Router: /v1/*, /api/v1/*, Authentifizierung, Fehlerformat
 │  ├─ eliezer-gpu/            VRAM-Messung (NVML oder nvidia-smi), Trait mit Prüfstand
 │  └─ eliezer/                Programm: Argumente, Konfiguration laden, Dienst starten
@@ -52,7 +52,7 @@ Prinzip: `eliezer-core` enthält die gesamte Entscheidungslogik als **reine Funk
 
 Laufzeitmodell: ein Prozess `eliezer`, darin ein Verwalter-Task (`Supervisor`), der **allein**
 Zustand ändert (Nachrichten über `tokio::sync::mpsc`). HTTP-Handler schicken Befehle und warten auf
-Antworten (`oneshot`). Je Backend-Instanz ein Kindprozess.
+Antworten (`oneshot`). Je Instanz: bei `mistralrs` ein Handle im Prozess, bei `llamacpp` und `sdcpp` ein Kindprozess.
 
 ## 4. Konfiguration
 
@@ -83,10 +83,9 @@ cache_dir = "/var/lib/eliezer/hf"      # wird als HF_HOME an Backends gegeben
 cache_limit_gb = 200.0
 downloads = "on_request"            # "on_request" | "never"
 
-[backend.mistralrs]
-program = "/usr/local/bin/mistralrs"   # Aufruf wird in M1 geprüft (docs/Laufzeiten.md)
-mode = "process"                       # "process" (ein Prozess je Modell); Bibliothek ist später möglich
-port_range = [24500, 24599]            # nur 127.0.0.1
+[backend.mistralrs]                    # eingebettet als Rust-Crate, kein Kindprozess und kein eigener Port
+enabled = true                         # ohne Cargo-Feature `mistralrs` zur Bauzeit nicht verfügbar (siehe Abschnitt 8)
+max_loaded = 4                         # Obergrenze gleichzeitig geladener Modelle dieses Backends (zusätzlich zum VRAM-Buch)
 
 [backend.llamacpp]                     # optional: Ersatz-Laufzeit für Sprachmodelle, falls mistral.rs die GPU des Rechners nicht unterstützt
 program = "/usr/local/bin/llama-server"   # Router-Modus oder ein Prozess je Modell; wird in M1 geprüft
@@ -328,11 +327,27 @@ trait Backend: Send + Sync {
 }
 ```
 
-- **mistralrs:** Kindprozess `mistralrs` je Modell, Port aus `port_range`, nur an 127.0.0.1. Der genaue
-  Aufruf (Modellart, Quantisierung, Kontext, Parallelität, Chatvorlage) wird in **M1** am installierten
-  Programm festgestellt und in `docs/Laufzeiten.md` festgehalten. Eliezer reicht Chat-Anfragen an den
-  lokalen Port weiter. Denkoptionen (`reasoning_effort`) setzt Eliezer, soweit das Backend sie nicht selbst
-  versteht, in die Chatvorlage bzw. in Parameter um (M4).
+- **mistralrs (eingebettet als Crate):** Das Crate `mistralrs` (Rust-SDK von mistral.rs) wird **in den Prozess eingebunden**,
+  hinter dem Cargo-Feature `mistralrs` (Standard an) in `eliezer-backend`; Version fest im `Cargo.lock`, Abhängigkeit im
+  Workspace mit Begründung in `docs/Abhaengigkeiten.md`. Es gibt keinen Kindprozess, keinen Port und keine HTTP-Strecke zum Modell.
+  - **Laden:** `LoadSpec` → Modell-Builder des Crates (Text oder Vision je `kind`/`vision`, Quantisierung, Kontext,
+    Parallelität, Chatvorlage); `start()` wartet, bis das Modell antwortbereit ist, und gibt ein Handle (`Arc<Model>`) zurück.
+  - **Entladen:** Das Handle wird fallen gelassen; der VRAM muss danach **messbar frei** sein (Messung nach Abschnitt 6a,
+    Wartezeit höchstens 10 s). Gelingt das nicht (Crate gibt Speicher nicht frei), ist das ein Fehler `unload_leak`: Eliezer
+    meldet ihn und markiert das Backend als `needs_restart`; der Verwalter beendet dann den Prozess geordnet (systemd startet ihn neu).
+    Ob und wie das Crate Modelle zur Laufzeit entlädt/neu lädt, wird in **M1** festgestellt (`docs/Laufzeiten.md`).
+  - **Anfragen:** Eliezer baut die Anfrage über die Typen des Crates, streamt die Antwort Stück für Stück und setzt sie in die
+    OpenAI-Form (5.1) bzw. Anthropic-Form (5.1a) um. Ob die fertigen OpenAI-Routen des Crates (`mistralrs-server-core`)
+    eingebettet werden können, statt sie selbst zu bauen, wird in M1 geprüft; Voraussetzung: Streaming ohne Puffern, `usage`, Werkzeugaufrufe.
+  - **Isolation:** Die Rechenarbeit läuft nicht auf den Tokio-Arbeitern, sondern auf eigenen Threads (`spawn_blocking` bzw. dem
+    Laufzeit-Thread des Crates). Ein **Panic** im Backend wird abgefangen (`catch_unwind` an der Grenze, Task-Join-Fehler) und
+    macht die Instanz `failed`; ein harter Absturz (CUDA-Fehler, Abbruch des Prozesses) beendet Eliezer – systemd startet neu,
+    laufende Anfragen enden mit 502. Das ist der bekannte Preis der Einbettung; wer Prozessisolation will, nimmt das Backend `llamacpp`.
+  - **Hardware:** Welche GPUs das Crate bedient, bestimmen dessen Cargo-Features zur Bauzeit (`cuda`, `flash-attn`, `cudnn`,
+    `metal`, …). Das Eliezer-Feature `mistralrs-cuda` reicht sie durch. **AMD (ROCm/Vulkan) ist nicht belegt** – auf AMD
+    deshalb zunächst `llamacpp` einplanen und erst nach M1 entscheiden.
+  - **Denkoptionen** (`reasoning_effort`) setzt Eliezer, soweit das Crate sie nicht selbst versteht, in die Chatvorlage bzw. in
+    Parameter um (M4).
 - **llamacpp (optional, vor allem für AMD):** Kindprozess `llama-server` je Modell (GGUF), Port aus `port_range`.
   Nur zu bauen, wenn M1 zeigt, dass mistral.rs auf der vorhandenen GPU nicht läuft (Herstellerunterstützung
   von mistral.rs ist **nicht geprüft**: CUDA ist belegt, ROCm/Vulkan nicht). Gleiche Schnittstelle nach außen.
