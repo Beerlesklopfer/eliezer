@@ -1,3 +1,15 @@
+eliezer (0.2.0) UNRELEASED; urgency=low
+
+  * Lege den Rust-Workspace mit fünf Crates und GPL-3.0-only-Lizenz an.
+  * Prüfe TOML-Konfigurationen strikt mit deutschen Zeilen- und Feldangaben.
+  * Begrenze Modellpfade einschließlich Symlinks auf die zentrale Ablage.
+  * Ergänze CLI, Bereitschaftsendpunkt, Protokollierung und Signalbehandlung.
+  * Richte Linux-CI, systemd-Unit und Containerbau mit Rust 1.88 ein.
+  * Stelle Compose-Varianten für Bind-Mount, Modell-Volume und GPU-Geräte bereit.
+  * Dokumentiere Installation und Rechte in INSTALL.MD sowie Prüfungen unter tests/m2.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 17:55:32 +0200
+
 eliezer (0.1.0) UNRELEASED; urgency=low
 
   * Schließe M1 als Machbarkeitsprüfung auf AMD Radeon RX 7900 XTX ab.

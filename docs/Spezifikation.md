@@ -65,6 +65,9 @@ listen = "127.0.0.1:1234"          # LM Studio nutzt 1234; im Heimnetz an die LA
 api_keys_file = "/etc/eliezer/keys" # optional; eine Zeile je Schlüssel, 0600. Fehlt sie: keine Anmeldung
 request_timeout_secs = 600
 
+[storage]
+models_dir = "/var/lib/eliezer/models" # gemeinsame Ablage sämtlicher Modellbestandteile
+
 [gpu]
 vendor = "auto"                     # "auto" | "nvidia" | "amd" | "none"
 index = 0                           # Nummer der Karte (Herstellerzählung, siehe Abschnitt 6a)
@@ -79,7 +82,7 @@ queue_wait_secs = 120               # danach Antwort 503 mit Hinweis
 
 [huggingface]
 token_file = "/etc/eliezer/hf-token"   # 0600; oder Umgebungsvariable HF_TOKEN
-cache_dir = "/var/lib/eliezer/hf"      # wird als HF_HOME an Backends gegeben
+cache_dir = "/var/lib/eliezer/models/hf"      # wird als HF_HOME an Backends gegeben
 cache_limit_gb = 200.0
 downloads = "on_request"            # "on_request" | "never"
 
@@ -112,11 +115,11 @@ size_gb = 17.3                         # Gewichte auf der GPU (Dateigröße); so
 [[model]]
 key = "qwen-image"
 backend = "sdcpp"
-source = { file = "/srv/models/qwen-image-2.1-UC-Q4_K_M.gguf" }
+source = { file = "/var/lib/eliezer/models/qwen-image-2.1-UC-Q4_K_M.gguf" }
 kind = "image"
 priority = 5
 vram_gb = 14.0                         # gemessener Wert hat immer Vorrang vor der Rechnung
-extra = { text_encoder = "/srv/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/srv/models/qwen_image_2.1_vae_bf16.safetensors" }
+extra = { text_encoder = "/var/lib/eliezer/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/var/lib/eliezer/models/qwen_image_2.1_vae_bf16.safetensors" }
 ```
 
 Regeln: Unbekannte Felder sind ein Fehler (`#[serde(deny_unknown_fields)]`). `key` ist eindeutig.
@@ -407,7 +410,6 @@ Gewichte, Hugging-Face-Downloads, Tokenizer, Bildprojektoren, Textencoder und VA
 Je Modell und festgehaltener Revision werden getrennte Unterverzeichnisse verwendet;
 Dateinamen und Unterverzeichnisse werden aus geprüfter Konfiguration abgeleitet.
 Modellpfade müssen nach Auflösung symbolischer Links innerhalb dieses Verzeichnisses liegen.
-Die bisherigen `/srv/models`-Beispielpfade sind entsprechend unter dieses Verzeichnis zu legen.
 `huggingface.cache_dir` liegt ebenfalls darin (Standard: `/var/lib/eliezer/models/hf`).
 Geheimnisse liegen außerhalb der Modellablage.
 

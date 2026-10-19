@@ -1,0 +1,9 @@
+# Zusätzlich zu compose.podman.yaml; erfordert die OCI-Runtime crun.
+services:
+  eliezer:
+    runtime: crun
+    group_add:
+      - keep-groups
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/kfd:/dev/kfd

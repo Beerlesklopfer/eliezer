@@ -1,0 +1,11 @@
+.git
+.agents
+.codex
+.aws
+**/target
+**/__pycache__
+models
+docs/Stand.md
+.env
+.env.*
+tests/runtime

@@ -45,6 +45,9 @@ Geprüfte Kommandozeilen, Zuordnungen und Ergebnisse werden unter
 
 ### M2 – Gerüst
 
+**Abgeschlossen:** [Prüfungen und Ergebnisse](../tests/m2/README.md),
+Version 0.2.0; Installation in [INSTALL.MD](../INSTALL.MD).
+
 - **M2-01** Workspace nach Spezifikation 3, Lizenz (Nutzer wählt), `rust-toolchain.toml`.
 - **M2-02** CI (`.github/workflows/rust.yml`): Format, Clippy, Test, nur Linux.
 - **M2-03** Konfiguration (`eliezer-core::config`): Strukturen mit `deny_unknown_fields`, Prüfungen (doppelte Schlüssel,

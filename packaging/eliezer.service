@@ -1,0 +1,25 @@
+[Unit]
+Description=Eliezer – Verwalter lokaler Modelle
+After=network.target
+
+[Service]
+Type=simple
+User=eliezer
+Group=eliezer
+SupplementaryGroups=video render
+ExecStart=/usr/local/bin/eliezer --config /etc/eliezer/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=35
+StateDirectory=eliezer
+RuntimeDirectory=eliezer
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/eliezer /run/eliezer
+
+[Install]
+WantedBy=multi-user.target

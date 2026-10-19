@@ -5,3 +5,4 @@
 - [Spezifikation](../Spezifikation.md)
 - [Implementierungsplan](../Implementierung.md)
 - [Prüfungen und Ergebnisprotokolle](../../tests/README.md)
+- [Installation und Betrieb](../../INSTALL.MD)

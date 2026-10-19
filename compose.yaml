@@ -1,0 +1,23 @@
+services:
+  eliezer:
+    image: eliezer:0.2.0
+    build:
+      context: .
+    user: "${ELIEZER_UID:-10001}:${ELIEZER_GID:-10001}"
+    ports:
+      - "127.0.0.1:${ELIEZER_PORT:-1234}:1234"
+    volumes:
+      - "${ELIEZER_CONFIG_FILE:-./packaging/config.container.toml}:/etc/eliezer/config.toml:ro"
+      - "${ELIEZER_MODELS_DIR:-./models}:/var/lib/eliezer/models"
+      - "state:/var/lib/eliezer"
+    tmpfs:
+      - /run:mode=1777
+      - /tmp:mode=1777
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 35s
+volumes:
+  state:

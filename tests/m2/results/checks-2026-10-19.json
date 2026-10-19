@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-19",
+  "version": "0.2.0",
+  "license": "GPL-3.0-only",
+  "rust_native": "1.99.0",
+  "rust_container_build": "1.88.0",
+  "cargo_fmt": "passed",
+  "cargo_clippy_all_targets_deny_warnings": "passed",
+  "cargo_tests_passed": 9,
+  "config_example_cli": "Konfiguration in Ordnung",
+  "service": {
+    "healthz": "ok",
+    "invalid_sighup": "rejected",
+    "valid_sighup": "checked_only",
+    "sigterm": "clean",
+    "test_value_in_log": false
+  },
+  "systemd_unit": "verified_with_local_executable_path_in_temporary_copy",
+  "docker_compose": "v5.6.0, configuration validation",
+  "podman": "5.4.2",
+  "podman_compose": "1.3.0",
+  "container_image": "ed230870af42b0493173dd68608f89686c182ef49c5c0591e51fa5d42efbbdd0",
+  "gpu_container_test": "not run; crun absent, M2 image has no model backend"
+}

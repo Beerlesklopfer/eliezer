@@ -1,0 +1,7 @@
+# Ergänzung: ersetzt den Modell-Bind-Mount durch ein persistentes Volume.
+services:
+  eliezer:
+    volumes:
+      - "models:/var/lib/eliezer/models"
+volumes:
+  models:

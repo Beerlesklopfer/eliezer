@@ -21,3 +21,6 @@
 *~
 
 # Cargo.lock bleibt für diesen Anwendungs-Workspace versioniert.
+
+# Lokale Modellablage
+/models/

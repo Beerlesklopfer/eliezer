@@ -11,7 +11,9 @@ Leerlauf entladen und wechseln sich auf einer GPU ab. Der Dienst steht hinter ei
 OpenAI-kompatiblen Schnittstelle und wird von [MultiGPT](https://github.com/Beerlesklopfer/multi-gpt)
 über den Runner gesteuert; Rechte, Rangfolge und Abrechnung bleiben dort.
 
-**Stand:** M1 abgeschlossen; Laufzeit-Probeprogramme vorhanden, noch kein produktiver Dienst. [Ergebnisse](tests/m1/README.md). Spezifikation: [docs/Spezifikation.md](docs/Spezifikation.md), Roadmap: [docs/Implementierung.md](docs/Implementierung.md), Regeln für Agenten: [AGENTS.md](AGENTS.md).
+**Stand:** M2 abgeschlossen: Konfigurationsprüfung, HTTP-Programmrahmen und Installationsdateien vorhanden. Modellverwaltung folgt in M3. [Prüfungen](tests/m2/README.md). Spezifikation: [docs/Spezifikation.md](docs/Spezifikation.md), Roadmap: [docs/Implementierung.md](docs/Implementierung.md), Regeln für Agenten: [AGENTS.md](AGENTS.md).
+
+Installation und Betrieb: [INSTALL.MD](INSTALL.MD).
 
 ## Vorhaben
 

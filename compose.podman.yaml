@@ -1,0 +1,6 @@
+# Rootloses Podman: Host-Benutzer auf die Containeridentität abbilden.
+x-podman:
+  in_pod: false
+services:
+  eliezer:
+    userns_mode: "keep-id:uid=10001,gid=10001"

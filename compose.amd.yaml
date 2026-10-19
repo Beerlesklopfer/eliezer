@@ -1,0 +1,9 @@
+# Docker-Variante: GIDs aus den tatsächlichen Geräteberechtigungen übernehmen.
+services:
+  eliezer:
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/kfd:/dev/kfd
+    group_add:
+      - "${ELIEZER_RENDER_GID:?Gerätegruppe render angeben}"
+      - "${ELIEZER_VIDEO_GID:?Gerätegruppe video angeben}"

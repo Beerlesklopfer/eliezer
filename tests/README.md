@@ -10,6 +10,7 @@ als ignorierte Tests mit Begründung ein.
 tests/
 ├── README.md
 ├── m1/README.md              Abschluss und Entscheidungen
+├── m2/                      Konfiguration, CLI, Dienst- und Containerprüfung
 ├── reference-clients/
 │   └── README.md             Geprüfte Ollama-/LM-Studio-Kommandozeilen
 ├── environment/

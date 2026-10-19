@@ -1,8 +1,9 @@
 # Abhängigkeiten und Voraussetzungen
 
-Eliezer befindet sich in M1. Die folgenden Rust-Komponenten sind durch die
-Spezifikation vorgegeben; konkrete Crate-Versionen sind noch nicht festgelegt.
-Es gibt bislang keinen Cargo-Workspace und keine festgeschriebenen Crate-Abhängigkeiten.
+Der Cargo-Workspace ist angelegt. Die Abhängigkeiten des Programmrahmens stehen
+in `Cargo.lock`; Versionen und Begründungen sind in
+[Abhängigkeitsentscheidungen](../Abhaengigkeiten.md) dokumentiert. Modelllaufzeiten
+werden erst bei ihrer tatsächlichen Einbindung hinzugefügt.
 
 ## Rust und Entwicklungswerkzeuge
 
@@ -21,7 +22,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 Die Projektprüfungen sind `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings` und `cargo test`.
-Sie werden ausgeführt, sobald der Workspace angelegt ist.
+Sie prüfen den gesamten Workspace; die eigenständigen M1-GPU-Probeprogramme bleiben separat.
 
 ## Vorgesehene Rust-Crates
 
@@ -36,7 +37,7 @@ Sie werden ausgeführt, sobald der Workspace angelegt ist.
 
 Neue Crates werden sparsam ergänzt und mit ihrer Begründung in
 [`docs/Abhaengigkeiten.md`](../Abhaengigkeiten.md) festgehalten.
-Diese Seite ersetzt weder `Cargo.toml` noch die spätere Versionsbindung in `Cargo.lock`.
+Diese Seite ersetzt weder `Cargo.toml` die Versionsbindung in `Cargo.lock`.
 
 ## Modelllaufzeiten
 
@@ -74,8 +75,8 @@ Quantisierung und Kontext müssen zum verfügbaren Speicher passen.
 |---|---|---|
 | CMake und C/C++-Compiler | Bau von stable-diffusion.cpp und gegebenenfalls llama.cpp | Lokal vorhanden; erfolgreicher Backend-Bau noch offen |
 | GPU-Entwicklungsbibliotheken | Bau des gewählten GPU-Backends | Abhängig von den Ergebnissen in M1 |
-| Docker Compose oder Podman mit Compose-Ausführung | Alternative zum nativen Betrieb; persistente Modellablage | Podman vorhanden; Compose-Betrieb noch nicht geprüft |
-| systemd | Nativer Dienstbetrieb und Neustart | Unit ist für M2 vorgesehen |
+| Docker Compose oder Podman mit Compose-Ausführung | Alternative zum nativen Betrieb; persistente Modellablage | Docker-Compose-Konfiguration validiert, Podman-Betrieb mit beiden Ablagearten geprüft |
+| systemd | Nativer Dienstbetrieb und Neustart | Unit unter `packaging/eliezer.service` |
 | Hugging Face | Modellsuche und ausdrücklich angeforderte Downloads | Laufzeitintegration für M5 vorgesehen |
 
 Die `hf`-CLI ist ein optionales Werkzeug für manuelle Modellprüfungen;
