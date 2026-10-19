@@ -1,6 +1,6 @@
 # Eliezer
 
-Verwalter für lokale KI-Modelle auf einem Rechner mit knapper GPU. Benannt nach Eliezer, dem Knecht
+**Ersatz für LM Studio** im Familienbetrieb: Verwalter für lokale KI-Modelle auf einem Rechner mit knapper GPU. Benannt nach Eliezer, dem Knecht
 Abrahams, der das Haus verwaltet und Aufträge ausführt.
 
 Eliezer teilt den Grafikspeicher zu: Chat-, Vision- und Bildmodelle laden bei Bedarf, werden im
@@ -12,6 +12,7 @@ OpenAI-kompatiblen Schnittstelle und wird von [MultiGPT](https://github.com/Beer
 
 ## Vorhaben
 
+- Ersetzt LM Studio als Modellserver von MultiGPT. Der Provider `lmstudio` in MultiGPT läuft weiter, bis Eliezer denselben Vertrag erfüllt: Modellliste mit Zustand und Speicherschätzung, Laden/Entladen mit Kontext und Parallelität, Denkoptionen je Modell, Statistik je Antwort.
 - Laufzeit für Sprachmodelle: [mistral.rs](https://github.com/EricLBuehler/mistral.rs) (Rust).
 - Bildmodelle: zunächst stable-diffusion.cpp als austauschbarer Dienst, später Rust.
 - Verwalter: Anfragen nach `model` verteilen, VRAM-Buch, Leerlauf-Entladen, Warteschlange.
