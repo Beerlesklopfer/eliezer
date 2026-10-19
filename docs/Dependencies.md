@@ -46,3 +46,9 @@ The CLI parser and the filesystem resolution need no additional crates.
 `reqwest`, GPU bindings and model runtimes are added only when they are
 actually used in later milestones.
 The product license is **GPL-3.0-only**, per the user's decision.
+
+## M3 – NVML measurement
+
+| Crate | Pinned version | Rationale |
+|---|---|---|
+| `nvml-wrapper` | 0.13.0 | Measures VRAM through NVML (specification 6a) without starting `nvidia-smi` for every query: no process spawn, no text parsing, exact byte values. The library `libnvidia-ml` is loaded dynamically at runtime, so the binary builds and runs without the NVIDIA driver (the probe then reports `Unavailable` and the fallback chain continues with `nvidia-smi`). Pulls in `nvml-wrapper-sys`, `libloading`, `bitflags`, `thiserror` and `static_assertions`. Licence: MIT OR Apache-2.0. Declared `rust-version` 1.60, compatible with 1.88. |

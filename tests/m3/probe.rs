@@ -1,5 +1,14 @@
 use eliezer_gpu::*;
 use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicU64};
+/// Tests that write an executable script and run it must not overlap: a process forked by
+/// another test thread can still hold the freshly written file open, and `exec` then fails
+/// with "text file busy", which would show up as a bogus `Unavailable`.
+static SCRIPTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn script_lock() -> std::sync::MutexGuard<'static, ()> {
+    SCRIPTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 #[test]
 fn same_byte_semantics_and_invalid_results() {
     let expected = GpuMemory::new(8 * 1_048_576, 2 * 1_048_576).unwrap();
@@ -15,6 +24,7 @@ fn same_byte_semantics_and_invalid_results() {
 }
 #[test]
 fn fake_sysfs_command_and_fallback() {
+    let _lock = script_lock();
     let root = std::env::temp_dir().join(format!(
         "eliezer-probe-{}-{:?}",
         std::process::id(),
@@ -70,6 +80,7 @@ fn script(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
 }
 #[test]
 fn rocm_smi_script_gives_same_bytes_as_nvidia_smi() {
+    let _lock = script_lock();
     let dir = temp("rocm");
     let rocm = Smi {
         program: script(
@@ -85,6 +96,7 @@ fn rocm_smi_script_gives_same_bytes_as_nvidia_smi() {
 }
 #[test]
 fn hanging_failing_and_garbled_programs_are_reported() {
+    let _lock = script_lock();
     let dir = temp("error");
     let smi = |body: &str| Smi {
         program: script(&dir, body),
@@ -160,4 +172,53 @@ fn vendor_detection_and_none_fallback() {
     assert_eq!(ok.memory(), GpuMemory::new(100, 40));
     assert_eq!(ok.active_name(), "sysfs");
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn nvml_without_driver_is_unavailable_and_falls_through() {
+    let nvml = Nvml::new(0);
+    assert_eq!(nvml.name(), "nvml");
+    match nvml.memory() {
+        Ok(memory) => assert!(memory.used_bytes <= memory.total_bytes),
+        Err(error) => assert_eq!(error, ProbeError::Unavailable),
+    }
+    let expected = GpuMemory::new(8 * 1_048_576, 0).unwrap();
+    let fallback = Fallback::new(vec![
+        Box::new(Nvml::new(u32::MAX)),
+        Box::new(Accounting {
+            budget: expected.total_bytes,
+            leases: AtomicU64::new(0),
+        }),
+    ]);
+    assert_eq!(fallback.memory().unwrap(), expected);
+    assert_eq!(fallback.active_name(), "none");
+}
+
+#[test]
+#[ignore = "needs an NVIDIA GPU with the NVML driver library"]
+fn real_nvml_values() {
+    let nvml = Nvml::new(0);
+    let memory = nvml.memory().unwrap();
+    assert!(memory.total_bytes > 0);
+    assert!(memory.used_bytes <= memory.total_bytes);
+    assert_eq!(nvml.name(), "nvml");
+}
+
+#[test]
+#[ignore = "needs an AMD GPU with amdgpu sysfs files"]
+fn real_sysfs_amd() {
+    let root = std::path::Path::new("/sys/class/drm");
+    assert_eq!(detect_vendor(root, 0), eliezer_core::config::GpuVendor::Amd);
+    let memory = Sysfs {
+        root: root.into(),
+        index: 0,
+    }
+    .memory()
+    .unwrap();
+    println!(
+        "sysfs card0: total={} used={}",
+        memory.total_bytes, memory.used_bytes
+    );
+    assert!(memory.total_bytes > 0);
+    assert!(memory.used_bytes <= memory.total_bytes);
 }

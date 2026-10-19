@@ -203,6 +203,38 @@ pub fn parse_rocm(output: &str, index: u32) -> Result<GpuMemory, ProbeError> {
         parse("VRAM Total Used Memory (B)")?,
     )
 }
+/// Measurement through the NVML library, which is loaded dynamically on first use.
+/// Without the NVIDIA driver the probe reports `Unavailable`.
+pub struct Nvml {
+    pub index: u32,
+    library: Mutex<Option<nvml_wrapper::Nvml>>,
+}
+impl Nvml {
+    pub fn new(index: u32) -> Self {
+        Self {
+            index,
+            library: Mutex::new(None),
+        }
+    }
+}
+impl GpuProbe for Nvml {
+    fn memory(&self) -> Result<GpuMemory, ProbeError> {
+        let mut library = self.library.lock().map_err(|_| ProbeError::Unavailable)?;
+        if library.is_none() {
+            *library = Some(nvml_wrapper::Nvml::init().map_err(|_| ProbeError::Unavailable)?);
+        }
+        let info = library
+            .as_ref()
+            .ok_or(ProbeError::Unavailable)?
+            .device_by_index(self.index)
+            .and_then(|device| device.memory_info())
+            .map_err(|_| ProbeError::Unavailable)?;
+        GpuMemory::new(info.total, info.used)
+    }
+    fn name(&self) -> &str {
+        "nvml"
+    }
+}
 pub struct Fallback {
     sources: Vec<Box<dyn GpuProbe>>,
     current: Mutex<usize>,
@@ -269,6 +301,7 @@ pub fn sources(
                 root: root.clone(),
                 index,
             })),
+            ProbeMethod::Nvml => probes.push(Box::new(Nvml::new(index))),
             ProbeMethod::NvidiaSmi => probes.push(Box::new(Smi {
                 program: "nvidia-smi".into(),
                 index,

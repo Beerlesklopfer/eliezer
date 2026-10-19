@@ -10,6 +10,7 @@ publish.workspace = true
 eliezer-core.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+nvml-wrapper.workspace = true
 
 [[test]]
 name = "probe"
