@@ -346,22 +346,53 @@ fn connect(parsed: &Parsed) -> Res<Client> {
 
 // ---- requests ------------------------------------------------------------------------------
 
+/// What systemd says about the local service (`active`, `inactive`, `failed`...), if it is
+/// installed here. Only asked for loopback addresses.
+fn systemd_state(client: &Client) -> Option<String> {
+    let host = client.endpoint.host.as_str();
+    if !(host == "localhost" || host == "::1" || host.starts_with("127.")) {
+        return None;
+    }
+    let output = std::process::Command::new("systemctl")
+        .args(["is-active", "eliezer"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let state = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    // "unknown" and an empty answer mean there is no such unit.
+    (!state.is_empty() && state != "unknown").then_some(state)
+}
+
 fn transport(client: &Client, error: HttpError) -> Failure {
     match error {
-        HttpError::Unreachable(reason) => Failure::Unreachable(format!(
-            "The Eliezer service is not reachable at {} ({reason}).\n\
-             Start it with `systemctl start eliezer` or `eliezer --config /etc/eliezer/config.toml`,\n\
-             or name the address with --host or ELIEZER_HOST.",
-            client.endpoint.url()
-        )),
+        HttpError::Unreachable(reason) => Failure::Unreachable(match systemd_state(client) {
+            Some(state) if state != "active" => format!(
+                "The Eliezer service is not running (systemd: {state}); nothing answers at {} ({reason}).\n\
+                 Start it with `sudo systemctl start eliezer` (and `sudo systemctl enable --now eliezer` to\n\
+                 start it at boot), or run it in the foreground with `eliezer --config /etc/eliezer/config.toml`.\n\
+                 If it fails, see `journalctl -u eliezer`.",
+                client.endpoint.url()
+            ),
+            _ => format!(
+                "The Eliezer service is not reachable at {} ({reason}).\n\
+                 Start it with `systemctl start eliezer` or `eliezer --config /etc/eliezer/config.toml`,\n\
+                 or name the address with --host or ELIEZER_HOST.",
+                client.endpoint.url()
+            ),
+        }),
         HttpError::Protocol(m) => {
             Failure::Request(format!("Connection to the service failed: {m}"))
         }
         HttpError::NotEliezer(found) => Failure::Unreachable(format!(
-            "The server at {} is not Eliezer (it identifies as '{found}'). Another program, for example\n\
+            "The server at {} is not Eliezer ({}). Another program, for example\n\
              LM Studio, may be using this address. Give Eliezer its own port with `listen` in the\n\
              configuration, or name the right address with --host or ELIEZER_HOST.",
-            client.endpoint.url()
+            client.endpoint.url(),
+            found.map_or_else(
+                || "it does not identify itself as Eliezer".to_owned(),
+                |name| format!("it identifies as '{name}'")
+            )
         )),
     }
 }

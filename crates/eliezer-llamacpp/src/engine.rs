@@ -257,6 +257,7 @@ struct Sequence {
     tx: mpsc::Sender<Result<Chunk, BackendError>>,
     sampler: LlamaSampler,
     parser: OutputParser,
+    format: Format,
     stops: Vec<String>,
     /// Text held back because it may be the start of a stop sequence.
     held: String,
@@ -622,6 +623,7 @@ fn admit(
         tx: job.tx,
         sampler,
         parser: OutputParser::new(prompting.format, prefilled),
+        format: prompting.format,
         stops: stop_sequences(&job.body),
         held: String::new(),
         pending_bytes: Vec::new(),
@@ -643,6 +645,14 @@ fn admit(
 fn accept(model: &LlamaModel, seq: &mut Sequence, token: LlamaToken) {
     let vocab = model.vocab();
     if vocab.is_eog(token) {
+        // Harmony ends a tool call with `<|call|>`, which llama.cpp also reports as an
+        // end-of-generation token; the parser needs to see it to complete the call.
+        if seq.format == Format::Harmony {
+            let piece = vocab.token_to_piece(token, true, None);
+            if piece == b"<|call|>" {
+                push_text(seq, &piece);
+            }
+        }
         seq.finish = Some("stop");
         return;
     }

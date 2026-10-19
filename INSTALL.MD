@@ -165,18 +165,24 @@ error, 3 service not reachable (start it with `systemctl start eliezer`).
 
 ## Debian package
 
-The package is built with `cargo-deb` (`cargo install cargo-deb`, Rust from rustup):
+The package is built with `cargo-deb` (`cargo install cargo-deb`, Rust from rustup). It contains
+the model runtime of one GPU API: `rocm` (the default, also for a plain `cargo deb`), `vulkan`, `cuda`
+or `cpu`. A package without a runtime would start but could not load any model, so there is none.
 
 ```bash
-scripts/build-deb.sh
+scripts/build-deb.sh            # rocm when ROCm is installed, otherwise cpu; or name the variant
 sudo apt install ./target/debian/eliezer_0.3.0-1_amd64.deb
 ```
+
+The ROCm variant needs AMD's ROCm libraries (`/opt/rocm`, installed by AMD's own installer, not by
+Debian); the binary finds them through an rpath. Set `ROCM_PATH` when building if ROCm lives elsewhere.
 
 It installs `/usr/bin/eliezer`, the unit `eliezer.service`, a default
 `/etc/eliezer/config.toml` (no models, loopback only, kept on upgrades) and the example
 configuration under `/usr/share/doc/eliezer/examples/`. The system user `eliezer` is created.
-The service is neither enabled nor started: review the configuration first, then run
-`sudo systemctl enable --now eliezer`. Removing the package keeps the configuration; purging
+The service is neither enabled nor started: review the configuration first (set `vram_budget_gb`
+to a little less than the card's memory; the default of 8 GB refuses larger models), then run
+`sudo systemctl enable --now eliezer` and check it with `eliezer status`. Removing the package keeps the configuration; purging
 removes it. The user and `/var/lib/eliezer` (models) are always kept.
 `tests/deb/check-package.sh` checks this life cycle in a clean Debian container.
 

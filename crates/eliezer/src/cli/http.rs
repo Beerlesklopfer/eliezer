@@ -18,8 +18,8 @@ pub enum HttpError {
     /// The connection broke or the answer was malformed.
     Protocol(String),
     /// Something answered, but it is not Eliezer (no `Server: eliezer/...` header); LM Studio
-    /// listens on the same default port. Carries what the server called itself.
-    NotEliezer(String),
+    /// listens on the same default port. Carries what the server called itself, if anything.
+    NotEliezer(Option<String>),
 }
 
 /// Address of the service, parsed from `http://host:port`.
@@ -284,9 +284,7 @@ impl Client {
                     .as_deref()
                     .is_some_and(|s| s.to_ascii_lowercase().starts_with("eliezer"))
                 {
-                    return Err(HttpError::NotEliezer(
-                        server.unwrap_or_else(|| "no Server header".to_owned()),
-                    ));
+                    return Err(HttpError::NotEliezer(server));
                 }
                 return Ok(Response {
                     status,

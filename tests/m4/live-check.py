@@ -233,9 +233,11 @@ def run(port, args):
     status, anth = call(
         port,
         "/v1/messages",
-        {"model": "m", "max_tokens": 32, "temperature": 0, "messages": [{"role": "user", "content": "Say hello."}]},
+        {"model": "m", "max_tokens": 400, "temperature": 0, "messages": [{"role": "user", "content": "Say hello."}]},
     )
-    check("Anthropic endpoint answers", status == 200 and anth["content"][0]["text"].strip() != "", repr(anth["content"][0]["text"][:40]) if status == 200 else str(anth))
+    # Reasoning models put a "thinking" block before the text block.
+    texts = [b["text"] for b in anth.get("content", []) if b.get("type") == "text"] if status == 200 else []
+    check("Anthropic endpoint answers", status == 200 and any(t.strip() for t in texts), repr(texts[0][:40]) if texts else str(anth)[:120])
 
     if args.tools:
         tool = {
@@ -246,7 +248,7 @@ def run(port, args):
                 "parameters": {"type": "object", "properties": {"city": {"type": "string"}, "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}}, "required": ["city"]},
             },
         }
-        status, called, _ = chat(port, "What is the weather in Paris right now? Use the tool.", tools=[tool], max_tokens=300)
+        status, called, _ = chat(port, "What is the weather in Paris right now? Use the tool.", tools=[tool], max_tokens=1500)
         calls = (called["choices"][0]["message"].get("tool_calls") if status == 200 else None) or []
         ok = bool(calls) and calls[0]["function"]["name"] == "get_weather" and "city" in json.loads(calls[0]["function"]["arguments"])
         check("tool call is detected", ok, json.dumps(calls)[:160] if calls else str(called)[:160])

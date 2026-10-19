@@ -229,6 +229,18 @@ pub fn status_text(base: &str, health: &str, status: &Value) -> String {
             .collect();
         format!("{} waiting: {}", queue.len(), waiting.join(", "))
     };
+    // The packaged default budget (8 GB) is meant for the smallest supported card; on a bigger
+    // card it silently refuses every large model, so say so.
+    let hint = match (gpu["budget_bytes"].as_u64(), total) {
+        (Some(budget), Some(total)) if probe != "none" && budget * 10 < total * 6 => format!(
+            "\nNote: the budget ({}) is far below the card's memory ({}). Raise `vram_budget_gb` in the\n\
+             configuration (a little less than the card's memory), then `systemctl reload eliezer`,\n\
+             or models above the budget are refused.\n",
+            opt_bytes(&gpu["budget_bytes"]),
+            opt_bytes(&gpu["total_bytes"]),
+        ),
+        _ => String::new(),
+    };
     format!(
         "Service      {base} is running (health: {health})\n\
          Client       eliezer {}\n\
@@ -238,7 +250,7 @@ pub fn status_text(base: &str, health: &str, status: &Value) -> String {
          GPU free     {}\n\
          GPU budget   {}\n\
          Models       {loaded} loaded of {} configured\n\
-         Queue        {queue_text}\n",
+         Queue        {queue_text}\n{hint}",
         env!("CARGO_PKG_VERSION"),
         opt_bytes(&gpu["total_bytes"]),
         opt_bytes(&gpu["used_bytes"]),

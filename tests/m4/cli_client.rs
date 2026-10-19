@@ -808,3 +808,42 @@ fn a_foreign_server_on_the_port_is_refused_not_listed() {
         "the foreign models must not be listed"
     );
 }
+
+#[test]
+fn status_warns_when_the_budget_is_far_below_the_card() {
+    // Pure formatting: call through the binary against a canned server instead of internals.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(2) {
+            let Ok(mut stream) = stream else { return };
+            let mut buffer = [0_u8; 2048];
+            let n = std::io::Read::read(&mut stream, &mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..n]).into_owned();
+            let body = if request.contains("/healthz") {
+                "ok".to_owned()
+            } else {
+                r#"{"gpu":{"probe":"sysfs","total_bytes":25753026560,"used_bytes":1100000000,"free_bytes":24600000000,"budget_bytes":8000000000},"models":[],"queue":[]}"#.to_owned()
+            };
+            let _ = std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "HTTP/1.1 200 OK\r\nServer: eliezer/test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eliezer"))
+        .env_remove("ELIEZER_CONFIG")
+        .args(["status", "--host", &format!("http://127.0.0.1:{port}")])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&result.stdout);
+    assert!(result.status.success(), "{text}");
+    assert!(
+        text.contains("budget (8.0 GB) is far below") && text.contains("vram_budget_gb"),
+        "{text}"
+    );
+}

@@ -47,7 +47,10 @@ license-file = ["../../LICENSE", "0"]
 changelog = "../../debian/changelog"
 section = "utils"
 priority = "optional"
-depends = "$auto, adduser, libstdc++6"
+# A package without a model runtime cannot load models, so a plain `cargo deb` builds the ROCm
+# package (AMD is the main target). Other GPU APIs: `cargo deb --variant vulkan|cuda|cpu`.
+features = ["rocm"]
+depends = "adduser, libc6 (>= 2.39), libgcc-s1, libstdc++6, libelf1t64, libnuma1, zlib1g, libzstd1"
 extended-description = """\
 Eliezer replaces LM Studio as the model server of MultiGPT. It loads chat, vision, \
 embedding and image models on demand, unloads them when idle and lets them take turns \
@@ -81,12 +84,15 @@ depends = "adduser, libc6 (>= 2.39), libgcc-s1, libstdc++6, libelf1t64, libnuma1
 
 [package.metadata.deb.variants.vulkan]
 features = ["vulkan"]
+depends = "$auto, adduser, libstdc++6"
 
 [package.metadata.deb.variants.cuda]
 features = ["cuda"]
+depends = "$auto, adduser, libstdc++6"
 
 [package.metadata.deb.variants.cpu]
 features = ["cpu"]
+depends = "$auto, adduser, libstdc++6"
 
 [[test]]
 name = "cli_client"
