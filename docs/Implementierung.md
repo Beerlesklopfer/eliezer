@@ -23,7 +23,7 @@ Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
   (genaue Befehlszeile, Ports, Endpunkte, Umgebungsvariablen, Denkoptionen, Chatvorlage).
 - **M1-02** stable-diffusion.cpp (Server) mit `qwen-image-2.1-UC-Q4_K_M.gguf`, Textencoder und VAE: Befehlszeile,
   Endpunkte, Zeit je Bild, VRAM. Ebenfalls in `docs/Laufzeiten.md`.
-- **M1-02a** Hersteller der Karte klären (NVIDIA oder AMD). mistral.rs und stable-diffusion.cpp je auf dieser Karte bauen und prüfen,
+- **M1-02a** Hersteller der Karte klären (`/sys/class/drm/card*/device/vendor`) (NVIDIA oder AMD). mistral.rs und stable-diffusion.cpp je auf dieser Karte bauen und prüfen,
   welche Beschleunigung läuft (CUDA, ROCm/HIP, Vulkan); bei AMD zusätzlich `llama-server`. Ergebnis je Backend in `docs/Laufzeiten.md`.
   Läuft mistral.rs dort nicht, wird das Backend `llamacpp` (Spezifikation 8) Teil von M4.
 - **M1-03** Wechsel Chat ↔ Bild auf der 24-GB-Karte von Hand; zum Vergleich llama-swap mit denselben Modellen.
@@ -48,7 +48,7 @@ Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
 - **M3-01** `eliezer-core`: VRAM-Rechnung (Spezifikation 6) mit allen Architekturtypen; Tests mit den Beispielwerten.
 - **M3-02** Zustandsautomat und Planer (Spezifikation 7), `Clock`-Trait; Tests für Verdrängung, Anheften, Bündeln,
   Leerlauf, Warteschlange, Fehlerzustand.
-- **M3-03** `eliezer-gpu`: Trait `GpuProbe`; NVIDIA: NVML (Feature `nvml`) und `nvidia-smi`-Auszug; **AMD: sysfs `mem_info_vram_*` (amdgpu) und `rocm-smi`-Auszug**; `none`; Prüfstand. AMD-Test gegen ein nachgebautes sysfs-Verzeichnis.
+- **M3-03** `eliezer-gpu`: **ein** Trait `GpuProbe` (Spezifikation 6a) mit den Verfahren `nvml`, `nvidia-smi`, `sysfs`, `rocm-smi`, `none` und Prüfstand; Herstellererkennung über `device/vendor`; einheitliche Bedeutung (Byte, gesamt belegt), Zeitlimit und Rückfall; ein gemeinsamer Testsatz.
 - **M3-04** `eliezer-backend`: Trait `Backend` und **fake-backend**; Verwalter-Task (`Supervisor`) mit mpsc/oneshot.
 - **M3-05** `eliezer-api`: `/api/v1/models`, `/load`, `/unload`, `/api/v1/status`, `/healthz`, Authentifizierung, Fehlerformat;
   Chat-Weiterleitung `/v1/chat/completions` mit **ungepuffertem SSE** gegen das fake-backend.

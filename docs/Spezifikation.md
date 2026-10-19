@@ -66,12 +66,11 @@ api_keys_file = "/etc/eliezer/keys" # optional; eine Zeile je Schlüssel, 0600. 
 request_timeout_secs = 600
 
 [gpu]
-vendor = "nvidia"                   # "nvidia" | "amd" | "none" (nur Buchführung, ohne Messung)
-index = 0
-vram_budget_gb = 24.0               # Gesamtspeicher der Karte (Dezimal-GB, 10^9 Byte)
+vendor = "auto"                     # "auto" | "nvidia" | "amd" | "none"
+index = 0                           # Nummer der Karte (Herstellerzählung, siehe Abschnitt 6a)
+vram_budget_gb = 24.0               # Gesamtspeicher der Karte (Dezimal-GB, 10^9 Byte); bei Messung nur Obergrenze
 reserve_gb = 2.0                    # für Anzeige/System
-measure = "nvml"                    # nvidia: "nvml" | "nvidia-smi"; amd: "sysfs" | "rocm-smi"; sonst "none"
-# amd + sysfs: liest /sys/class/drm/card<index>/device/mem_info_vram_total und mem_info_vram_used (Byte, amdgpu-Kerneltreiber)
+measure = "auto"                    # "auto" | "nvml" | "nvidia-smi" | "sysfs" | "rocm-smi" | "none"
 
 [scheduler]
 idle_unload_secs = 1800             # Leerlauf-Entladen (30 min)
@@ -250,6 +249,40 @@ KV     = 2 × Schichten × KV-Köpfe × Kopfdimension × 2 Byte (f16) × Kontext
 Beispiel zum Testen: 48 Schichten, 4 KV-Köpfe, Kopfdimension 128, Kontext 32 768 → KV = 2·48·4·128·2·32768
 = 3 221 225 472 Byte (≈ 3,22 GB). Mit Gewichten 17,3 GB und Zuschlag 0,5 GB ≈ 21,02 GB.
 
+## 6a. GPU-Messung (einheitlich für NVIDIA und AMD)
+
+Der Rest von Eliezer kennt **keinen Hersteller**. Er sieht nur das Trait `GpuProbe` in `eliezer-gpu`:
+
+```rust
+trait GpuProbe: Send + Sync {
+    fn memory(&self) -> Result<GpuMemory, ProbeError>;   // eine Messung, ohne Blockieren > 2 s
+    fn name(&self) -> &str;                              // z. B. "nvml", "sysfs"
+}
+struct GpuMemory { total_bytes: u64, used_bytes: u64 }   // free = total − used (berechnet, nie gemessen)
+```
+
+**Einheitliche Bedeutung:** `used_bytes` ist der **gesamte belegte** VRAM der Karte, auch von fremden Prozessen (Anzeige,
+andere Programme). Es wird nichts je Prozess zugeordnet. Einheit immer Byte; die Umrechnung in GB geschieht nur bei der
+Ausgabe. Eine Messung, die `used > total` liefert, ist ein Fehler (`ProbeError::Inconsistent`).
+
+**Verfahren je Hersteller** (die Wahl trifft `measure`; `auto` nimmt die erste verfügbare Zeile der Tabelle für den Hersteller):
+
+| Hersteller | Reihenfolge bei `auto` | Quelle |
+|---|---|---|
+| NVIDIA | 1. `nvml` (Bibliothek, Feature `nvml`), 2. `nvidia-smi` | `nvidia-smi --query-gpu=memory.total,memory.used --format=csv,noheader,nounits --id=<index>` (MiB × 1 048 576) |
+| AMD | 1. `sysfs` (amdgpu-Kerneltreiber), 2. `rocm-smi` | `/sys/class/drm/card<index>/device/mem_info_vram_total` und `…/mem_info_vram_used` (Byte; Kernel-Dokumentation „Misc AMDGPU driver information“) |
+| `none` | – | `total = vram_budget_gb`, `used` = Summe der Leases (nur Buchführung) |
+
+**Herstellererkennung (`vendor = "auto"`):** zuerst `/sys/class/drm/card<index>/device/vendor` lesen (`0x10de` = NVIDIA,
+`0x1002` = AMD); ist sie nicht lesbar, `none` mit Warnung im Log. Ein ausdrücklich gesetzter `vendor` hat Vorrang.
+
+**Gemeinsame Regeln:** Jede Messung hat ein Zeitlimit von 2 s; `Tick` misst höchstens einmal je Sekunde und bei jeder
+Ladeentscheidung neu. Schlägt die gewählte Quelle fehl, fällt Eliezer **einmal** auf die nächste Zeile der Tabelle zurück und
+meldet das (deutsch, einmal je Änderung); sind alle erschöpft, gilt `none` und der Dienst bleibt benutzbar. `GET /api/v1/status`
+nennt das benutzte Verfahren (`gpu.probe`) und `gpu.name`. **Der Planer rechnet immer mit
+`min(Budget, total) − max(Summe der Leases, used − eigene Instanzen)`** – so sind fremde Belegungen berücksichtigt, ohne dass
+das Verfahren eine Rolle spielt.
+
 ## 7. Zustandsautomat und Planer
 
 Zustände je Modell: `unloaded → loading → loaded → unloading → unloaded`, Fehlerzustand `failed`
@@ -345,9 +378,10 @@ trait Backend: Send + Sync {
   und `/v1/messages` liefert gegen das fake-backend denselben Inhalt.
 - **Vertragstest gegen MultiGPT:** `tests/contract/lmstudio_models.json` enthält eine echte Antwort von LM Studio 0.4
   und eine von Eliezer; beide müssen durch dieselben Prüfungen gehen (Felder und Typen aus 5.2).
-- **GPU-Messung (`eliezer-gpu`):** NVIDIA-Anbindung gegen den Prüfstand; AMD-Anbindung gegen ein **nachgebautes
-  sysfs-Verzeichnis** in einem temporären Ordner (Dateien `mem_info_vram_total`/`mem_info_vram_used` mit Byte-Zahlen),
-  ohne echte Karte.
+- **GPU-Messung (`eliezer-gpu`):** **ein** Satz Tests gegen das Trait `GpuProbe` mit allen Verfahren (Abschnitt 6a), ohne Karte:
+  `nvidia-smi` und `rocm-smi` gegen ein Skript im temporären Ordner, das feste Ausgaben liefert; `sysfs` gegen ein nachgebautes
+  Verzeichnis (`mem_info_vram_total`/`mem_info_vram_used`, `device/vendor`); NVML nur als `#[ignore]`-Test. Geprüft werden: gleiche
+  Bedeutung (Byte, `used ≤ total`), Zeitlimit, Rückfall auf die nächste Quelle, Herstellererkennung, Fehlerfall `none`.
 - **GPU-Tests (`#[ignore]`):** echte Messung (Abschnitt 6, Gegenprobe der Rechnung), Wechsel Chat ↔ Bild.
 
 ## 12. Abnahme (gesamt)
