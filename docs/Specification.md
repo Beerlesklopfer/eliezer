@@ -130,7 +130,16 @@ On `SIGHUP` the service reloads the file; loaded models stay, removed ones are u
 
 ## 5. Interface (compatible with LM Studio)
 
-All paths with `Authorization: Bearer <key>` if `api_keys_file` is set; otherwise open.
+All paths except `/healthz` need `Authorization: Bearer <key>` if `api_keys_file` is set (the Anthropic
+dialect may use `x-api-key` instead); otherwise the API is open. A key is an OpenAI-style token
+(`sk-` and 64 hex digits); several keys can exist. A missing or wrong key gets `401` with
+`{"error": {"message": ..., "type": "authentication_error", "code": "invalid_api_key"}}` and
+`WWW-Authenticate: Bearer`; the text never repeats the key that was sent, and the comparison takes the
+same time whichever byte differs. Keys are made with `eliezer --new-key`, listed (masked) with
+`--list-keys` and removed with `--revoke-key NAME`; the Hugging Face token is stored with
+`--set-hf-token` (never an argument; source in this order: standard input, `~/.config/eliezer/hf_key`, the default file of the Hugging Face tools `~/.cache/huggingface/token` (`HF_TOKEN_PATH`, `HF_HOME` honored), a prompt without echo). Files: `server.api_keys_file` and
+`huggingface.token_file` (mode 0600, owned by `server.run_user`); the user's own copies are
+`~/.config/eliezer/api_key` (read by the command line client) and `~/.config/eliezer/hf_key`.
 Error format for every error: `{"error": {"message": "<English text>", "type": "<code>"}}` with
 the matching HTTP status. Messages never contain keys, tokens or paths outside the configuration.
 

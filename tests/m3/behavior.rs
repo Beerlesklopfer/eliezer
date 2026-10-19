@@ -1004,3 +1004,38 @@ async fn every_response_names_the_server() {
     }
     e.sup.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_moved_model_file_gives_a_clear_error_and_the_model_can_recover() {
+    let e = env(
+        &[("a", 1.0, false)],
+        FakeConfig {
+            missing_file: true,
+            ..Default::default()
+        },
+        &[],
+    );
+    let (status, body) = call(&e.router, "/api/v1/models/load", Some(json!({"model":"a"}))).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["error"]["type"], "model_file");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("moved or deleted") && message.contains("source.file"),
+        "{message}"
+    );
+    // after a failed start the model rests for a moment; the test clock has to run past that
+    e.clock.0.fetch_add(31, Ordering::Relaxed);
+    e.sup.tick().await.unwrap();
+    // the same through a chat request
+    let (status, body) = tokio::time::timeout(
+        Duration::from_secs(5),
+        call(&e.router, "/v1/chat/completions", Some(chat("a"))),
+    )
+    .await
+    .expect("the request must be answered, not wait forever");
+    assert_eq!(
+        (status.as_u16(), body["error"]["type"].as_str()),
+        (502, Some("model_file"))
+    );
+    e.sup.shutdown().await;
+}

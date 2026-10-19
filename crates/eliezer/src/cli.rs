@@ -25,52 +25,61 @@ const COMMANDS: &[&str] = &[
 
 /// Complete help text of the program: service flags and client commands.
 pub fn usage() -> String {
-    "Eliezer – manager for local models\n\
-\n\
-Usage: eliezer [--config PATH] [--check-config [PATH]]      start the service\n\
-       eliezer [--config PATH] --import DIR [--copy] [--dry-run] [--no-config]\n\
-       eliezer COMMAND [OPTIONS]                              talk to the running service\n\
-\n\
-Service options:\n\
-  --config PATH       Configuration (otherwise ELIEZER_CONFIG or /etc/eliezer/config.toml)\n\
-  --check-config      Only check, then exit\n\
-  --import DIR        Move the .gguf files below DIR into storage.models_dir, hand them to\n\
-                      server.run_user / server.run_group and add the language and embedding\n\
-                      models to the configuration (usually needs root)\n\
-  --copy              With --import: copy instead of move\n\
-  --dry-run           With --import: only show what would happen\n\
-  --no-config         With --import: print the [[model]] blocks, do not edit the configuration\n\
-  --version           Print the version number\n\
-\n\
-Commands (they use the HTTP API of the running service):\n\
-  ls                              List the configured models (key, type, size, context, state)\n\
-  ps                              List the loaded models (VRAM, context, parallel, idle, requests)\n\
-  load MODEL [--context N] [--parallel N]\n\
-                                  Load a model and print the load time\n\
-  unload [MODEL | --all]          Unload one model, all models, or the only loaded one\n\
-  status                          Service, GPU memory and queue\n\
-  show MODEL                      Details of one configured model and the endpoints serving it\n\
-  run MODEL [PROMPT]              Chat with a model; streams the answer. Without PROMPT on a terminal\n\
-                                  an interactive chat starts (empty line or Ctrl-D ends it); with\n\
-                                  piped input the prompt is read from stdin\n\
-      --system TEXT               System prompt\n\
-      --temperature F             Sampling temperature\n\
-      --max-tokens N              Limit the answer length\n\
-      --reasoning LEVEL           none, low, medium or high\n\
-      --stats                     Print token statistics at the end (to stderr)\n\
-  help                            This text\n\
-\n\
-Options for all commands:\n\
-  --host URL          Service address (otherwise ELIEZER_HOST, the server.listen of the\n\
-                      configuration, or http://127.0.0.1:1234)\n\
-  --key-file PATH     File with the API key (otherwise ELIEZER_API_KEY_FILE, ELIEZER_API_KEY or\n\
-                      the server.api_keys_file of the configuration). The key is never taken\n\
-                      from the command line.\n\
-  --json              Print the JSON of the API instead of a table\n\
-  --config PATH       Configuration file to read the address and the key file from\n\
-\n\
-Exit codes: 0 ok, 1 request failed or server error, 2 usage error, 3 service not reachable"
-        .to_owned()
+    r#"Eliezer – manager for local models
+
+Usage: eliezer [--config PATH] [--check-config [PATH]]      start the service
+       eliezer [--config PATH] --import DIR [--copy] [--dry-run] [--no-config]
+       eliezer COMMAND [OPTIONS]                              talk to the running service
+
+Service options:
+  --config PATH       Configuration (otherwise ELIEZER_CONFIG or /etc/eliezer/config.toml)
+  --check-config      Only check, then exit
+  --import DIR        Move the .gguf files below DIR into storage.models_dir, hand them to
+                      server.run_user / server.run_group and add the language and embedding
+                      models to the configuration (usually needs root)
+  --copy              With --import: copy instead of move
+  --dry-run           With --import: only show what would happen
+  --no-config         With --import: print the [[model]] blocks, do not edit the configuration
+  --new-key [--name N] [--save]   Create an API key (sk-...), enter it in server.api_keys_file and
+                      show it once; --save also stores it in ~/.config/eliezer/api_key
+  --list-keys         Show the API keys (masked) and whether a Hugging Face token is set
+  --revoke-key NAME   Remove one API key
+  --set-hf-token      Store the Hugging Face token in huggingface.token_file. Source: standard
+                      input, ~/.config/eliezer/hf_key, the default file of the Hugging Face tools
+                      (~/.cache/huggingface/token) or a hidden prompt; never an argument
+  --suggest FILE      Print the [[model]] block for one .gguf file (memory figures from its header)
+  --version           Print the version number
+
+Commands (they use the HTTP API of the running service):
+  ls                              List the configured models (key, type, size, context, state)
+  ps                              List the loaded models (VRAM, context, parallel, idle, requests)
+  load MODEL [--context N] [--parallel N]
+                                  Load a model and print the load time
+  unload [MODEL | --all]          Unload one model, all models, or the only loaded one
+  status                          Service, GPU memory and queue
+  show MODEL                      Details of one configured model and the endpoints serving it
+  run MODEL [PROMPT]              Chat with a model; streams the answer. Without PROMPT on a terminal
+                                  an interactive chat starts (empty line or Ctrl-D ends it); with
+                                  piped input the prompt is read from stdin
+      --system TEXT               System prompt
+      --temperature F             Sampling temperature
+      --max-tokens N              Limit the answer length
+      --reasoning LEVEL           none, low, medium or high
+      --stats                     Print token statistics at the end (to stderr)
+  help                            This text
+
+Options for all commands:
+  --host URL          Service address (otherwise ELIEZER_HOST, the server.listen of the
+                      configuration, or http://127.0.0.1:1234)
+  --key-file PATH     File with the API key (otherwise ELIEZER_API_KEY_FILE, ELIEZER_API_KEY,
+                      ~/.config/eliezer/api_key or
+                      the server.api_keys_file of the configuration). The key is never taken
+                      from the command line.
+  --json              Print the JSON of the API instead of a table
+  --config PATH       Configuration file to read the address and the key file from
+
+Exit codes: 0 ok, 1 request failed or server error, 2 usage error, 3 service not reachable"#
+    .to_owned()
 }
 
 enum Failure {
@@ -330,10 +339,15 @@ fn connect(parsed: &Parsed) -> Res<Client> {
     {
         Some(key)
     } else {
-        // Silent fallback: a key file named by the configuration, if readable.
-        config
-            .and_then(|c| c.server.api_keys_file)
-            .and_then(|p| first_key(&p).ok())
+        // Silent fallbacks: the user's own key file, then the file named by the configuration.
+        let own = std::env::var_os("HOME")
+            .map(|home| crate::keys_cmd::user_dir(Path::new(&home)).join("api_key"))
+            .and_then(|file| first_key(&file).ok());
+        own.or_else(|| {
+            config
+                .and_then(|c| c.server.api_keys_file)
+                .and_then(|p| first_key(&p).ok())
+        })
     };
     if key
         .as_deref()

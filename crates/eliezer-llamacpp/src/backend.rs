@@ -67,6 +67,19 @@ impl Backend for LlamaCppBackend {
     fn start<'a>(&'a self, spec: &'a LoadSpec) -> BackendFuture<'a, Running> {
         Box::pin(async move {
             let file = self.model(&spec.model).ok_or(BackendError::Unavailable)?;
+            // Say plainly when the file was moved or deleted, before llama.cpp reports it obscurely.
+            match std::fs::File::open(&file.path).and_then(|f| f.metadata()) {
+                Ok(meta) if meta.is_file() => {}
+                other => {
+                    tracing::error!(
+                        model = %spec.model,
+                        path = %file.path.display(),
+                        reason = %other.map_or_else(|e| e.to_string(), |_| "not a regular file".to_owned()),
+                        "The model file cannot be read"
+                    );
+                    return Err(BackendError::ModelFile);
+                }
+            }
             let worker = engine::spawn(Setup {
                 key: spec.model.clone(),
                 path: file.path,

@@ -1,5 +1,6 @@
 mod cli;
 mod import_cmd;
+mod keys_cmd;
 mod runtime;
 
 use eliezer_core::config::{Config, PathResolutionError, PathResolver};
@@ -47,6 +48,8 @@ struct Arguments {
     copy: bool,
     dry_run: bool,
     no_config: bool,
+    suggest: Option<PathBuf>,
+    keys: Option<keys_cmd::Action>,
 }
 fn arguments() -> Result<Option<Arguments>, &'static str> {
     let mut args = std::env::args_os().skip(1).peekable();
@@ -55,6 +58,9 @@ fn arguments() -> Result<Option<Arguments>, &'static str> {
     let mut check = false;
     let mut import = None;
     let (mut copy, mut dry_run, mut no_config) = (false, false, false);
+    let mut suggest = None;
+    let (mut new_key, mut list_keys, mut set_hf, mut save) = (false, false, false, false);
+    let (mut key_name, mut revoke) = (None, None);
     let mut explicit = false;
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
@@ -91,6 +97,32 @@ fn arguments() -> Result<Option<Arguments>, &'static str> {
             import = Some(PathBuf::from(
                 args.next().ok_or("Directory missing after --import")?,
             ));
+        } else if arg == "--new-key" {
+            new_key = true;
+        } else if arg == "--name" {
+            key_name = Some(
+                args.next()
+                    .ok_or("Name missing after --name")?
+                    .into_string()
+                    .map_err(|_| "The key name must be plain text")?,
+            );
+        } else if arg == "--save" {
+            save = true;
+        } else if arg == "--list-keys" {
+            list_keys = true;
+        } else if arg == "--revoke-key" {
+            revoke = Some(
+                args.next()
+                    .ok_or("Name missing after --revoke-key")?
+                    .into_string()
+                    .map_err(|_| "The key name must be plain text")?,
+            );
+        } else if arg == "--set-hf-token" {
+            set_hf = true;
+        } else if arg == "--suggest" {
+            suggest = Some(PathBuf::from(
+                args.next().ok_or("File missing after --suggest")?,
+            ));
         } else if arg == "--copy" {
             copy = true;
         } else if arg == "--dry-run" {
@@ -101,6 +133,35 @@ fn arguments() -> Result<Option<Arguments>, &'static str> {
             return Err("Unknown argument; see --help");
         }
     }
+    let chosen = [new_key, list_keys, set_hf, revoke.is_some()]
+        .iter()
+        .filter(|c| **c)
+        .count();
+    if chosen > 1 {
+        return Err("Use only one of --new-key, --list-keys, --revoke-key and --set-hf-token");
+    }
+    if (key_name.is_some() || save) && !new_key {
+        return Err("--name and --save only work together with --new-key");
+    }
+    if chosen == 1 && (import.is_some() || check || suggest.is_some()) {
+        return Err(
+            "The key commands cannot be combined with --import, --check-config or --suggest",
+        );
+    }
+    let keys = if new_key {
+        Some(keys_cmd::Action::New {
+            name: key_name.clone(),
+            save,
+        })
+    } else if list_keys {
+        Some(keys_cmd::Action::List)
+    } else if let Some(name) = revoke {
+        Some(keys_cmd::Action::Revoke(name))
+    } else if set_hf {
+        Some(keys_cmd::Action::SetHfToken)
+    } else {
+        None
+    };
     if import.is_none() && (copy || dry_run || no_config) {
         return Err("--copy, --dry-run and --no-config only work together with --import");
     }
@@ -114,6 +175,8 @@ fn arguments() -> Result<Option<Arguments>, &'static str> {
         copy,
         dry_run,
         no_config,
+        suggest,
+        keys,
     }))
 }
 
@@ -131,6 +194,9 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), String> {
     let mut terminate =
         signal(SignalKind::terminate()).map_err(|_| "SIGTERM cannot be registered")?;
     let mut hangup = signal(SignalKind::hangup()).map_err(|_| "SIGHUP cannot be registered")?;
+    for problem in config.file_problems() {
+        tracing::warn!(event = "file_problem", "{problem}");
+    }
     let config = std::sync::Arc::new(config);
     let runtime = runtime::build(config.clone(), runtime::keys(&config)?)?;
     let supervisor = runtime.supervisor.clone();
@@ -188,7 +254,15 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), String> {
             _ = hangup.recv() => {
                 let reloaded = match load(&config_path) {
                     Ok(new) => match runtime::keys(&new) {
-                        Ok(keys) => runtime.reload(std::sync::Arc::new(new), keys).await.map_err(str::to_owned),
+                        Ok(keys) => {
+                            for problem in new.file_problems() {
+                                tracing::warn!(event = "file_problem", "{problem}");
+                            }
+                            runtime
+                                .reload(std::sync::Arc::new(new), keys)
+                                .await
+                                .map_err(str::to_owned)
+                        }
                         Err(error) => Err(error.to_owned()),
                     },
                     Err(error) => Err(error),
@@ -240,6 +314,13 @@ async fn service_main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if let Some(action) = args.keys {
+        // Like the import, these load the configuration themselves.
+        return keys_cmd::run(&args.config, action);
+    }
+    if let Some(file) = &args.suggest {
+        return import_cmd::suggest(file);
+    }
     if let Some(source) = &args.import {
         // The import loads the configuration itself: a broken model list must not block it.
         return import_cmd::run(&import_cmd::Options {
@@ -258,7 +339,18 @@ async fn service_main() -> ExitCode {
         }
     };
     if args.check {
-        println!("Configuration OK");
+        let problems = config.file_problems();
+        for problem in &problems {
+            eprintln!("Warning: {problem}");
+        }
+        if problems.is_empty() {
+            println!("Configuration OK");
+        } else {
+            println!(
+                "Configuration OK, but {} file problem(s) (see the warnings)",
+                problems.len()
+            );
+        }
         return ExitCode::SUCCESS;
     }
     if tracing_subscriber::fmt()

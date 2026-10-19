@@ -407,6 +407,46 @@ fn field_line(input: &str, field: &str) -> usize {
 }
 
 impl Config {
+    /// Problems with the files and directories the configuration names, for warnings (the
+    /// configuration itself is fine): a model store or model file that was moved, deleted or made
+    /// unreadable. Not an error, because the files may come back and the rest keeps working.
+    pub fn file_problems(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        let store = &self.storage.models_dir;
+        match std::fs::metadata(store) {
+            Err(error) => problems.push(format!(
+                "storage.models_dir {}: {} (moved or unmounted? set storage.models_dir to the new place)",
+                store.display(),
+                describe(&error)
+            )),
+            Ok(meta) if !meta.is_dir() => problems.push(format!(
+                "storage.models_dir {} is not a directory",
+                store.display()
+            )),
+            Ok(_) => {}
+        }
+        for model in &self.model {
+            let Some(file) = &model.source.file else {
+                continue;
+            };
+            match std::fs::File::open(file).and_then(|f| f.metadata()) {
+                Err(error) => problems.push(format!(
+                    "model '{}': {} {} (moved or deleted? update source.file, or run `eliezer --import`)",
+                    model.key,
+                    file.display(),
+                    describe(&error)
+                )),
+                Ok(meta) if !meta.is_file() => problems.push(format!(
+                    "model '{}': {} is not a regular file",
+                    model.key,
+                    file.display()
+                )),
+                Ok(_) => {}
+            }
+        }
+        problems
+    }
+
     /// Parses everything except the model list, so `eliezer --import` can run even when a
     /// `[[model]]` entry is broken (the import is what writes working entries). Returns the
     /// configuration without models and the text it was parsed from.
@@ -710,7 +750,7 @@ impl Config {
                 return Err(ConfigError::at(
                     input,
                     field,
-                    "Model path lies outside the central model store",
+                    "Model path lies outside the central model store (a symbolic link that leads out of it is not followed): name the real directory in storage.models_dir, or move the file into the store (eliezer --import)",
                 ));
             }
         }
@@ -738,6 +778,14 @@ impl Config {
 fn positive(value: f64) -> bool {
     value.is_finite() && value > 0.0
 }
+fn describe(error: &std::io::Error) -> &'static str {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => "not found",
+        std::io::ErrorKind::PermissionDenied => "cannot be read (permission denied)",
+        _ => "cannot be read",
+    }
+}
+
 /// A Unix user or group name as found on local and domain-joined machines (`joerg.bernau`,
 /// `svc_eliezer`). It is only ever looked up in /etc/passwd and /etc/group, never passed to a
 /// shell or used as a path, so the rule just keeps out spaces, slashes and odd characters.

@@ -25,6 +25,8 @@ pub enum Error {
     /// The request itself is unusable (for example longer than the context window);
     /// the model is fine.
     InvalidRequest,
+    /// The model file is missing or unreadable.
+    ModelFile,
     Stopped,
 }
 #[derive(Clone)]
@@ -534,6 +536,10 @@ impl Actor {
                     }
                 }
                 Command::Started(key, result) => {
+                    let failure = match &result {
+                        Err(BackendError::ModelFile) => Error::ModelFile,
+                        _ => Error::Backend,
+                    };
                     if let Some(entry) = self.entries.get_mut(&key) {
                         match result {
                             Ok(running) => {
@@ -553,7 +559,7 @@ impl Actor {
                         .is_some_and(|e| e.model.instance.state == State::Failed)
                     {
                         for item in self.queue.remove_if(|i| i.value.spec.model == key) {
-                            let _ = item.value.reply.send(Err(Error::Backend));
+                            let _ = item.value.reply.send(Err(failure));
                         }
                     }
                     if self.unload.contains_key(&key) {

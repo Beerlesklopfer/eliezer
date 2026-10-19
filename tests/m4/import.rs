@@ -312,7 +312,10 @@ fn gguf_per_layer_arrays_and_hybrid_markers() {
         16_800_000_000,
         Some(&info),
     );
-    assert!(suggestion.contains("swa_layers/window"), "{suggestion}");
+    assert!(
+        suggestion.contains("announced but not understood"),
+        "{suggestion}"
+    );
 }
 
 #[test]
@@ -631,4 +634,160 @@ fn entries_pointing_at_image_models_are_reported() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].key, "pasted");
     assert!(mismatches("not toml [").is_empty());
+}
+
+// --- hybrid layouts -------------------------------------------------------------------------
+
+fn kv_list(out: &mut Vec<u8>, key: &str, inner: u32, items: &[u32]) {
+    text(out, key);
+    out.extend(9_u32.to_le_bytes());
+    out.extend(inner.to_le_bytes());
+    out.extend((items.len() as u64).to_le_bytes());
+    for item in items {
+        if inner == 7 {
+            out.push(u8::from(*item != 0));
+        } else {
+            out.extend(item.to_le_bytes());
+        }
+    }
+}
+
+/// The attention part of the Gemma 4 header (30 layers, 5 of 6 with a 1024 token window).
+fn gemma_like(out: &mut Vec<u8>) -> u64 {
+    kv_u32(out, "gemma4.block_count", 30);
+    let kv: Vec<u32> = (0..30).map(|i| if i % 6 == 5 { 2 } else { 8 }).collect();
+    // the real file stores these as int32 (type 5), not uint32
+    kv_list(out, "gemma4.attention.head_count_kv", 5, &kv);
+    kv_u32(out, "gemma4.attention.sliding_window", 1024);
+    let pattern: Vec<u32> = (0..30).map(|i| u32::from(i % 6 != 5)).collect();
+    kv_list(out, "gemma4.attention.sliding_window_pattern", 7, &pattern);
+    kv_u32(out, "gemma4.attention.key_length", 512);
+    kv_u32(out, "gemma4.attention.key_length_swa", 256);
+    6
+}
+
+/// The attention part of the Qwen3.8 header (65 layers, only every 4th keeps a KV cache).
+fn qwen_like(out: &mut Vec<u8>) -> u64 {
+    kv_u32(out, "qwen35.block_count", 65);
+    kv_u32(out, "qwen35.attention.head_count_kv", 4);
+    kv_u32(out, "qwen35.attention.key_length", 256);
+    kv_u32(out, "qwen35.full_attention_interval", 4);
+    kv_u32(out, "qwen35.ssm.conv_kernel", 4);
+    kv_u32(out, "qwen35.ssm.state_size", 128);
+    kv_u32(out, "qwen35.ssm.group_count", 16);
+    kv_u32(out, "qwen35.ssm.time_step_rank", 48);
+    kv_u32(out, "qwen35.ssm.inner_size", 6144);
+    9
+}
+
+fn estimate_bytes(block: &str, size_gb: f64, context: u32) -> u64 {
+    let head = "[server]\nlisten = \"127.0.0.1:1234\"\n[gpu]\n[backend.llamacpp]\nenabled = true\n";
+    let block = block.replace(
+        &format!("size_gb = {size_gb:.1}"),
+        &format!("size_gb = {size_gb}"),
+    );
+    let config =
+        Config::parse(&format!("{head}{block}")).unwrap_or_else(|e| panic!("{e}\n{block}"));
+    eliezer_core::memory::estimate(&config.model[0], context, 1, None, None).unwrap()
+}
+
+#[test]
+fn sliding_window_layout_is_worked_out_and_makes_the_estimate_realistic() {
+    let t = Temp::new();
+    let path = t.file("g.gguf", &gguf("gemma4", gemma_like));
+    let info = read_gguf(&path).unwrap();
+    assert_eq!(info.layers, Some(30));
+    assert_eq!((info.swa_layers, info.window), (Some(25), Some(1024)));
+    assert_eq!(
+        (info.kv_heads, info.head_dim),
+        (Some(8), Some(256)),
+        "the window layers"
+    );
+    assert_eq!(
+        (info.full_kv_heads, info.full_head_dim),
+        (Some(2), Some(512)),
+        "the full layers"
+    );
+    assert!(!info.hybrid_unresolved());
+    let target = Path::new("/var/lib/eliezer/models/gemma.gguf");
+    let block = block("gemma", target, 16_800_000_000, Some(&info));
+    assert!(
+        block.contains("swa_layers = 25, window = 1024, full_kv_heads = 2, full_head_dim = 512"),
+        "{block}"
+    );
+    assert!(!block.contains("not understood"));
+    // 16.8 GB of weights plus a small cache: far below the card, not the 49 GB of a naive estimate
+    let realistic = estimate_bytes(&block, 16.8, 32768);
+    assert!(
+        (17_000_000_000..21_000_000_000).contains(&realistic),
+        "{realistic}"
+    );
+    let naive = GgufInfo {
+        swa_layers: None,
+        window: None,
+        full_kv_heads: None,
+        full_head_dim: None,
+        kv_heads: Some(8),
+        head_dim: Some(512),
+        ..info
+    };
+    let wrong = estimate_bytes(
+        &self::block("gemma", target, 16_800_000_000, Some(&naive)),
+        16.8,
+        32768,
+    );
+    assert!(
+        wrong > 30_000_000_000,
+        "the layout is what makes the difference: {wrong}"
+    );
+}
+
+#[test]
+fn linear_attention_layout_is_worked_out_and_makes_the_estimate_realistic() {
+    let t = Temp::new();
+    let path = t.file("q.gguf", &gguf("qwen35", qwen_like));
+    let info = read_gguf(&path).unwrap();
+    assert_eq!(info.layers, Some(65));
+    assert_eq!(
+        info.linear_layers,
+        Some(49),
+        "65 layers, every 4th is full attention: 16 full"
+    );
+    // 4 bytes * (48 heads * 128 * 128 recurrent state + 3 * (6144 + 2 * 16 * 128) convolution state)
+    assert_eq!(info.state_bytes, Some(3_268_608));
+    assert_eq!((info.kv_heads, info.head_dim), (Some(4), Some(256)));
+    let block = block(
+        "qwen",
+        Path::new("/var/lib/eliezer/models/q.gguf"),
+        16_800_000_000,
+        Some(&info),
+    );
+    assert!(
+        block.contains("linear_layers = 49, state_bytes = 3268608"),
+        "{block}"
+    );
+    let realistic = estimate_bytes(&block, 16.8, 32768);
+    assert!(
+        (17_000_000_000..21_500_000_000).contains(&realistic),
+        "{realistic}"
+    );
+}
+
+#[test]
+fn announced_but_unknown_layouts_are_flagged() {
+    let t = Temp::new();
+    // a sliding window without a pattern: we cannot tell which layers use it
+    let path = t.file(
+        "w.gguf",
+        &gguf("gptoss", |out| {
+            kv_u32(out, "gptoss.attention.sliding_window", 128);
+            1
+        }),
+    );
+    let info = read_gguf(&path).unwrap();
+    assert!(info.hybrid_unresolved());
+    assert!(
+        block("w", Path::new("/m/w.gguf"), 1_000_000_000, Some(&info))
+            .contains("announced but not understood")
+    );
 }

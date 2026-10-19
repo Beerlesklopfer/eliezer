@@ -98,3 +98,7 @@ depends = "$auto, adduser, libstdc++6"
 [[test]]
 name = "cli_client"
 path = "../../tests/m4/cli_client.rs"
+
+[[test]]
+name = "keys_cli"
+path = "../../tests/m4/keys_cli.rs"

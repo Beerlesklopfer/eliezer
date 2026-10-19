@@ -164,6 +164,11 @@ fn error(error: Error, anth: bool) -> Response {
         ),
         Error::Busy => (409, "busy", "Model is still in use".to_owned()),
         Error::Backend => (502, "backend_error", "Backend has failed".to_owned()),
+        Error::ModelFile => (
+            502,
+            "model_file",
+            "The model file cannot be read; it may have been moved or deleted. Check source.file of the model in the configuration".to_owned(),
+        ),
         Error::InvalidRequest => (
             400,
             "invalid_request",
@@ -178,6 +183,51 @@ fn error(error: Error, anth: bool) -> Response {
         anth,
     )
 }
+/// Compares two secrets without stopping at the first differing byte, so the time taken does not
+/// tell a caller how much of a guess was right.
+fn same_secret(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0_u8, |diff, (x, y)| diff | (x ^ y)) == 0
+}
+
+/// The answer to a missing or wrong API key. The OpenAI dialect carries `code: invalid_api_key`
+/// (what its client libraries look for) and the Anthropic dialect its own error type. The text
+/// never repeats the key that was sent.
+fn unauthorized(anth: bool, key_sent: bool) -> Response {
+    let message = match (key_sent, anth) {
+        (true, _) => "Incorrect API key provided.",
+        (false, false) => {
+            "You didn't provide an API key. Send it as 'Authorization: Bearer <key>'."
+        }
+        (false, true) => {
+            "You didn't provide an API key. Send it in the 'x-api-key' header or as 'Authorization: Bearer <key>'."
+        }
+    };
+    let mut response = if anth {
+        failure(
+            StatusCode::UNAUTHORIZED,
+            "authentication_error",
+            message,
+            true,
+        )
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": {
+                "message": message,
+                "type": "authentication_error",
+                "param": null,
+                "code": "invalid_api_key",
+            }})),
+        )
+            .into_response()
+    };
+    response.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        header::HeaderValue::from_static("Bearer"),
+    );
+    response
+}
+
 async fn authorize(State(app): State<App>, request: Request, next: Next) -> Response {
     let anth = request.uri().path().starts_with("/v1/messages")
         || request.headers().contains_key("anthropic-version");
@@ -191,17 +241,18 @@ async fn authorize(State(app): State<App>, request: Request, next: Next) -> Resp
         .get("x-api-key")
         .and_then(|h| h.to_str().ok());
     let keys = app.keys.get();
-    if !keys.is_empty()
-        && !keys
-            .iter()
-            .any(|key| bearer == Some(key.as_str()) || (anth && api == Some(key.as_str())))
-    {
-        return failure(
-            StatusCode::UNAUTHORIZED,
-            "authentication_error",
-            "Authentication required",
-            anth,
-        );
+    if !keys.is_empty() {
+        // `x-api-key` is the Anthropic header; the OpenAI dialect takes the Bearer token only.
+        let sent = bearer.or(if anth { api } else { None });
+        // Every key is compared, so which one matched cannot be told from the time taken.
+        let matched = sent.is_some_and(|sent| {
+            keys.iter().fold(false, |found, key| {
+                found | same_secret(key.as_bytes(), sent.as_bytes())
+            })
+        });
+        if !matched {
+            return unauthorized(anth, sent.is_some());
+        }
     }
     next.run(request).await
 }

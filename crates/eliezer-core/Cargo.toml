@@ -27,3 +27,7 @@ path = "../../tests/m3/scheduler.rs"
 [[test]]
 name = "import"
 path = "../../tests/m4/import.rs"
+
+[[test]]
+name = "keys"
+path = "../../tests/m4/keys.rs"

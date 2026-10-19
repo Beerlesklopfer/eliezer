@@ -22,7 +22,7 @@ pub struct Options {
 
 /// Loads the configuration for the import. A broken model list must not block the import (the
 /// import is what writes working entries), so the models are ignored when they do not validate.
-fn load(path: &Path) -> Result<(Config, String), String> {
+pub(crate) fn load(path: &Path) -> Result<(Config, String), String> {
     let text = std::fs::read_to_string(path).map_err(|_| {
         format!(
             "Configuration file {} cannot be read (is it there, and are you root?)",
@@ -287,4 +287,26 @@ pub fn run(options: &Options) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// `eliezer --suggest FILE.gguf`: prints the `[[model]]` block for one file without changing
+/// anything. Handy for models that are already in the configuration and need a better `arch`.
+pub fn suggest(file: &Path) -> ExitCode {
+    let size = match std::fs::metadata(file) {
+        Ok(meta) if meta.is_file() => meta.len(),
+        _ => {
+            eprintln!("{} is not a readable file", file.display());
+            return ExitCode::from(2);
+        }
+    };
+    let target = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
+    let info = match import::read_gguf(&target) {
+        Ok(info) => Some(info),
+        Err(error) => {
+            eprintln!("Note: the GGUF header cannot be read ({error}); the figures are estimates.");
+            None
+        }
+    };
+    print!("{}", import::suggest(&target, size, info.as_ref()));
+    ExitCode::SUCCESS
 }

@@ -90,6 +90,29 @@ fn getent(database: &str, name: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// A local or directory account: numeric ids and the home directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Account {
+    pub uid: u32,
+    pub gid: u32,
+    pub home: PathBuf,
+}
+
+/// Parses one line of `getent passwd` (`name:x:uid:gid:gecos:home:shell`).
+pub fn parse_account(line: &str) -> Option<Account> {
+    let fields: Vec<&str> = line.trim().split(':').collect();
+    Some(Account {
+        uid: fields.get(2)?.parse().ok()?,
+        gid: fields.get(3)?.parse().ok()?,
+        home: PathBuf::from(fields.get(5).filter(|h| h.starts_with('/'))?),
+    })
+}
+
+/// Looks an account up on the running system (local files, SSSD, LDAP).
+pub fn account(name: &str) -> Option<Account> {
+    parse_account(&getent("passwd", name)?)
+}
+
 /// Like [`resolve_owner`], but looks the accounts up on the running system.
 pub fn resolve_owner_system(
     run_user: Option<&str>,
@@ -348,8 +371,17 @@ pub struct GgufInfo {
     pub layers: Option<u64>,
     pub kv_heads: Option<u64>,
     pub head_dim: Option<u64>,
-    /// Sliding-window or recurrent layers: the estimate needs extra fields for those.
+    /// Sliding-window or recurrent layers were announced in the header.
     pub hybrid: bool,
+    /// Layers with a sliding attention window, and the window size (tokens).
+    pub swa_layers: Option<u64>,
+    pub window: Option<u64>,
+    /// KV heads and head size of the full-attention layers, when they differ from the others.
+    pub full_kv_heads: Option<u64>,
+    pub full_head_dim: Option<u64>,
+    /// Recurrent (linear attention) layers and the bytes of state each keeps per sequence.
+    pub linear_layers: Option<u64>,
+    pub state_bytes: Option<u64>,
     /// The file carries a tokenizer (language models do, diffusion models do not).
     pub has_tokenizer: bool,
 }
@@ -363,6 +395,12 @@ pub enum Kind {
     Image,
 }
 impl GgufInfo {
+    /// The header announces sliding-window or recurrent layers, but the layout could not be worked
+    /// out, so the memory estimate treats every layer as full attention (too high).
+    pub fn hybrid_unresolved(&self) -> bool {
+        self.hybrid && self.swa_layers.is_none() && self.linear_layers.is_none()
+    }
+
     pub fn kind(&self) -> Kind {
         if !self.has_tokenizer && self.layers.is_none() {
             Kind::Image
@@ -402,6 +440,8 @@ impl From<io::Error> for GgufError {
 
 enum Value {
     Number(u64),
+    /// A small numeric or boolean array (per-layer head counts, the sliding-window pattern).
+    List(Vec<u64>),
     Text(String),
     Other,
 }
@@ -452,7 +492,17 @@ impl<R: Read> Reader<R> {
                 self.0.read_exact(&mut raw[..width])?;
                 Value::Number(u64::from_le_bytes(raw))
             }
-            1 | 3 | 5 | 6 | 7 | 11 | 12 => {
+            // Signed integers (the real Gemma 4 file stores its per-layer head counts as int32).
+            1 | 3 | 5 | 11 => {
+                let width = size(kind).ok_or(GgufError::Malformed)?;
+                let mut raw = [0_u8; 8];
+                self.0.read_exact(&mut raw[..width])?;
+                if raw[width - 1] & 0x80 != 0 {
+                    raw[width..].fill(0xff);
+                }
+                Value::Number(i64::from_le_bytes(raw).max(0) as u64)
+            }
+            6 | 7 | 12 => {
                 self.skip(size(kind).ok_or(GgufError::Malformed)? as u64)?;
                 Value::Other
             }
@@ -479,15 +529,21 @@ impl<R: Read> Reader<R> {
                     }
                     _ => {
                         let width = size(inner).ok_or(GgufError::Malformed)? as u64;
-                        // Small numeric arrays (per-layer head counts) are kept as their maximum.
-                        if count > 0 && count <= 4096 && matches!(inner, 0 | 2 | 4 | 10) {
-                            let mut largest = 0;
+                        // Small numeric and boolean arrays (per-layer head counts, the
+                        // sliding-window pattern) are kept; anything else is skipped.
+                        if count > 0
+                            && count <= 4096
+                            && matches!(inner, 0 | 1 | 2 | 3 | 4 | 5 | 7 | 10 | 11)
+                        {
+                            let mut items = Vec::with_capacity(count as usize);
                             for _ in 0..count {
-                                if let Value::Number(n) = self.value(inner, depth + 1)? {
-                                    largest = largest.max(n);
+                                if inner == 7 {
+                                    items.push(u64::from(self.bytes::<1>()?[0] != 0));
+                                } else if let Value::Number(n) = self.value(inner, depth + 1)? {
+                                    items.push(n);
                                 }
                             }
-                            Value::Number(largest)
+                            Value::List(items)
                         } else {
                             self.skip(width.checked_mul(count).ok_or(GgufError::Malformed)?)?;
                             Value::Other
@@ -514,6 +570,7 @@ pub fn read_gguf(path: &Path) -> Result<GgufInfo, GgufError> {
         return Err(GgufError::Malformed);
     }
     let mut numbers = BTreeMap::new();
+    let mut lists: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     let mut texts = BTreeMap::new();
     let mut hybrid = false;
     for _ in 0..count {
@@ -526,6 +583,9 @@ pub fn read_gguf(path: &Path) -> Result<GgufInfo, GgufError> {
             Value::Number(n) => {
                 numbers.insert(key, n);
             }
+            Value::List(items) => {
+                lists.insert(key, items);
+            }
             Value::Text(t) => {
                 texts.insert(key, t);
             }
@@ -537,19 +597,80 @@ pub fn read_gguf(path: &Path) -> Result<GgufInfo, GgufError> {
         .cloned()
         .ok_or(GgufError::Malformed)?;
     let number = |suffix: &str| numbers.get(&format!("{architecture}.{suffix}")).copied();
+    let list = |suffix: &str| lists.get(&format!("{architecture}.{suffix}"));
+    let layers = number("block_count");
     let heads = number("attention.head_count");
     let embedding = number("embedding_length");
-    let head_dim = number("attention.key_length").or_else(|| Some(embedding? / heads?.max(1)));
-    Ok(GgufInfo {
+    let key_length = number("attention.key_length");
+    let default_dim = key_length.or_else(|| Some(embedding? / heads?.max(1)));
+    let kv_scalar = number("attention.head_count_kv");
+    let kv_list = list("attention.head_count_kv");
+
+    let mut info = GgufInfo {
         name: texts.get("general.name").cloned(),
         context_length: number("context_length"),
-        layers: number("block_count"),
-        kv_heads: number("attention.head_count_kv").or(heads),
-        head_dim,
+        layers,
+        kv_heads: kv_scalar
+            .or_else(|| kv_list.and_then(|l| l.iter().copied().max()))
+            .or(heads),
+        head_dim: default_dim,
         hybrid,
         has_tokenizer: texts.contains_key("tokenizer.ggml.model"),
-        architecture,
-    })
+        architecture: architecture.clone(),
+        ..GgufInfo::default()
+    };
+
+    // Sliding-window models (Gemma): a per-layer pattern says which layers use the window; the
+    // others attend to everything and often have their own head count and size.
+    if let (Some(pattern), Some(window)) = (
+        list("attention.sliding_window_pattern"),
+        number("attention.sliding_window"),
+    ) {
+        let swa = pattern.iter().filter(|p| **p == 1).count() as u64;
+        let per_layer = |wanted: bool| -> Option<u64> {
+            match kv_list {
+                Some(l) if l.len() == pattern.len() => l
+                    .iter()
+                    .zip(pattern)
+                    .find(|(_, p)| (**p == 1) == wanted)
+                    .map(|(k, _)| *k),
+                _ => kv_scalar,
+            }
+        };
+        info.swa_layers = Some(swa);
+        info.window = Some(window);
+        info.kv_heads = per_layer(true).or(info.kv_heads);
+        info.head_dim = number("attention.key_length_swa").or(default_dim);
+        let full_kv = per_layer(false);
+        if full_kv.is_some() && full_kv != info.kv_heads {
+            info.full_kv_heads = full_kv;
+        }
+        if key_length.is_some() && key_length != info.head_dim {
+            info.full_head_dim = key_length;
+        }
+    }
+
+    // Hybrid models with linear attention (Qwen3.5/3.8): only every n-th layer keeps a KV cache,
+    // the others keep a fixed recurrent state per sequence.
+    if let (Some(interval), Some(total)) = (number("full_attention_interval"), layers)
+        && let Some(full) = total.checked_div(interval)
+    {
+        info.linear_layers = Some(total - full);
+        if let (Some(kernel), Some(state), Some(groups), Some(rank), Some(inner)) = (
+            number("ssm.conv_kernel"),
+            number("ssm.state_size"),
+            number("ssm.group_count"),
+            number("ssm.time_step_rank"),
+            number("ssm.inner_size"),
+        ) && rank > 0
+        {
+            // 4-byte values: the recurrent matrix per head plus the convolution state.
+            let recurrent = rank * state * (inner / rank);
+            let conv = kernel.saturating_sub(1) * (inner + 2 * groups * state);
+            info.state_bytes = Some(4 * (recurrent + conv));
+        }
+    }
+    Ok(info)
 }
 
 /// A model key derived from a file name: lowercase, only characters the configuration accepts.
@@ -606,15 +727,27 @@ pub fn block(key: &str, target: &Path, size: u64, info: Option<&GgufInfo>) -> St
                 (info.layers, info.kv_heads, info.head_dim)
             {
                 text += &format!("size_gb = {gb:.1}\n");
-                text += &format!(
-                    "arch = {{ layers = {layers}, kv_heads = {kv_heads}, head_dim = {head_dim} }}\n"
-                );
+                let mut arch =
+                    format!("layers = {layers}, kv_heads = {kv_heads}, head_dim = {head_dim}");
+                if let (Some(swa), Some(window)) = (info.swa_layers, info.window) {
+                    arch += &format!(", swa_layers = {swa}, window = {window}");
+                }
+                if let Some(n) = info.full_kv_heads {
+                    arch += &format!(", full_kv_heads = {n}");
+                }
+                if let Some(n) = info.full_head_dim {
+                    arch += &format!(", full_head_dim = {n}");
+                }
+                if let (Some(linear), Some(bytes)) = (info.linear_layers, info.state_bytes) {
+                    arch += &format!(", linear_layers = {linear}, state_bytes = {bytes}");
+                }
+                text += &format!("arch = {{ {arch} }}\n");
             } else {
                 // Without the attention shape the estimate cannot be computed; state a plain figure.
                 text += &format!("vram_gb = {:.1}  # estimate: file size + 20%\n", gb * 1.2);
             }
-            if info.hybrid {
-                text += "# Sliding-window or recurrent layers: add swa_layers/window or linear_layers/state_bytes to arch.\n";
+            if info.hybrid_unresolved() {
+                text += "# Sliding-window or recurrent layers were announced but not understood: the estimate treats every layer as full attention and is too high.\n";
             }
         }
         None => {

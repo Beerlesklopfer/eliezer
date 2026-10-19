@@ -108,3 +108,61 @@ fn real_symlink_escape_and_dangling_symlinks_are_rejected() {
         Some(2)
     );
 }
+
+#[test]
+fn check_config_warns_about_moved_files_but_still_succeeds() {
+    let temp = Temp::new();
+    let models = temp.0.join("models");
+    fs::create_dir(&models).unwrap();
+    let missing = models.join("moved-away.gguf");
+    let input = format!(
+        "{}\n[storage]\nmodels_dir={:?}\n[huggingface]\ncache_dir={:?}\n[backend.llamacpp]\nenabled=true\n[[model]]\nkey=\"m\"\nbackend=\"llamacpp\"\nsource={{ file={:?} }}\nkind=\"llm\"\nvram_gb=1.0\n",
+        minimal(),
+        models,
+        models.join("hf"),
+        missing
+    );
+    let path = temp.config(&input);
+    let output = run(&["--check-config", path.to_str().unwrap()]);
+    let (out, err) = (
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(output.status.success(), "{err}");
+    assert!(
+        err.contains("Warning:") && err.contains("moved-away.gguf") && err.contains("not found"),
+        "{err}"
+    );
+    assert!(
+        out.contains("Configuration OK") && out.contains("1 file problem"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_link_that_leaves_the_store_is_refused_with_advice() {
+    let temp = Temp::new();
+    let models = temp.0.join("models");
+    let elsewhere = temp.0.join("elsewhere");
+    fs::create_dir(&models).unwrap();
+    fs::create_dir(&elsewhere).unwrap();
+    fs::write(elsewhere.join("m.gguf"), b"x").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, models.join("out")).unwrap();
+    let input = format!(
+        "{}\n[storage]\nmodels_dir={:?}\n[huggingface]\ncache_dir={:?}\n[backend.llamacpp]\nenabled=true\n[[model]]\nkey=\"m\"\nbackend=\"llamacpp\"\nsource={{ file={:?} }}\nkind=\"llm\"\nvram_gb=1.0\n",
+        minimal(),
+        models,
+        models.join("hf"),
+        models.join("out/m.gguf")
+    );
+    let path = temp.config(&input);
+    let output = run(&["--check-config", path.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{err}");
+    assert!(
+        err.contains("storage.models_dir")
+            && err.contains("symbolic link")
+            && err.contains("--import"),
+        "{err}"
+    );
+}

@@ -17,6 +17,8 @@ pub enum BackendError {
     Crashed,
     Cancelled,
     InvalidRequest,
+    /// The model file is missing or unreadable (moved, deleted, wrong permissions).
+    ModelFile,
 }
 impl std::fmt::Display for BackendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -25,6 +27,7 @@ impl std::fmt::Display for BackendError {
             Self::Crashed => "Backend terminated unexpectedly",
             Self::Cancelled => "Request was cancelled",
             Self::InvalidRequest => "Invalid backend request",
+            Self::ModelFile => "The model file cannot be read",
         })
     }
 }
@@ -123,6 +126,8 @@ pub struct FakeConfig {
     pub chunk_delay: Duration,
     pub chunks: Vec<Chunk>,
     pub fail_load: bool,
+    /// Loading fails as if the model file had been moved away.
+    pub missing_file: bool,
     pub crash_after: Option<usize>,
 }
 impl Default for FakeConfig {
@@ -139,6 +144,7 @@ impl Default for FakeConfig {
                 },
             ],
             fail_load: false,
+            missing_file: false,
             crash_after: None,
         }
     }
@@ -168,6 +174,9 @@ impl Backend for FakeBackend {
                 return Err(BackendError::InvalidRequest);
             }
             tokio::time::sleep(self.config.load_delay).await;
+            if self.config.missing_file {
+                return Err(BackendError::ModelFile);
+            }
             if self.config.fail_load {
                 return Err(BackendError::Unavailable);
             }

@@ -190,7 +190,7 @@ or `cpu`. A package without a runtime would start but could not load any model, 
 
 ```bash
 scripts/build-deb.sh            # rocm when ROCm is installed, otherwise cpu; or name the variant
-sudo apt install ./target/debian/eliezer_0.3.0-1_amd64.deb
+sudo apt install ./target/debian/eliezer_0.4.0-1_amd64.deb
 ```
 
 The ROCm variant needs AMD's ROCm libraries (`/opt/rocm`, installed by AMD's own installer, not by
@@ -334,8 +334,51 @@ command lines. Token and API key files configured later must be owned by the
 service user and have mode `0600`. They are located outside the model store
 and are mounted separately read-only in the container.
 
-Authentication is active as soon as `server.api_keys_file` is set; without it the API
-is open, so restrict the published address to the local machine in that case. Token
-retrieval from Hugging Face is not implemented yet (M5).
+There are two different secrets:
+
+| Secret | Direction | Where it lives |
+|---|---|---|
+| **API key** (an OpenAI-style token `sk-...`) | clients such as MultiGPT send it **to** Eliezer | `server.api_keys_file` (service); `~/.config/eliezer/api_key` (the user's copy for the command line client) |
+| **Hugging Face token** (`hf_...`) | Eliezer sends it **to** Hugging Face to download models (M5) | `huggingface.token_file` (service); `~/.config/eliezer/hf_key` (the user's copy, the source of `--set-hf-token`) |
+
+Both service files are mode `0600` and belong to the service account (`server.run_user`). Neither
+secret is ever a command-line argument, a log line or part of the configuration.
+
+### API key (the OpenAI token)
+
+Without `server.api_keys_file` the API is open, so restrict the address to the local machine in
+that case. Create the first key (as root, because it writes below `/etc/eliezer`):
+
+```bash
+sudo eliezer --new-key --name multigpt --save    # prints the key once
+sudo systemctl reload eliezer                    # the running service reads the new key
+eliezer --list-keys                              # names and masked keys, never the keys
+sudo eliezer --revoke-key multigpt               # then reload again
+```
+
+`--new-key` makes a random key (256 bits), stores it in the key file (named in the configuration,
+otherwise `keys` next to the configuration file, which it then enters into the configuration),
+and shows it **once**. `--save` also stores a copy in `~/.config/eliezer/api_key` of the user who
+ran `sudo`, which the command line client picks up (it never overwrites an existing file). Several
+keys can exist at the same time, one per client. Enter the key as the **API key** (the "OpenAI token")
+in the client, for example MultiGPT's provider settings; it sends it as `Authorization: Bearer <key>`.
+Anthropic clients may use the `x-api-key` header. A wrong or missing key is answered with
+`401` and `code: invalid_api_key`; `/healthz` stays open. If the last key is revoked the service
+refuses to start until a new one exists (it fails closed).
+
+### Hugging Face token
+
+```bash
+hf auth login                  # once, as usual; this creates ~/.cache/huggingface/token
+sudo eliezer --set-hf-token    # copies it to the service
+```
+
+The token is never an argument. It is taken from the first of these that has one: standard input
+(`... | sudo eliezer --set-hf-token`), `~/.config/eliezer/hf_key`, the default file of the Hugging
+Face tools (`$HF_TOKEN_PATH`, `$HF_HOME/token`, otherwise `~/.cache/huggingface/token`), and
+finally a prompt without echo. Under `sudo` these are the files of the user who ran `sudo`. The
+command says which one it used and warns when that file can be read by other users (`chmod 600`).
+It must look like `hf_...`; it is stored in `huggingface.token_file` (default `hf-token` next to
+the configuration). Model downloads that use it arrive with M5.
 
 Tests and measured results: [tests/README.md](tests/README.md).

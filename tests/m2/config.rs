@@ -181,3 +181,70 @@ fn a_known_field_in_the_wrong_section_says_where_it_belongs() {
         "{error}"
     );
 }
+
+#[test]
+fn moved_files_and_directories_are_reported_as_problems_not_errors() {
+    let dir = std::env::temp_dir().join(format!("eliezer-problems-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("models")).unwrap();
+    std::fs::write(dir.join("models/here.gguf"), b"x").unwrap();
+    std::fs::create_dir(dir.join("models/a-directory.gguf")).unwrap();
+    let text = |models_dir: &str, files: &[(&str, &str)]| {
+        let mut t = format!(
+            "[server]\nlisten = \"127.0.0.1:1234\"\n[storage]\nmodels_dir = \"{models_dir}\"\n[huggingface]\ncache_dir = \"{models_dir}/hf\"\n[gpu]\n[backend.llamacpp]\nenabled = true\n"
+        );
+        for (key, file) in files {
+            t += &format!(
+                "[[model]]\nkey = \"{key}\"\nbackend = \"llamacpp\"\nsource = {{ file = \"{file}\" }}\nkind = \"llm\"\nvram_gb = 1.0\n"
+            );
+        }
+        t
+    };
+    let store = dir.join("models");
+    let (here, gone, folder) = (
+        store.join("here.gguf"),
+        store.join("gone.gguf"),
+        store.join("a-directory.gguf"),
+    );
+    let config = Config::parse(&text(
+        store.to_str().unwrap(),
+        &[
+            ("ok", here.to_str().unwrap()),
+            ("moved", gone.to_str().unwrap()),
+            ("folder", folder.to_str().unwrap()),
+        ],
+    ))
+    .unwrap();
+    let problems = config.file_problems();
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("'moved'") && p.contains("not found") && p.contains("--import")),
+        "{problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("'folder'") && p.contains("not a regular file")),
+        "{problems:?}"
+    );
+    // a model store that is gone is reported with its path
+    let missing = dir.join("nowhere");
+    let config = Config::parse(&text(missing.to_str().unwrap(), &[])).unwrap();
+    let problems = config.file_problems();
+    assert!(
+        problems.len() == 1
+            && problems[0].contains("nowhere")
+            && problems[0].contains("storage.models_dir"),
+        "{problems:?}"
+    );
+    // everything in place: no problem
+    let config = Config::parse(&text(
+        store.to_str().unwrap(),
+        &[("ok", here.to_str().unwrap())],
+    ))
+    .unwrap();
+    assert!(config.file_problems().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
