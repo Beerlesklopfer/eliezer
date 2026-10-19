@@ -5,6 +5,7 @@ eliezer (0.2.0) UNRELEASED; urgency=low
   * Begrenze Modellpfade einschließlich Symlinks auf die zentrale Ablage.
   * Ergänze CLI, Bereitschaftsendpunkt, Protokollierung und Signalbehandlung.
   * Richte Linux-CI, systemd-Unit und Containerbau mit Rust 1.88 ein.
+  * Prüfe in der GitHub-CI zusätzlich den Container-Bau (Image-Build ohne Push).
   * Stelle Compose-Varianten für Bind-Mount, Modell-Volume und GPU-Geräte bereit.
   * Dokumentiere Installation und Rechte in INSTALL.MD sowie Prüfungen unter tests/m2.
 
