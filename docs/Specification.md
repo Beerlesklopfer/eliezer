@@ -77,6 +77,9 @@ vram_budget_gb = 24.0               # total memory of the card (decimal GB, 10^9
 reserve_gb = 2.0                    # for display/system
 measure = "auto"                    # "auto" | "nvml" | "nvidia-smi" | "sysfs" | "rocm-smi" | "none"
 
+[huggingface]
+search = true                        # allow the search of Hugging Face (public metadata, no token)
+
 [cpu]                                # optional; language models may run in system memory (section 7a)
 ram_budget_gb = 0.0                  # memory for models on the CPU (decimal GB); 0 = CPU placement is off
 reserve_gb = 4.0                     # kept free for the system
@@ -243,6 +246,7 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
   "cpu": {…}}}`. The `cpu` pool appears only with a RAM budget. `max_context_length` is the largest
   context that fits the pool's budget (null when none does). Clients such as MultiGPT use this instead of
   estimating from the file size; the calculation uses the `arch` of the model (section 6).
+- `GET /api/v1/hub/search`, `GET /api/v1/hub/models/{org}/{repo}`: search of Hugging Face for model candidates (section 9.1).
 - `GET /healthz` → 200 `ok` (without authentication).
 - `POST /v1/images/generations` (OpenAI form: `prompt`, `n`, `size`, `response_format = "b64_json"`)
   for models with `kind = "image"`; response `{"created": <unix>, "data": [{"b64_json": "…"}]}`.
@@ -267,6 +271,8 @@ The `eliezer` binary is also a client of the running service (synchronous HTTP/1
 | `load MODEL [--context N] [--parallel N]` | `POST /api/v1/models/load` | load time and applied configuration |
 | `unload [MODEL \| --all]` | `POST /api/v1/models/unload` | unloaded models; without argument the only loaded model |
 | `run MODEL [PROMPT]` | `POST /v1/chat/completions` (SSE) | tokens as they arrive; reasoning dimmed (stderr when piped); `--stats` |
+| `search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]` | `GET /api/v1/hub/search` | candidate repositories on Hugging Face; nothing is downloaded |
+| `inspect ORG/REPO` | `GET /api/v1/hub/models/{org}/{repo}` | files, quantizations, backend support and fit of one repository |
 | `help` | – | overview |
 
 Global options: `--host URL` (else `ELIEZER_HOST`, else `server.listen` of the configuration with
@@ -470,7 +476,32 @@ image generation), model format, quantization, license and suitability for the a
 and the VRAM budget. Search results are initially candidates: they are not automatically
 downloaded, added to the allowlist or executed. Before adoption, the
 model card, required additional files and the actual backend support are checked.
-The search interface and result format will be specified before implementation in M5.
+
+**Interface (M5-00).** Read only; nothing is downloaded and the allowlist does not change. The service
+reads the public metadata of Hugging Face without a token (`[huggingface] search = false` switches it off).
+
+- `GET /api/v1/hub/search?q=&task=&format=&license=&limit=&details=` → `{"object": "list", "data": [{"repo",
+  "downloads", "likes", "task", "license", "gguf", "detail"}], "budgets": {"gpu_bytes", "ram_bytes"}}`.
+  `task` is `any|llm|vision|embedding|image` (the `pipeline_tag` of Hugging Face), `format` is `gguf` (default)
+  or `safetensors`, `license` a license tag, `limit` 1 to 20 (default 10). `q` or `task` is required, `q` has at
+  most 100 characters. With `details=true` the first 10 hits carry `detail` (as below), else it is `null`.
+- `GET /api/v1/hub/models/{org}/{repo}` → `{"repo", "sha", "task", "license", "gated", "downloads",
+  "architecture", "support": {"level": "verified|expected|unsupported|unknown", "backend"}, "variants":
+  [{"file", "quantization", "bytes", "parts", "estimate_bytes", "fit": "gpu|cpu|too_large"}], "projector":
+  {"file", "bytes"} | null, "required_files": [{"file", "bytes"}]}`.
+  `sha` is the commit of the listing; a later download pins it. `variants` are the weight files (all parts of a
+  split file count as one). `estimate_bytes` is the file size plus 20 %, plus the vision projector (language
+  model) or the smallest text encoder and VAE (image model): a rough figure, the exact one comes from the GGUF
+  header (`eliezer --suggest`). `fit` compares it with the GPU budget, then the RAM budget.
+  `support.level` is `verified` for architectures served and checked here, `expected` for architectures a runtime
+  lists but that were not checked here, `unsupported` for unknown ones, `unknown` when Hugging Face reports none.
+- Errors: 400 `invalid_request` (bad parameters), 403 `hub_disabled`, 404 `not_found`, 502 `hub_unreachable` or
+  `hub_bad_response`, 503 `overloaded` (Hugging Face limits requests). A repository name is validated
+  (`Organisation/Repository`, letters, digits, `.`, `_`, `-`) before it becomes part of a URL.
+- Command line: `eliezer search [TEXT] [--task] [--format] [--license] [--limit] [--details]` and
+  `eliezer inspect ORG/REPO`.
+- Before adopting a candidate the model card, the required additional files and the actual backend support are
+  checked by the administrator; downloading (M5-02) is a separate step.
 
 ### 9.2 Shared, persistent model store
 

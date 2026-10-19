@@ -31,6 +31,7 @@ queue_wait_secs = 120
 cache_dir = "/var/lib/eliezer/models/hf"
 cache_limit_gb = 200.0
 downloads = "on_request"
+search = true            # allow `eliezer search` (public metadata of Hugging Face, no token)
 
 [backend.mistralrs]
 enabled = true

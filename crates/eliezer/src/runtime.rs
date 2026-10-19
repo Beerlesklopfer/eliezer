@@ -253,13 +253,20 @@ pub fn build(config: Arc<Config>, keys: Vec<String>) -> Result<Runtime, &'static
     ));
     tracing::info!(event = "gpu", ?vendor, "GPU vendor determined");
     let listen = config.server.listen;
-    let app = App::new(
+    let mut app = App::new(
         config,
         supervisor.clone(),
         runtimes.backend.clone(),
         probe,
         keys,
     );
+    // The search of Hugging Face reads public metadata only; the configuration can switch it off.
+    match eliezer_hub::HfClient::new("https://huggingface.co", std::time::Duration::from_secs(15)) {
+        Ok(client) => app = app.with_hub(std::sync::Arc::new(client)),
+        Err(error) => {
+            tracing::warn!(event = "hub", %error, "The Hugging Face search is unavailable")
+        }
+    }
     Ok(Runtime {
         router: managed_router(app.clone()),
         supervisor,

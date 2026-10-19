@@ -397,3 +397,134 @@ pub fn stats_text(usage: Option<&Value>, eliezer: Option<&Value>) -> String {
     }
     out
 }
+
+/// The best place a repository's variants fit: `gpu`, `cpu` or `too large`.
+fn best_fit(detail: &Value) -> &'static str {
+    let fits = |name: &str| {
+        detail["variants"]
+            .as_array()
+            .is_some_and(|l| l.iter().any(|v| v["fit"] == name))
+    };
+    if fits("gpu") {
+        "gpu"
+    } else if fits("cpu") {
+        "cpu"
+    } else {
+        "too large"
+    }
+}
+
+/// `eliezer search`: the candidates; with details also the support by a runtime and the best fit.
+pub fn search_text(result: &Value) -> String {
+    let empty = Vec::new();
+    let hits = result["data"].as_array().unwrap_or(&empty);
+    if hits.is_empty() {
+        return "No repositories found.\n".to_owned();
+    }
+    let detailed = hits.iter().any(|h| h["detail"].is_object());
+    let rows: Vec<Vec<String>> = hits
+        .iter()
+        .map(|h| {
+            let mut row = vec![
+                h["repo"].as_str().unwrap_or("-").to_owned(),
+                opt_num(&h["downloads"]),
+                text(&h["license"]).unwrap_or("-").to_owned(),
+                text(&h["task"]).unwrap_or("-").to_owned(),
+            ];
+            if detailed {
+                let d = &h["detail"];
+                row.push(text(&d["support"]["level"]).unwrap_or("-").to_owned());
+                row.push(if d.is_object() {
+                    best_fit(d).to_owned()
+                } else {
+                    "-".to_owned()
+                });
+            }
+            row
+        })
+        .collect();
+    let mut out = if detailed {
+        table(
+            &[
+                "REPOSITORY",
+                "DOWNLOADS",
+                "LICENSE",
+                "TASK",
+                "SUPPORT",
+                "FITS",
+            ],
+            &rows,
+            &[1],
+        )
+    } else {
+        table(&["REPOSITORY", "DOWNLOADS", "LICENSE", "TASK"], &rows, &[1])
+    };
+    out.push_str("\nNothing is downloaded. `eliezer inspect ORG/REPO` lists files and fit of one repository.\n");
+    out
+}
+
+/// `eliezer inspect ORG/REPO`.
+pub fn inspect_text(detail: &Value) -> String {
+    let mut out = format!(
+        "Repository   {}\nCommit       {}\nLicense      {}{}\nTask         {}\nArchitecture {}\nSupport      {}{}\n",
+        detail["repo"].as_str().unwrap_or("-"),
+        text(&detail["sha"]).unwrap_or("-"),
+        text(&detail["license"]).unwrap_or("-"),
+        if detail["gated"] == true {
+            "  (gated: access must be requested on Hugging Face)"
+        } else {
+            ""
+        },
+        text(&detail["task"]).unwrap_or("-"),
+        text(&detail["architecture"]).unwrap_or("not reported"),
+        text(&detail["support"]["level"]).unwrap_or("unknown"),
+        text(&detail["support"]["backend"]).map_or_else(String::new, |b| format!("  ({b})")),
+    );
+    let empty = Vec::new();
+    let rows: Vec<Vec<String>> = detail["variants"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .map(|v| {
+            vec![
+                v["file"].as_str().unwrap_or("-").to_owned(),
+                text(&v["quantization"]).unwrap_or("-").to_owned(),
+                opt_bytes(&v["bytes"]),
+                opt_bytes(&v["estimate_bytes"]),
+                v["fit"].as_str().unwrap_or("-").replace('_', " "),
+            ]
+        })
+        .collect();
+    if rows.is_empty() {
+        out.push_str("\nNo weight files of a supported format.\n");
+    } else {
+        out.push('\n');
+        out.push_str(&table(
+            &["FILE", "QUANT", "SIZE", "NEEDS", "FITS"],
+            &rows,
+            &[2, 3],
+        ));
+        out.push_str("NEEDS is the file size plus 20 % (and the projector); the exact figure comes with `eliezer --suggest`.\n");
+    }
+    if let Some(p) = text(&detail["projector"]["file"]) {
+        out.push_str(&format!(
+            "\nVision projector: {p} ({})\n",
+            opt_bytes(&detail["projector"]["bytes"])
+        ));
+    }
+    if let Some(files) = detail["required_files"]
+        .as_array()
+        .filter(|l| !l.is_empty())
+    {
+        out.push_str("\nFurther files the model needs:\n");
+        for f in files {
+            out.push_str(&format!(
+                "  {} ({})\n",
+                f["file"].as_str().unwrap_or("-"),
+                opt_bytes(&f["bytes"])
+            ));
+        }
+    }
+    out.push_str("\nNothing is downloaded. Downloading is not implemented yet: put the files in the model store and run `eliezer --import`.\n");
+    out
+}

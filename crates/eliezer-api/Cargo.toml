@@ -14,6 +14,7 @@ serde_json.workspace = true
 eliezer-core.workspace = true
 eliezer-backend.workspace = true
 eliezer-gpu.workspace = true
+eliezer-hub = { workspace = true, default-features = false }
 tokio.workspace = true
 futures-core.workspace = true
 
@@ -35,3 +36,7 @@ path = "../../tests/contract/models.rs"
 [[test]]
 name = "behavior"
 path = "../../tests/m3/behavior.rs"
+
+[[test]]
+name = "hub_api"
+path = "../../tests/m5/hub_api.rs"

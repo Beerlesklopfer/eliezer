@@ -1,5 +1,6 @@
 //! HTTP interfaces of the model supervisor.
 pub mod anthropic;
+mod hub;
 use axum::{
     Json, Router,
     body::{Body, Bytes},
@@ -53,6 +54,8 @@ pub struct App {
     pub backend: Arc<dyn Backend>,
     pub probe: Arc<eliezer_gpu::Fallback>,
     pub keys: Arc<Shared<Vec<String>>>,
+    /// The source for the Hugging Face search; without one the search endpoints are off.
+    pub hub: Option<Arc<dyn eliezer_hub::Hub>>,
 }
 impl App {
     pub fn new(
@@ -68,7 +71,12 @@ impl App {
             backend,
             probe,
             keys: Arc::new(Shared::new(Arc::new(keys))),
+            hub: None,
         }
+    }
+    pub fn with_hub(mut self, hub: Arc<dyn eliezer_hub::Hub>) -> Self {
+        self.hub = Some(hub);
+        self
     }
     /// Swaps in a reloaded configuration and key list; requests in flight keep the old ones.
     pub fn replace(&self, config: Arc<Config>, keys: Vec<String>) {
@@ -99,6 +107,8 @@ pub fn managed_router(app: App) -> Router {
             .route("/api/v1/models/load", post(load))
             .route("/api/v1/models/unload", post(unload))
             .route("/api/v1/models/estimate", post(estimate_route))
+            .route("/api/v1/hub/search", get(hub::search))
+            .route("/api/v1/hub/models/{org}/{repo}", get(hub::detail))
             .route("/api/v1/status", get(status))
             .route("/v1/models", get(list))
             .route("/v1/chat/completions", post(chat))

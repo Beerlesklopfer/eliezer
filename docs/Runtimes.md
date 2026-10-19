@@ -78,3 +78,20 @@ model directory must be explicitly taken into account.
 Concrete backend versions and supported GPU combinations are documented as supported only after a
 confirmed build and model run. An installed library
 or successful device detection alone is not sufficient for that.
+
+## Hugging Face metadata API (probed 2026-10-20)
+
+Checked against the live service with `curl`, without a token; used by the search (`eliezer-hub`).
+
+- `GET https://huggingface.co/api/models?search=TEXT&filter=gguf&filter=license:LICENSE&pipeline_tag=TAG&sort=downloads&direction=-1&limit=N`
+  answers a JSON array. Each item has `id` (`Organisation/Repository`), `downloads`, `likes`, `tags`
+  (including `gguf` and `license:<tag>`), often `pipeline_tag` (`text-generation`, `image-text-to-text`,
+  `text-to-image`, `feature-extraction`), `createdAt`. It lists no files.
+- `GET https://huggingface.co/api/models/{org}/{repo}?blobs=true` answers an object with `sha` (the commit),
+  `pipeline_tag`, `tags`, `gated` (`false` or a string), `downloads`, `gguf` (`architecture`, `total`,
+  `totalFileSize`) and `siblings[]` with `rfilename`, `size` and `lfs.sha256`. `gguf.architecture` is
+  missing for some repositories (the support is then reported as `unknown`).
+- Seen: `lmstudio-community/olmOCR-2-7B-1025-GGUF` (architecture and license in the tags);
+  `abenzerps/Qwen-Image-2.1-Uncensored-Quantized` (sha `7959e658915f52274897fb573ffeda49de8dc16b`,
+  `gguf.architecture` = `qwen_image21`, files `text_encoders/…` and `vae/…`).
+- Status codes handled: 401, 403 and 404 as not found, 429 as busy, others as an unexpected answer.

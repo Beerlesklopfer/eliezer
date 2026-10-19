@@ -17,12 +17,15 @@ serde = { version = "1.0", features = ["derive"] }
 serde_path_to_error = "0.1.20"
 toml = "=0.9.8"
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 eliezer-backend = { path = "crates/eliezer-backend" }
 eliezer-gpu = { path = "crates/eliezer-gpu" }
 eliezer-llamacpp = { path = "crates/eliezer-llamacpp" }
+eliezer-hub = { path = "crates/eliezer-hub" }
+# Plain HTTPS client for the Hugging Face API; rustls, no OpenSSL (docs/Dependencies.md).
+reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls"] }
 serde_json = "1.0"
 futures-core = "0.3"
 nvml-wrapper = "=0.13.0"

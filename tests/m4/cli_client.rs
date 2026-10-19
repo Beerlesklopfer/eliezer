@@ -913,3 +913,102 @@ fn binding_an_occupied_address_names_the_address_and_the_reason() {
     assert!(text.contains(&format!("ss -ltnp | grep :{port}")), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn hub_detail() -> Value {
+    json!({
+        "repo": "org/Qwen-GGUF", "sha": "abc123", "task": "text-generation",
+        "license": "apache-2.0", "gated": false, "downloads": 100,
+        "architecture": "qwen3moe",
+        "support": {"level": "verified", "backend": "llamacpp"},
+        "variants": [
+            {"file": "q-Q4_K_M.gguf", "quantization": "Q4_K_M", "bytes": 4_000_000_000_u64,
+             "parts": 1, "estimate_bytes": 5_300_000_000_u64, "fit": "gpu"},
+            {"file": "q-F16.gguf", "quantization": "F16", "bytes": 20_000_000_000_u64,
+             "parts": 1, "estimate_bytes": 24_500_000_000_u64, "fit": "too_large"}],
+        "projector": {"file": "mmproj-q-F16.gguf", "bytes": 500_000_000},
+        "required_files": [{"file": "vae/v.safetensors", "bytes": 700_000_000}]
+    })
+}
+
+#[test]
+fn search_and_inspect_print_candidates_and_send_encoded_requests() {
+    let server = serve(Box::new(|r| {
+        if r.path.starts_with("/api/v1/hub/search") {
+            json_reply(
+                "200 OK",
+                &json!({"object": "list", "data": [
+                    {"repo": "org/Qwen-GGUF", "downloads": 1234, "likes": 1, "task": "text-generation",
+                     "license": "apache-2.0", "gguf": true, "detail": hub_detail()},
+                    {"repo": "org/Other-GGUF", "downloads": 5, "likes": 0, "task": null,
+                     "license": null, "gguf": true, "detail": null}]}),
+            )
+        } else if r.path == "/api/v1/hub/models/org/Qwen-GGUF" {
+            json_reply("200 OK", &hub_detail())
+        } else {
+            json_reply(
+                "404 Not Found",
+                &json!({"error": {"type": "not_found", "message": "The repository was not found on Hugging Face"}}),
+            )
+        }
+    }));
+    let url = server.url();
+    let run = |args: &[&str]| {
+        let mut all = vec!["--host", url.as_str()];
+        all.extend_from_slice(args);
+        eliezer(&all, &[], None)
+    };
+    let search = run(&[
+        "search",
+        "qwen",
+        "3 coder&x=1",
+        "--task",
+        "llm",
+        "--license",
+        "apache-2.0",
+        "--limit",
+        "5",
+        "--details",
+    ]);
+    assert_eq!(code(&search), 0, "{}", err(&search));
+    let text = out(&search);
+    assert!(
+        text.contains("REPOSITORY") && text.contains("SUPPORT") && text.contains("FITS"),
+        "{text}"
+    );
+    assert!(
+        text.contains("org/Qwen-GGUF") && text.contains("verified") && text.contains("gpu"),
+        "{text}"
+    );
+    assert!(text.contains("Nothing is downloaded"));
+    let path = &server.requests()[0].path;
+    // the text cannot add parameters: spaces and `&` and `=` are encoded
+    assert!(path.contains("q=qwen%203%20coder%26x%3D1"), "{path}");
+    for part in ["task=llm", "license=apache-2.0", "limit=5", "details=true"] {
+        assert!(path.contains(part), "{path}");
+    }
+
+    let inspect = run(&["inspect", "org/Qwen-GGUF"]);
+    assert_eq!(code(&inspect), 0, "{}", err(&inspect));
+    let text = out(&inspect);
+    for part in [
+        "qwen3moe",
+        "verified  (llamacpp)",
+        "Q4_K_M",
+        "5.3 GB",
+        "too large",
+        "mmproj-q-F16.gguf",
+        "vae/v.safetensors",
+        "Nothing is downloaded",
+    ] {
+        assert!(text.contains(part), "{part} missing in\n{text}");
+    }
+    let missing = run(&["inspect", "org/Missing"]);
+    assert_eq!(code(&missing), 1);
+    assert!(err(&missing).contains("not found"), "{}", err(&missing));
+    assert_eq!(code(&run(&["inspect"])), 2);
+    let json = run(&["inspect", "org/Qwen-GGUF", "--json"]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&out(&json)).unwrap()["sha"],
+        "abc123"
+    );
+}

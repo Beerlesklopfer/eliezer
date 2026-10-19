@@ -20,7 +20,7 @@ const SHORT: Duration = Duration::from_secs(15);
 const LONG: Duration = Duration::from_secs(3600);
 
 const COMMANDS: &[&str] = &[
-    "ls", "ps", "load", "unload", "status", "run", "show", "help",
+    "ls", "ps", "load", "unload", "status", "run", "show", "search", "inspect", "help",
 ];
 
 /// Complete help text of the program: service flags and client commands.
@@ -66,6 +66,11 @@ Commands (they use the HTTP API of the running service):
       --max-tokens N              Limit the answer length
       --reasoning LEVEL           none, low, medium or high
       --stats                     Print token statistics at the end (to stderr)
+  search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]
+                                  Search Hugging Face for model candidates (nothing is downloaded).
+                                  T: llm, vision, embedding or image; F: gguf (default) or safetensors;
+                                  --details also judges support and fit of each hit
+  inspect ORG/REPO                Files, quantizations, backend support and fit of one repository
   help                            This text
 
 Options for all commands:
@@ -212,7 +217,7 @@ fn parse(words: &[String], spec: &Spec) -> Res<Parsed> {
     }
     let (min, max) = spec.positional;
     if out.positional.len() < min {
-        return usage_err("A model name is missing");
+        return usage_err("An argument is missing; see `eliezer help`");
     }
     if out.positional.len() > max {
         return usage_err(format!("Unexpected argument {}", out.positional[max]));
@@ -233,6 +238,16 @@ fn spec_for(command: &str) -> Spec {
             positional: (0, 1),
         },
         "show" => Spec {
+            values: &[],
+            flags: &[],
+            positional: (1, 1),
+        },
+        "search" => Spec {
+            values: &["--task", "--format", "--license", "--limit"],
+            flags: &["--details"],
+            positional: (0, 8),
+        },
+        "inspect" => Spec {
             values: &[],
             flags: &[],
             positional: (1, 1),
@@ -271,6 +286,8 @@ fn run(command: &str, args: &[String], at: usize) -> Res<()> {
         "show" => cmd_show(&client, json, &parsed.positional[0]),
         "load" => cmd_load(&client, json, &parsed),
         "unload" => cmd_unload(&client, json, &parsed),
+        "search" => cmd_search(&client, json, &parsed),
+        "inspect" => cmd_inspect(&client, json, &parsed.positional[0]),
         _ => cmd_run(&client, json, &parsed),
     }
 }
@@ -533,6 +550,58 @@ fn cmd_show(client: &Client, json: bool, key: &str) -> Res<()> {
             "{}",
             format::show_text(model, entry, &client.endpoint.url())
         );
+    }
+    Ok(())
+}
+
+/// Percent-encodes everything but the unreserved characters, so user text cannot add parameters.
+fn urlencode(text: &str) -> String {
+    let mut out = String::new();
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn cmd_search(client: &Client, json: bool, parsed: &Parsed) -> Res<()> {
+    let mut query = vec![format!("q={}", urlencode(&parsed.positional.join(" ")))];
+    for (flag, name) in [
+        ("--task", "task"),
+        ("--format", "format"),
+        ("--license", "license"),
+        ("--limit", "limit"),
+    ] {
+        if let Some(value) = parsed.value(flag) {
+            query.push(format!("{name}={}", urlencode(value)));
+        }
+    }
+    if parsed.flag("--details") {
+        query.push("details=true".to_owned());
+    }
+    let path = format!("/api/v1/hub/search?{}", query.join("&"));
+    let result = call(client, "GET", &path, None, SHORT)?;
+    if json {
+        print_json(&result);
+    } else {
+        print!("{}", format::search_text(&result));
+    }
+    Ok(())
+}
+
+fn cmd_inspect(client: &Client, json: bool, repo: &str) -> Res<()> {
+    let path = format!(
+        "/api/v1/hub/models/{}",
+        repo.split('/').map(urlencode).collect::<Vec<_>>().join("/")
+    );
+    let result = call(client, "GET", &path, None, SHORT)?;
+    if json {
+        print_json(&result);
+    } else {
+        print!("{}", format::inspect_text(&result));
     }
     Ok(())
 }

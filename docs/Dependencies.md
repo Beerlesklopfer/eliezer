@@ -77,3 +77,13 @@ Vulkan headers/compiler. Its native HIP 5.7 / rocBLAS 5.5 development stack does
 not satisfy the current ROCm 7.2 binary ABI; matching AMD development libraries
 are required on the build host. No Debian-only ROCm rebuild is claimed.
 The exact apt package candidates are recorded under `tests/deb/results/`.
+
+## M5 – Hugging Face search
+
+| Crate | Pinned version | Rationale |
+|---|---|---|
+| `reqwest` | 0.12.28 | HTTPS client for the public Hugging Face metadata API (`eliezer-hub`). Default features off, only `rustls-tls`: no OpenSSL. It is the client the project instructions name for outgoing requests. The command line client keeps its own small HTTP code because it only talks to the local service. Version 0.12.28 is the last release of the 0.12 line; the newer 0.13 line was not needed. |
+| `axum` feature `query` | 0.8.9 | Reads the query string of `/api/v1/hub/search` into a map (adds `serde_urlencoded`). |
+
+The search sends no token and no key. Answers are limited to 8 MB and the whole request to 15 s.
+

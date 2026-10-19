@@ -164,6 +164,8 @@ pub struct HuggingFaceConfig {
     pub cache_dir: PathBuf,
     pub cache_limit_gb: f64,
     pub downloads: DownloadMode,
+    /// Allows the search of Hugging Face (`/api/v1/hub/...`); it only reads public metadata.
+    pub search: bool,
 }
 impl Default for HuggingFaceConfig {
     fn default() -> Self {
@@ -172,6 +174,7 @@ impl Default for HuggingFaceConfig {
             cache_dir: "/var/lib/eliezer/models/hf".into(),
             cache_limit_gb: 200.0,
             downloads: DownloadMode::OnRequest,
+            search: true,
         }
     }
 }
@@ -320,7 +323,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -338,7 +341,7 @@ const SECTION_FIELDS: &[(&str, &str)] = &[
     ),
     (
         "huggingface",
-        "token_file cache_dir cache_limit_gb downloads",
+        "token_file cache_dir cache_limit_gb downloads search",
     ),
 ];
 

@@ -23,6 +23,7 @@ eliezer-core.workspace = true
 eliezer-api.workspace = true
 eliezer-backend.workspace = true
 eliezer-gpu.workspace = true
+eliezer-hub.workspace = true
 eliezer-llamacpp = { workspace = true, optional = true }
 axum.workspace = true
 tokio.workspace = true
