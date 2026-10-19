@@ -118,6 +118,12 @@ impl FakeBackend {
         }
     }
 }
+impl FakeBackend {
+    /// Anzahl bisher gestarteter Instanzen (für Tests von Neuladen nach Absturz).
+    pub fn starts(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+}
 impl Backend for FakeBackend {
     fn start<'a>(&'a self, spec: &'a LoadSpec) -> BackendFuture<'a, Running> {
         Box::pin(async move {

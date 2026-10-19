@@ -82,26 +82,33 @@ fn failure(status: StatusCode, code: &str, message: &str, anthropic: bool) -> Re
 }
 fn error(error: Error, anth: bool) -> Response {
     let (status, code, message) = match error {
-        Error::UnknownModel => (404, "not_found", "Modell ist nicht freigegeben"),
-        Error::InvalidLoad => (400, "invalid_request", "Ungültige Ladeparameter"),
-        Error::InsufficientMemory => (
-            409,
-            "insufficient_memory",
-            "Nicht genug Speicher für das Modell",
-        ),
+        Error::UnknownModel => (404, "not_found", "Modell ist nicht freigegeben".to_owned()),
+        Error::InvalidLoad => (400, "invalid_request", "Ungültige Ladeparameter".to_owned()),
+        Error::InsufficientMemory { needed, free } => {
+            let gb = |bytes: u64| format!("{:.1}", bytes as f64 / 1e9).replace('.', ",");
+            (
+                409,
+                "insufficient_memory",
+                format!(
+                    "Nicht genug Speicher: benötigt {} GB, frei {} GB",
+                    gb(needed),
+                    gb(free)
+                ),
+            )
+        }
         Error::QueueFull | Error::Timeout => (
             if anth { 529 } else { 503 },
             "overloaded",
-            "Warteschlange ist voll oder Wartezeit überschritten",
+            "Warteschlange ist voll oder Wartezeit überschritten".to_owned(),
         ),
-        Error::Busy => (409, "busy", "Modell wird noch verwendet"),
-        Error::Backend => (502, "backend_error", "Backend ist ausgefallen"),
-        Error::Stopped => (503, "unavailable", "Dienst wird beendet"),
+        Error::Busy => (409, "busy", "Modell wird noch verwendet".to_owned()),
+        Error::Backend => (502, "backend_error", "Backend ist ausgefallen".to_owned()),
+        Error::Stopped => (503, "unavailable", "Dienst wird beendet".to_owned()),
     };
     failure(
         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         code,
-        message,
+        &message,
         anth,
     )
 }
@@ -150,13 +157,17 @@ async fn models(State(app): State<App>) -> Response {
         Ok(v) => v,
         Err(e) => return error(e, false),
     };
+    let specs = match app.supervisor.loaded().await {
+        Ok(v) => v,
+        Err(e) => return error(e, false),
+    };
     Json(json!({"models":app.config.model.iter().map(|m| {
         let loaded = states.iter().find(|i| i.key == m.key && i.state == eliezer_core::scheduler::State::Loaded);
         let mut value = json!({"type":match m.kind { eliezer_core::config::ModelKind::Llm => "llm", eliezer_core::config::ModelKind::Embedding => "embedding", _ => "image" },
             "key":m.key,"display_name":m.key,"max_context_length":m.max_context,"capabilities":{"vision":m.vision},"loaded_instances":[]});
         if let Some(reasoning) = &m.reasoning { value["capabilities"]["reasoning"] = json!({"allowed_options":reasoning.options,"default":reasoning.default}); }
         if let Some(size) = m.size_gb.and_then(|gb| eliezer_core::memory::gb_bytes(gb).ok()) { value["size_bytes"] = json!(size); }
-        if loaded.is_some() { value["loaded_instances"] = json!([{"id":m.key,"config":{"context_length":m.default_context,"parallel":m.parallel}}]); }
+        if let (Some(_), Some(spec)) = (loaded, specs.iter().find(|s| s.model == m.key)) { value["loaded_instances"] = json!([{"id":m.key,"config":{"context_length":spec.context,"parallel":spec.parallel}}]); }
         value
     }).collect::<Vec<_>>()})).into_response()
 }
@@ -512,6 +523,9 @@ async fn stream_response(
     let mut block: Option<(usize, String)> = None;
     let mut next_index = 0;
     if anth && !send(&tx,Some("message_start"),json!({"type":"message_start","message":{"id":"msg_eliezer","type":"message","role":"assistant","model":model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}})).await{return;}
+    if anth && !send(&tx, Some("ping"), json!({"type":"ping"})).await {
+        return;
+    }
     loop {
         let chunk = tokio::select! {_ = tx.closed()=>return,chunk=chunks.recv()=>chunk};
         let Some(chunk) = chunk else {

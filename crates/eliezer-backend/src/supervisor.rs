@@ -10,7 +10,11 @@ use tokio::sync::{mpsc, oneshot};
 pub enum Error {
     UnknownModel,
     InvalidLoad,
-    InsufficientMemory,
+    /// Bedarf und nach erlaubtem Verdrängen freier Speicher in Byte.
+    InsufficientMemory {
+        needed: u64,
+        free: u64,
+    },
     QueueFull,
     Timeout,
     Busy,
@@ -61,6 +65,7 @@ enum Command {
     Release(String),
     Unload(String, oneshot::Sender<Result<(), Error>>),
     Snapshot(oneshot::Sender<Vec<Instance>>),
+    Loaded(oneshot::Sender<Vec<LoadSpec>>),
     Tick(oneshot::Sender<()>),
     Started(String, Result<Running, BackendError>),
     Stopped(String, Result<(), BackendError>),
@@ -146,6 +151,15 @@ impl Supervisor {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(Command::Snapshot(tx))
+            .await
+            .map_err(|_| Error::Stopped)?;
+        rx.await.map_err(|_| Error::Stopped)
+    }
+    /// Die tatsächlich geladenen Konfigurationen (Kontextlänge und Parallelität).
+    pub async fn loaded(&self) -> Result<Vec<LoadSpec>, Error> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Loaded(tx))
             .await
             .map_err(|_| Error::Stopped)?;
         rx.await.map_err(|_| Error::Stopped)
@@ -266,6 +280,7 @@ impl Actor {
             };
             let state = entry.model.instance.state;
             let mut keep = true;
+            let mut shortage = (pending.spec.bytes, 0);
             if self.unload.contains_key(&key) {
                 // Ein explizites Entladen erhält Vorrang vor neuen Anfragen.
             } else if state == State::Loaded {
@@ -307,7 +322,18 @@ impl Actor {
                         }
                     }
                     Plan::Wait => {}
-                    Plan::Reject => keep = false,
+                    Plan::Reject => {
+                        keep = false;
+                        // Frei ist, was neben angehefteten oder beschäftigten Modellen bleibt.
+                        let fixed = instances
+                            .iter()
+                            .filter(|i| {
+                                matches!(i.state, State::Loaded | State::Loading | State::Unloading)
+                                    && (i.pinned || i.in_flight > 0 || i.state != State::Loaded)
+                            })
+                            .fold(0_u64, |sum, i| sum.saturating_add(i.bytes));
+                        shortage = (request.bytes, self.settings.budget.saturating_sub(fixed));
+                    }
                 }
             }
             if keep {
@@ -320,7 +346,10 @@ impl Actor {
                     },
                 );
             } else {
-                let _ = pending.reply.send(Err(Error::InsufficientMemory));
+                let (needed, free) = shortage;
+                let _ = pending
+                    .reply
+                    .send(Err(Error::InsufficientMemory { needed, free }));
             }
         }
     }
@@ -436,6 +465,15 @@ impl Actor {
                 }
                 Command::Snapshot(reply) => {
                     let _ = reply.send(self.snapshot());
+                }
+                Command::Loaded(reply) => {
+                    let specs = self
+                        .entries
+                        .values()
+                        .filter(|e| e.model.instance.state == State::Loaded)
+                        .filter_map(|e| e.running.as_ref().map(|r| r.spec.clone()))
+                        .collect();
+                    let _ = reply.send(specs);
                 }
                 Command::Tick(reply) => {
                     self.tick();
