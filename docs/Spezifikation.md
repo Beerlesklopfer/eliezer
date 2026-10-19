@@ -243,7 +243,7 @@ KV     = 2 × Schichten × KV-Köpfe × Kopfdimension × 2 Byte (f16) × Kontext
 - **Zuschlag:** 0,5 GB je Sprachmodell; +0,3 GB bei Bild-Eingabe; 0,25 GB bei Embedding-Modellen.
 - Ohne `arch`: Näherung nach Parameterzahl `8 KV-Köpfe × 128 Dimensionen`, viele Schichten (z. B. 80).
 - **Gemessener Wert hat Vorrang:** `vram_gb` im Modell, später ein im Betrieb gemessener Wert
-  (NVML-Differenz vor/nach dem Laden), der gespeichert wird (`/var/lib/eliezer/measured.json`).
+  (Differenz der Messung (Abschnitt 6a) vor und nach dem Laden), der gespeichert wird (`/var/lib/eliezer/measured.json`).
 - **Bildmodelle:** `vram_gb` ist Pflicht (kein sinnvolles Modell der Architektur).
 
 Beispiel zum Testen: 48 Schichten, 4 KV-Köpfe, Kopfdimension 128, Kontext 32 768 → KV = 2·48·4·128·2·32768
