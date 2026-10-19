@@ -15,3 +15,11 @@ toml.workspace = true
 [[test]]
 name = "config"
 path = "../../tests/m2/config.rs"
+
+[[test]]
+name = "memory"
+path = "../../tests/m3/memory.rs"
+
+[[test]]
+name = "scheduler"
+path = "../../tests/m3/scheduler.rs"
