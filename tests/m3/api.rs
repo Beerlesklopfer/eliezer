@@ -82,6 +82,13 @@ reasoning={options=["none","low","medium","high"],default="none"}
             config,
             supervisor: supervisor.clone(),
             backend,
+            probe: Arc::new(eliezer_gpu::sources(
+                eliezer_core::config::GpuVendor::None,
+                eliezer_core::config::ProbeMethod::None,
+                0,
+                8_000_000_000,
+                "/nonexistent".into(),
+            )),
             keys: Arc::new(keys),
         }),
         supervisor,

@@ -28,6 +28,7 @@ pub struct App {
     pub config: Arc<Config>,
     pub supervisor: Supervisor,
     pub backend: Arc<dyn Backend>,
+    pub probe: Arc<eliezer_gpu::Fallback>,
     pub keys: Arc<Vec<String>>,
 }
 pub fn router() -> Router {
@@ -258,8 +259,22 @@ async fn status(State(app): State<App>) -> Response {
                     )
                 })
                 .fold(0_u64, |s, i| s.saturating_add(i.bytes));
-            let total = eliezer_core::memory::gb_bytes(app.config.gpu.vram_budget_gb).unwrap_or(0);
-            Json(json!({"gpu":{"probe":"none","name":"Buchführung","total_bytes":total,"used_bytes":used,"free_bytes":total.saturating_sub(used),"budget_bytes":total},
+            let budget = eliezer_core::memory::gb_bytes(app.config.gpu.vram_budget_gb).unwrap_or(0);
+            // Die Messung kann Prozesse starten (nvidia-smi), daher nicht im Async-Kontext blocken.
+            let probe = app.probe.clone();
+            let measured = tokio::task::spawn_blocking(move || {
+                let memory = eliezer_gpu::GpuProbe::memory(&*probe).ok();
+                (memory, probe.active_name())
+            })
+            .await
+            .unwrap_or((None, "none".to_owned()));
+            let (memory, probe_name) = measured;
+            // Ohne echte Messung (Verfahren "none") zählt die Buchführung des Verwalters.
+            let (total, used) = match memory {
+                Some(m) if probe_name != "none" => (m.total_bytes, m.used_bytes),
+                _ => (budget, used),
+            };
+            Json(json!({"gpu":{"probe":probe_name,"total_bytes":total,"used_bytes":used,"free_bytes":total.saturating_sub(used),"budget_bytes":budget},
                 "models":instances.iter().map(|i|json!({"key":i.key,"state":format!("{:?}",i.state).to_lowercase(),"vram_bytes":i.bytes,"in_flight":i.in_flight})).collect::<Vec<_>>(),"queue":[]})).into_response()
         }
         Err(e) => error(e, false),
@@ -525,9 +540,9 @@ async fn stream_response(
                         json!({"type":"content_block_stop","index":index}),
                     )
                     .await
-                    {
-                        return;
-                    }
+                {
+                    return;
+                }
                 if !send(&tx,Some("message_delta"),json!({"type":"message_delta","delta":{"stop_reason":anthropic::stop_reason(&finish_reason),"stop_sequence":null},"usage":{"output_tokens":output_tokens}})).await{return;}
                 let _ = send(&tx, Some("message_stop"), json!({"type":"message_stop"})).await;
             } else {
@@ -584,9 +599,9 @@ async fn stream_response(
                         json!({"type":"content_block_stop","index":index}),
                     )
                     .await
-                    {
-                        return;
-                    }
+                {
+                    return;
+                }
                 let index = next_index;
                 next_index += 1;
                 if !send(
@@ -607,9 +622,9 @@ async fn stream_response(
                     json!({"type":"content_block_delta","index":index,"delta":delta}),
                 )
                 .await
-                {
-                    return;
-                }
+            {
+                return;
+            }
         }
     }
     app.supervisor.report_crash(model).await;

@@ -5,7 +5,7 @@ use eliezer_backend::{
     supervisor::{Model, Settings, Supervisor},
 };
 use eliezer_core::{
-    config::{Config, ModelKind},
+    config::{Config, GpuVendor, ModelKind},
     memory::{self, gb_bytes},
     scheduler::{Clock, Instance, State},
 };
@@ -115,10 +115,25 @@ pub fn build(
             retry_ms: s.failed_retry_secs.saturating_mul(1000),
         },
     );
+    let gpu = &config.gpu;
+    let root = std::path::PathBuf::from("/sys/class/drm");
+    let vendor = match gpu.vendor {
+        GpuVendor::Auto => eliezer_gpu::detect_vendor(&root, gpu.index),
+        other => other,
+    };
+    let probe = Arc::new(eliezer_gpu::sources(
+        vendor,
+        gpu.measure,
+        gpu.index,
+        gb_bytes(gpu.vram_budget_gb).map_err(|_| "VRAM-Budget ist ungültig")?,
+        root,
+    ));
+    tracing::info!(event = "gpu", ?vendor, "GPU-Hersteller bestimmt");
     let app = App {
         config,
         supervisor: supervisor.clone(),
         backend: Arc::new(NoBackend),
+        probe,
         keys: Arc::new(keys),
     };
     Ok((managed_router(app), supervisor))

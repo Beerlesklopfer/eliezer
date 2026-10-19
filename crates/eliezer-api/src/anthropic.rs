@@ -136,9 +136,10 @@ pub fn response(openai: &Value) -> Result<Value, &'static str> {
         content.push(json!({"type":"thinking","thinking":text}));
     }
     if let Some(text) = message["content"].as_str()
-        && !text.is_empty() {
-            content.push(json!({"type":"text","text":text}));
-        }
+        && !text.is_empty()
+    {
+        content.push(json!({"type":"text","text":text}));
+    }
     if let Some(calls) = message["tool_calls"].as_array() {
         for call in calls {
             let arguments: Value = serde_json::from_str(

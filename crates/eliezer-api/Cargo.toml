@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 eliezer-core.workspace = true
 eliezer-backend.workspace = true
+eliezer-gpu.workspace = true
 tokio.workspace = true
 futures-core.workspace = true
 

@@ -70,7 +70,7 @@ impl Default for GpuConfig {
         }
     }
 }
-#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GpuVendor {
     #[default]
@@ -79,7 +79,7 @@ pub enum GpuVendor {
     Amd,
     None,
 }
-#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProbeMethod {
     #[default]
