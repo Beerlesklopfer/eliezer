@@ -1,0 +1,18 @@
+{
+  "package": "eliezer_0.5.0-1_amd64.deb",
+  "version": "0.5.0-1",
+  "architecture": "amd64",
+  "runtime": "rocm",
+  "sha256": "d076712d52a09115eb11afe3718b6a8e93c9c8510c10ff92da1e4813cae0b46a",
+  "binary_version": "Eliezer 0.5.0",
+  "fmt": "passed",
+  "clippy": "passed",
+  "tests": {
+    "passed": 139,
+    "offline": true,
+    "gpu": false,
+    "home": "isolated temporary directory",
+    "initial_host_home_run": "two CLI authentication tests affected by saved host credentials"
+  },
+  "scope": "Version update; M5 acquisition pending; Candle experiment not merged; not installed"
+}

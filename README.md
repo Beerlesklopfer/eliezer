@@ -11,7 +11,7 @@ and take turns on one GPU. The service sits behind an
 OpenAI-compatible interface and is driven by [MultiGPT](https://github.com/Beerlesklopfer/multi-gpt)
 through its runner; permissions, ranking and billing stay there.
 
-**Status:** M4 is implemented: the embedded llama.cpp runtime loads and serves the language models on AMD and other GPUs, behind the supervisor (queue, eviction, idle unloading) and the OpenAI- and Anthropic-compatible interfaces, with a command line client and a model import. Images (stable-diffusion.cpp) and model downloads follow in M5 and M6. [Checks](tests/m2/README.md). Specification: [docs/Specification.md](docs/Specification.md), roadmap: [docs/Implementation.md](docs/Implementation.md), rules for agents: [AGENTS.md](AGENTS.md).
+**Status:** Package version 0.5.0; M5 model acquisition is pending. M4 is implemented: the embedded llama.cpp runtime loads and serves the language models on AMD and other GPUs, behind the supervisor (queue, eviction, idle unloading) and the OpenAI- and Anthropic-compatible interfaces, with a command line client and a model import. Images (stable-diffusion.cpp) and model downloads follow in M5 and M6. [Checks](tests/m2/README.md). Specification: [docs/Specification.md](docs/Specification.md), roadmap: [docs/Implementation.md](docs/Implementation.md), rules for agents: [AGENTS.md](AGENTS.md).
 
 Installation and operation: [INSTALL.MD](INSTALL.MD).
 

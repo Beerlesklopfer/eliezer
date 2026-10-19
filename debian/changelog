@@ -1,3 +1,12 @@
+eliezer (0.5.0) UNRELEASED; urgency=low
+
+  * Set the package version to 0.5.0 for apt upgrades, as requested.
+  * Update the installation example to eliezer_0.5.0-1_amd64.deb.
+    M5 model acquisition is still pending; the Candle ROCm experiment remains
+    on its separate branch and is not included in this package.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 22:46:28 +0200
+
 eliezer (0.4.0) UNRELEASED; urgency=low
 
   * Add the embedded llama.cpp runtime (features rocm, vulkan, cuda and cpu; without one the

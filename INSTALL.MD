@@ -190,7 +190,7 @@ or `cpu`. A package without a runtime would start but could not load any model, 
 
 ```bash
 scripts/build-deb.sh            # rocm when ROCm is installed, otherwise cpu; or name the variant
-sudo apt install ./target/debian/eliezer_0.4.0-1_amd64.deb
+sudo apt install ./target/debian/eliezer_0.5.0-1_amd64.deb
 ```
 
 The ROCm variant needs AMD's ROCm libraries (`/opt/rocm`, installed by AMD's own installer, not by
