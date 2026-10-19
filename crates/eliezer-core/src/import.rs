@@ -752,6 +752,38 @@ pub fn key_from(path: &Path) -> String {
 /// of sliding-window and hybrid models needs more fields, which the block points out. Image models
 /// get a commented block only, because their runtime (stable-diffusion.cpp) is not connected yet.
 pub fn block(key: &str, target: &Path, size: u64, info: Option<&GgufInfo>) -> String {
+    block_with(key, target, size, info, sibling_projector(target).as_ref())
+}
+
+/// The vision projector next to a model file: the only `mmproj*.gguf` file in the same directory
+/// (the layout of LM Studio and Hugging Face downloads), when its header says it is a projector.
+/// With several candidates nothing is guessed.
+pub fn sibling_projector(target: &Path) -> Option<(PathBuf, u64)> {
+    let mut found = None;
+    for entry in std::fs::read_dir(target.parent()?).ok()?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_str()?;
+        if name.starts_with("mmproj") && name.ends_with(".gguf") {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(entry.path());
+        }
+    }
+    let path = found?;
+    let meta = std::fs::metadata(&path).ok()?;
+    let info = read_gguf(&path).ok()?;
+    (meta.is_file() && info.architecture == "clip").then_some((path, meta.len()))
+}
+
+/// Like [`block`], with an explicit vision projector (path and size in bytes).
+pub fn block_with(
+    key: &str,
+    target: &Path,
+    size: u64,
+    info: Option<&GgufInfo>,
+    projector: Option<&(PathBuf, u64)>,
+) -> String {
     // Never below 0.1 GB: the configuration rejects zero, and a tiny file is still a model.
     let gb = (size as f64 / 1e9).max(0.1);
     let kind = info.map_or(Kind::Llm, GgufInfo::kind);
@@ -765,15 +797,29 @@ pub fn block(key: &str, target: &Path, size: u64, info: Option<&GgufInfo>) -> St
             gb * 1.4
         );
     }
+    let projector = projector.filter(|_| kind == Kind::Llm);
+    let source = match projector {
+        Some((path, _)) => format!(
+            "{{ file = \"{}\", projector = \"{}\" }}",
+            target.display(),
+            path.display()
+        ),
+        None => format!("{{ file = \"{}\" }}", target.display()),
+    };
     let mut text = format!(
-        "[[model]]\nkey = \"{key}\"\nbackend = \"llamacpp\"\nsource = {{ file = \"{}\" }}\nkind = \"{}\"\n",
-        target.display(),
+        "[[model]]\nkey = \"{key}\"\nbackend = \"llamacpp\"\nsource = {source}\nkind = \"{}\"\n",
         if kind == Kind::Embedding {
             "embedding"
         } else {
             "llm"
         }
     );
+    if let Some((_, bytes)) = projector {
+        text += &format!(
+            "vision = true\nprojector_gb = {:.1}\n",
+            (*bytes as f64 / 1e9).max(0.1)
+        );
+    }
     match info {
         Some(info) => {
             if kind == Kind::Llm
@@ -908,9 +954,10 @@ pub fn update_config(existing: &str, imported: &[Imported]) -> Result<ConfigUpda
             .and_then(|n| n.to_str())
             .unwrap_or_default();
         if name.starts_with("mmproj") {
-            update
-                .skipped
-                .push((item.target.clone(), "vision projector (not used yet)"));
+            update.skipped.push((
+                item.target.clone(),
+                "vision projector (attached to its model)",
+            ));
             continue;
         }
         if files.iter().any(|f| Path::new(f) == item.target) {

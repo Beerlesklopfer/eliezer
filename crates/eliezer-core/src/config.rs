@@ -237,6 +237,8 @@ pub struct ModelConfig {
     pub arch: Option<Architecture>,
     pub size_gb: Option<f64>,
     pub vram_gb: Option<f64>,
+    /// Memory of the vision projector in decimal GB; without it a flat 0.3 GB is assumed.
+    pub projector_gb: Option<f64>,
     pub extra: Option<ExtraConfig>,
 }
 fn context_length() -> u32 {
@@ -265,6 +267,8 @@ pub struct ModelSource {
     pub hf: Option<String>,
     pub revision: Option<String>,
     pub file: Option<PathBuf>,
+    /// The vision projector (`mmproj` GGUF file) of a llama.cpp model that reads images.
+    pub projector: Option<PathBuf>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -316,7 +320,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb extra text_encoder vae";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -471,22 +475,28 @@ impl Config {
             Ok(_) => {}
         }
         for model in &self.model {
-            let Some(file) = &model.source.file else {
-                continue;
-            };
-            match std::fs::File::open(file).and_then(|f| f.metadata()) {
-                Err(error) => problems.push(format!(
-                    "model '{}': {} {} (moved or deleted? update source.file, or run `eliezer --import`)",
-                    model.key,
-                    file.display(),
-                    describe(&error)
-                )),
-                Ok(meta) if !meta.is_file() => problems.push(format!(
-                    "model '{}': {} is not a regular file",
-                    model.key,
-                    file.display()
-                )),
-                Ok(_) => {}
+            let files = [
+                (&model.source.file, "source.file"),
+                (&model.source.projector, "source.projector"),
+            ];
+            for (file, field) in files {
+                let Some(file) = file else {
+                    continue;
+                };
+                match std::fs::File::open(file).and_then(|f| f.metadata()) {
+                    Err(error) => problems.push(format!(
+                        "model '{}': {} {} (moved or deleted? update {field}, or run `eliezer --import`)",
+                        model.key,
+                        file.display(),
+                        describe(&error)
+                    )),
+                    Ok(meta) if !meta.is_file() => problems.push(format!(
+                        "model '{}': {} is not a regular file",
+                        model.key,
+                        file.display()
+                    )),
+                    Ok(_) => {}
+                }
             }
         }
         problems
@@ -707,13 +717,31 @@ impl Config {
                 "parallel",
                 "Parallelism must be positive and fit into the context",
             )?;
-            for (value, field) in [(model.size_gb, "size_gb"), (model.vram_gb, "vram_gb")] {
+            for (value, field) in [
+                (model.size_gb, "size_gb"),
+                (model.vram_gb, "vram_gb"),
+                (model.projector_gb, "projector_gb"),
+            ] {
                 check_model(
                     value.is_none_or(positive),
                     field,
                     "Memory size must be finite and greater than zero",
                 )?;
             }
+            check_model(
+                model.source.projector.is_none()
+                    || (model.source.file.is_some()
+                        && model.kind == ModelKind::Llm
+                        && model.backend == BackendKind::Llamacpp),
+                "source.projector",
+                "A vision projector belongs to a language model served by llamacpp from a file",
+            )?;
+            check_model(
+                model.backend != BackendKind::Llamacpp
+                    || model.vision == model.source.projector.is_some(),
+                "vision",
+                "A llamacpp model reads images exactly when it has source.projector (set both)",
+            )?;
             check_model(
                 model.kind != ModelKind::Image || model.vram_gb.is_some(),
                 "vram_gb",
@@ -884,6 +912,9 @@ fn model_paths(model: &ModelConfig) -> Vec<(&Path, &'static str)> {
     let mut paths = Vec::new();
     if let Some(path) = &model.source.file {
         paths.push((path.as_path(), "source.file"));
+    }
+    if let Some(path) = &model.source.projector {
+        paths.push((path.as_path(), "source.projector"));
     }
     if let Some(extra) = &model.extra {
         if let Some(path) = &extra.text_encoder {

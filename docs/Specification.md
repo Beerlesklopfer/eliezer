@@ -294,7 +294,9 @@ KV    = 2 × layers × KV heads × head dimension × 2 bytes (f16) × context
   the context. **Mixed heads** (`full_kv_heads`, `full_head_dim` for full layers). **Linear
   layers** (`linear_layers`): no growing cache, instead a fixed `state_bytes` per sequence.
   Optional `arch` fields: `swa_layers`, `window`, `full_kv_heads`, `full_head_dim`, `linear_layers`, `state_bytes`.
-- **Overhead:** 0.5 GB per language model; +0.3 GB for image input; 0.25 GB for embedding models.
+- **Overhead:** 0.5 GB per language model; 0.25 GB for embedding models. Image input (a llamacpp model with
+  `source.projector`, the `mmproj` GGUF file, and `vision = true`) adds `projector_gb`, else 0.3 GB.
+  `eliezer --import` and `--suggest` attach the only `mmproj*.gguf` file of a model's directory.
 - Without `arch`: approximation by parameter count `8 KV heads × 128 dimensions`, many layers (e.g. 80).
 - **A measured value takes precedence:** `vram_gb` in the model, later a value measured in operation
   (difference of the measurement (section 6a) before and after loading), which is stored (`/var/lib/eliezer/measured.json`).

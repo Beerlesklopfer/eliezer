@@ -17,6 +17,9 @@ eliezer (0.5.0) UNRELEASED; urgency=low
   * Suggest the `reasoning` options of a model from its chat template when importing: effort levels for
     gpt-oss, on/off for Qwen and Gemma 4 (with the template's own default), both for Qwen3.8 (`xhigh` default).
     Without the line the model list reports no `capabilities.reasoning` and MultiGPT cannot offer thinking levels.
+  * Describe vision models in the configuration: `source.projector` (the mmproj file), `vision = true` and
+    `projector_gb`; the memory estimate counts the projector, and `--import`/`--suggest` pair a model with the
+    projector in its directory. Reading images in the llama.cpp runtime is the next step and is not part of this change.
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.5.0-1_amd64.deb.
     M5 model acquisition is still pending; the Candle ROCm experiment remains

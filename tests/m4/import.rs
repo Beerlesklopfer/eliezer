@@ -859,3 +859,34 @@ fn the_chat_template_decides_the_reasoning_options() {
         r#"reasoning = { options = ["none", "low", "medium", "xhigh"], default = "xhigh" }"#
     );
 }
+
+#[test]
+fn a_vision_projector_next_to_the_model_is_attached_and_valid() {
+    let t = Temp::new();
+    let model = t.file(
+        "v/model.gguf",
+        &gguf("qwen2vl", |out| {
+            kv_u32(out, "qwen2vl.attention.head_count_kv", 4);
+            1
+        }),
+    );
+    let projector = t.file("v/mmproj-model-F16.gguf", &gguf("clip", |_| 0));
+    let info = read_gguf(&model).unwrap();
+    let block = block("m", &model, 4_000_000_000, Some(&info));
+    assert!(
+        block.contains(&format!("projector = \"{}\"", projector.display())),
+        "{block}"
+    );
+    assert!(block.contains("vision = true") && block.contains("projector_gb = "));
+    // The block is valid configuration, and the projector counts toward the memory.
+    let with = estimate_bytes(&block, 4.0, 4096);
+    let without = estimate_bytes(
+        &block_with("m", &model, 4_000_000_000, Some(&info), None),
+        4.0,
+        4096,
+    );
+    assert!(with > without, "{with} vs {without}");
+    // Two projectors in one directory are ambiguous: nothing is guessed.
+    t.file("v/mmproj-other-F16.gguf", &gguf("clip", |_| 0));
+    assert!(!self::block("m", &model, 4_000_000_000, Some(&info)).contains("projector"));
+}

@@ -178,7 +178,11 @@ pub fn estimate_parts(
     } else {
         500_000_000
     };
-    let vision = if model.vision { 300_000_000 } else { 0 };
+    let vision = match (model.vision, model.projector_gb) {
+        (false, _) => 0,
+        (true, Some(gb)) => gb_bytes(gb)?,
+        (true, None) => 300_000_000,
+    };
     Ok(Breakdown {
         total: sum(&[weights, cache, overhead, vision])?,
         weights,
