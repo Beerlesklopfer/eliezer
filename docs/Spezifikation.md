@@ -14,7 +14,8 @@ bedient lokale Modelle:
 
 Er lädt Modelle bei Bedarf, entlädt sie im Leerlauf, hält ein VRAM-Buch, verdrängt nach Priorität
 und stellt Anfragen in eine Warteschlange, wenn der Speicher nicht reicht. Nach außen ist er
-**kompatibel zu LM Studio** (Abschnitt 5), damit MultiGPT ohne Änderung umschalten kann.
+**kompatibel zu LM Studio** (Abschnitt 5), damit MultiGPT ohne Änderung umschalten kann, und spricht neben der
+OpenAI-Schnittstelle auch die **Anthropic-Schnittstelle (Messages API)**, damit Clients wie Claude Code gegen lokale Modelle arbeiten können.
 
 ## 2. Begriffe
 
@@ -143,6 +144,37 @@ passendem HTTP-Status. Meldungen enthalten nie Schlüssel, Tokens oder Pfade au�
   `stream_options.include_usage` gesetzt ist (MultiGPT berechnet daraus Token/s).
 - Werkzeugaufrufe (`tools`, `tool_calls`) werden unverändert weitergegeben; welches Modell sie kann,
   bestimmt das Backend.
+
+### 5.1a Chat (Anthropic-kompatibel, Messages API)
+
+Zusätzlich zu 5.1, gleiche Modelle, gleiche Planung (Abschnitt 7), gleiche Warteschlange. Eliezer **übersetzt** die Anfrage in
+die OpenAI-Form des Backends und die Antwort zurück (Modul `eliezer-api::anthropic`, reine Funktionen, gut testbar).
+
+- Endpunkte: `POST /v1/messages`, `POST /v1/messages/count_tokens`. Anmeldung mit `x-api-key: <Schlüssel>` **oder**
+  `Authorization: Bearer`; der Kopf `anthropic-version` wird angenommen und ignoriert (ohne ihn: kein Fehler).
+- Anfrage: `model` (= `key`), `messages` (Rollen `user`/`assistant`, Inhalt als Text oder Blockliste mit `text`, `image`
+  (base64), `tool_use`, `tool_result`), `system` (Text oder Blockliste), `max_tokens` (Pflicht), `temperature`, `top_p`,
+  `stop_sequences`, `stream`, `tools` (`name`, `description`, `input_schema`), `tool_choice` (`auto`, `any`, `tool`, `none`),
+  `thinking` (`{"type":"enabled","budget_tokens":N}` oder `{"type":"disabled"}`).
+- Abbildung auf OpenAI: `system` → Systemnachricht; `tool_use` → `tool_calls`; `tool_result` → Nachricht mit Rolle `tool`;
+  `input_schema` → `parameters`; `stop_sequences` → `stop`; `thinking` → `reasoning_effort` des Modells (`disabled` → `none`;
+  `enabled` → nächstpassende Stufe aus `reasoning.options` nach `budget_tokens`: bis 1 024 `low`, bis 8 192 `medium`, darüber `high`).
+  Unbekannte Felder werden ignoriert, nicht abgelehnt (Clients senden Neues).
+- Antwort ohne Streaming: `{"id":"msg_…","type":"message","role":"assistant","model":"<key>","content":[{"type":"text","text":"…"},
+  {"type":"tool_use","id":"toolu_…","name":"…","input":{…}}],"stop_reason":"end_turn|max_tokens|stop_sequence|tool_use",
+  "stop_sequence":null,"usage":{"input_tokens":N,"output_tokens":M}}`. Denkinhalt als Block `{"type":"thinking","thinking":"…"}`
+  vor dem Text, wenn das Backend ihn liefert. `finish_reason` des Backends: `stop`→`end_turn`, `length`→`max_tokens`,
+  `tool_calls`→`tool_use`.
+- Streaming (SSE) mit den Ereignissen `message_start`, `content_block_start`, `content_block_delta` (`text_delta`,
+  `thinking_delta`, `input_json_delta`), `content_block_stop`, `message_delta` (mit `stop_reason` und `usage`), `message_stop`;
+  zwischendurch `ping`. Teile gehen **ohne Puffern** weiter (wie 5.1). Werkzeugargumente kommen als Teil-JSON.
+- `count_tokens`: Antwort `{"input_tokens": N}`; gezählt mit dem Tokenizer des Backends, wenn vorhanden, sonst Näherung
+  (Zeichen ÷ 3,5, aufgerundet) und im Kopf `x-eliezer-estimate: true` gekennzeichnet.
+- Fehler im Anthropic-Format: `{"type":"error","error":{"type":"invalid_request_error|authentication_error|not_found_error|rate_limit_error|api_error|overloaded_error","message":"<deutscher Text>"}}`
+  mit passendem Status; Überlastung der Warteschlange → 529 `overloaded_error`, Wartezeit-Überlauf → 529 mit Hinweis.
+- Nicht unterstützt (klare 400-Meldung statt stillem Ignorieren): Dokumentblöcke (`document`), Zitate, Web-Suche und andere
+  serverseitige Werkzeuge, Batches. Die Modellliste `GET /v1/models` antwortet je nach Kopf (`anthropic-version` vorhanden →
+  Anthropic-Form `{"data":[{"type":"model","id":"<key>","display_name":"…","created_at":"…"}],"has_more":false}`, sonst OpenAI-Form).
 
 ### 5.2 Verwaltung (`/api/v1`, Form wie LM Studio 0.4)
 
@@ -307,6 +339,10 @@ trait Backend: Send + Sync {
   lädt es und beantwortet sie; zwei Modelle, die nicht zusammen passen → Verdrängung; Wartezeit-Überlauf → 503;
   Trennen des Clients bricht die wartende Anfrage ab; Absturz des Backends → 502, nächste Anfrage lädt neu;
   SSE wird ohne Puffern weitergegeben (Zeitstempel der Teile); `reasoning_effort` ungültig → 400.
+- **Anthropic-Übersetzung (Einheit, ohne Netz):** je Abbildungsregel aus 5.1a ein Test (Systemtext, Werkzeugaufruf hin und zurück,
+  `tool_result`, Bilder, `thinking` → Stufe, `stop_reason`), Streaming-Reihenfolge der Ereignisse gegen eine feste Erwartungsdatei,
+  Teil-JSON der Werkzeugargumente, Fehlerformat, `count_tokens` mit Näherung. Integration: dieselbe Anfrage über `/v1/chat/completions`
+  und `/v1/messages` liefert gegen das fake-backend denselben Inhalt.
 - **Vertragstest gegen MultiGPT:** `tests/contract/lmstudio_models.json` enthält eine echte Antwort von LM Studio 0.4
   und eine von Eliezer; beide müssen durch dieselben Prüfungen gehen (Felder und Typen aus 5.2).
 - **GPU-Messung (`eliezer-gpu`):** NVIDIA-Anbindung gegen den Prüfstand; AMD-Anbindung gegen ein **nachgebautes
@@ -321,4 +357,5 @@ trait Backend: Send + Sync {
 2. Ein Chat-Modell und ein Bildauftrag wechseln sich auf der 24-GB-Karte ab; das Chat-Modell lädt bei der
    nächsten Anfrage von selbst.
 3. Nach `idle_unload_secs` ist der Speicher frei (gemessen mit `nvidia-smi`).
-4. Kein Token in Logs, Prozessliste oder Fehlermeldungen (Prüfskript `scripts/check-secrets.sh`).
+4. Ein Anthropic-Client (z. B. Claude Code mit `ANTHROPIC_BASE_URL` auf Eliezer) führt ein Gespräch mit Werkzeugaufruf und Streaming.
+5. Kein Token in Logs, Prozessliste oder Fehlermeldungen (Prüfskript `scripts/check-secrets.sh`).

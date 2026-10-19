@@ -52,9 +52,11 @@ Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
 - **M3-04** `eliezer-backend`: Trait `Backend` und **fake-backend**; Verwalter-Task (`Supervisor`) mit mpsc/oneshot.
 - **M3-05** `eliezer-api`: `/api/v1/models`, `/load`, `/unload`, `/api/v1/status`, `/healthz`, Authentifizierung, Fehlerformat;
   Chat-Weiterleitung `/v1/chat/completions` mit **ungepuffertem SSE** gegen das fake-backend.
+- **M3-05a** Anthropic-Schnittstelle (Spezifikation 5.1a): Modul `eliezer-api::anthropic` mit Übersetzung hin und zurück, `POST /v1/messages`
+  (mit und ohne Streaming), `count_tokens`, Modellliste, Fehlerformat; Tests gegen das fake-backend.
 - **M3-06** Vertragstest (Spezifikation 11) mit `tests/contract/`-Dateien.
 
-*Abnahme:* Alle Integrationstests aus Spezifikation 11 laufen ohne Netz und GPU; MultiGPT (Provider `lmstudio`, `base_url`
+*Abnahme:* Alle Integrationstests aus Spezifikation 11 laufen ohne Netz und GPU; dieselbe Anfrage liefert über OpenAI- und Anthropic-Schnittstelle denselben Inhalt; MultiGPT (Provider `lmstudio`, `base_url`
 auf Eliezer mit fake-backend) listet Modelle, lädt und entlädt.
 
 ### M4 – Laufzeit mistral.rs
@@ -62,6 +64,7 @@ auf Eliezer mit fake-backend) listet Modelle, lädt und entlädt.
 - **M4-01** Backend `mistralrs` nach `docs/Laufzeiten.md`: Prozesssteuerung, Bereitschaftsprüfung, sanftes und hartes Beenden,
   PID-Datei, Aufräumen verwaister Prozesse.
 - **M4-02** Chat und Vision, Werkzeugaufrufe, Streaming mit `usage`; Chatvorlage je Modell.
+- **M4-03a** Anthropic-Schnittstelle gegen ein echtes Modell: Werkzeugaufruf und Streaming mit einem Anthropic-Client prüfen (Spezifikation 12, Punkt 4).
 - **M4-03** Denkoptionen (`reasoning_effort` → Backend), Statistik im letzten SSE-Block, Gegenprobe der VRAM-Rechnung (gemessener Wert wird gespeichert).
 - **M4-04** GPU-Tests (`#[ignore]`) und Messwerte in `docs/Stand.md`.
 
