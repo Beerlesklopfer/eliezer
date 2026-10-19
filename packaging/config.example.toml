@@ -1,0 +1,60 @@
+[server]
+listen = "127.0.0.1:1234"
+# Optional: api_keys_file = "/etc/eliezer/keys"
+request_timeout_secs = 600
+
+[storage]
+models_dir = "/var/lib/eliezer/models"
+
+[gpu]
+vendor = "auto"
+index = 0
+vram_budget_gb = 24.0
+reserve_gb = 2.0
+measure = "auto"
+
+[scheduler]
+idle_unload_secs = 1800
+queue_max = 64
+queue_wait_secs = 120
+
+[huggingface]
+# Optional: token_file = "/etc/eliezer/hf-token"
+cache_dir = "/var/lib/eliezer/models/hf"
+cache_limit_gb = 200.0
+downloads = "on_request"
+
+[backend.mistralrs]
+enabled = true
+max_loaded = 4
+
+[backend.llamacpp]
+enabled = false
+max_loaded = 4
+
+[backend.sdcpp]
+program = "/usr/local/bin/sd-server"
+port_range = [24600, 24609]
+
+[[model]]
+key = "qwen/qwen3-coder-30b"
+backend = "mistralrs"
+source = { hf = "Qwen/Qwen3-Coder-30B-A3B-Instruct", revision = "main" }
+kind = "llm"
+priority = 10
+max_context = 131072
+default_context = 32768
+parallel = 1
+vision = false
+reasoning = { options = ["none", "low", "medium", "high"], default = "medium" }
+arch = { layers = 48, kv_heads = 4, head_dim = 128 }
+size_gb = 17.3
+
+[[model]]
+key = "qwen-image"
+backend = "sdcpp"
+source = { file = "/var/lib/eliezer/models/qwen-image-2.1-UC-Q4_K_M.gguf" }
+kind = "image"
+priority = 5
+vram_gb = 14.0
+extra = { text_encoder = "/var/lib/eliezer/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/var/lib/eliezer/models/qwen_image_2.1_vae_bf16.safetensors" }

@@ -28,3 +28,21 @@ Bauvoraussetzungen. Die Probe hat einen eigenen `Cargo.lock` unter `tests/`.
 Es besteht noch keine entsprechende Abhängigkeit in einem produktiven Workspace.
 
 Einbauentscheidung und Grenzen: [M1-Ergebnis](../tests/m1/README.md).
+
+## M2 – Programmrahmen und Konfiguration
+
+| Crate | Festgehaltene Version | Begründung |
+|---|---|---|
+| `serde` | 1.0.229 | Typisierte, strikt geprüfte Konfiguration |
+| `toml` | 0.9.8 | TOML-Parser mit Fehlerpositionen; mit Rust 1.88 vereinbar |
+| `serde_path_to_error` | 0.1.20 | Feldpfade bei Typfehlern, ohne Konfigurationswerte in Meldungen zu übernehmen |
+| `tokio` | 1.53.3 | Asynchroner HTTP-Programmrahmen, Signale und geordnetes Beenden |
+| `axum` | 0.8.9 | Vorgesehener HTTP-Server; zunächst nur `/healthz` |
+| `tracing` | 0.1.44 | Strukturierte deutsche Betriebsereignisse |
+| `tracing-subscriber` | 0.3.23 | Ausgabe der Ereignisse nach stdout/journald |
+
+Die konkreten Versionen und transitiven Abhängigkeiten stehen in `Cargo.lock`.
+Der CLI-Parser und die Dateisystemauflösung benötigen keine zusätzlichen Crates.
+`reqwest`, GPU-Bindings und Modelllaufzeiten werden erst bei ihrer tatsächlichen
+Verwendung in späteren Meilensteinen eingebunden.
+Die Produktlizenz ist gemäß Nutzerentscheidung **GPL-3.0-only**.

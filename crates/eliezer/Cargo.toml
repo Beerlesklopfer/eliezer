@@ -1,0 +1,20 @@
+[package]
+name = "eliezer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+eliezer-core.workspace = true
+eliezer-api.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[test]]
+name = "cli"
+path = "../../tests/m2/cli.rs"

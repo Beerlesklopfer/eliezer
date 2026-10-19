@@ -1,0 +1,16 @@
+name: Rust
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fetch --locked
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --offline --locked -- -D warnings
+      - run: cargo test --workspace --offline --locked

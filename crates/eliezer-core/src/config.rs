@@ -1,0 +1,705 @@
+//! Strikte Konfiguration; Dateisystemzugriffe erfolgen über einen Resolver des Aufrufers.
+use serde::Deserialize;
+use serde_path_to_error::Segment;
+use std::{
+    collections::BTreeSet,
+    fmt,
+    net::SocketAddr,
+    path::{Component, Path, PathBuf},
+};
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    pub server: ServerConfig,
+    #[serde(default)]
+    pub storage: StorageConfig,
+    pub gpu: GpuConfig,
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
+    #[serde(default)]
+    pub huggingface: HuggingFaceConfig,
+    #[serde(default)]
+    pub backend: BackendConfig,
+    #[serde(default)]
+    pub model: Vec<ModelConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerConfig {
+    pub listen: SocketAddr,
+    pub api_keys_file: Option<PathBuf>,
+    #[serde(default = "request_timeout")]
+    pub request_timeout_secs: u64,
+}
+fn request_timeout() -> u64 {
+    600
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StorageConfig {
+    pub models_dir: PathBuf,
+}
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            models_dir: "/var/lib/eliezer/models".into(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GpuConfig {
+    pub vendor: GpuVendor,
+    pub index: u32,
+    pub vram_budget_gb: f64,
+    pub reserve_gb: f64,
+    pub measure: ProbeMethod,
+}
+impl Default for GpuConfig {
+    fn default() -> Self {
+        Self {
+            vendor: GpuVendor::Auto,
+            index: 0,
+            vram_budget_gb: 8.0,
+            reserve_gb: 2.0,
+            measure: ProbeMethod::Auto,
+        }
+    }
+}
+#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GpuVendor {
+    #[default]
+    Auto,
+    Nvidia,
+    Amd,
+    None,
+}
+#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProbeMethod {
+    #[default]
+    Auto,
+    Nvml,
+    #[serde(rename = "nvidia-smi")]
+    NvidiaSmi,
+    Sysfs,
+    #[serde(rename = "rocm-smi")]
+    RocmSmi,
+    None,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SchedulerConfig {
+    pub idle_unload_secs: u64,
+    pub queue_max: usize,
+    pub queue_wait_secs: u64,
+    pub failed_retry_secs: u64,
+}
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            idle_unload_secs: 1800,
+            queue_max: 64,
+            queue_wait_secs: 120,
+            failed_retry_secs: 30,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HuggingFaceConfig {
+    pub token_file: Option<PathBuf>,
+    pub cache_dir: PathBuf,
+    pub cache_limit_gb: f64,
+    pub downloads: DownloadMode,
+}
+impl Default for HuggingFaceConfig {
+    fn default() -> Self {
+        Self {
+            token_file: None,
+            cache_dir: "/var/lib/eliezer/models/hf".into(),
+            cache_limit_gb: 200.0,
+            downloads: DownloadMode::OnRequest,
+        }
+    }
+}
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadMode {
+    #[default]
+    OnRequest,
+    Never,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct BackendConfig {
+    pub mistralrs: Option<EmbeddedBackendConfig>,
+    pub llamacpp: Option<EmbeddedBackendConfig>,
+    pub sdcpp: Option<SdcppConfig>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EmbeddedBackendConfig {
+    pub enabled: bool,
+    pub max_loaded: usize,
+}
+impl Default for EmbeddedBackendConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_loaded: 4,
+        }
+    }
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SdcppConfig {
+    pub program: PathBuf,
+    pub port_range: [u16; 2],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelConfig {
+    pub key: String,
+    pub backend: BackendKind,
+    pub source: ModelSource,
+    pub kind: ModelKind,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default = "context_length")]
+    pub max_context: u32,
+    #[serde(default = "context_length")]
+    pub default_context: u32,
+    #[serde(default = "one")]
+    pub parallel: u32,
+    #[serde(default)]
+    pub vision: bool,
+    #[serde(default)]
+    pub pinned: bool,
+    pub reasoning: Option<ReasoningConfig>,
+    pub arch: Option<Architecture>,
+    pub size_gb: Option<f64>,
+    pub vram_gb: Option<f64>,
+    pub extra: Option<ExtraConfig>,
+}
+fn context_length() -> u32 {
+    32768
+}
+fn one() -> u32 {
+    1
+}
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendKind {
+    Mistralrs,
+    Llamacpp,
+    Sdcpp,
+}
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelKind {
+    Llm,
+    Embedding,
+    Image,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSource {
+    pub hf: Option<String>,
+    pub revision: Option<String>,
+    pub file: Option<PathBuf>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReasoningConfig {
+    pub options: Vec<String>,
+    pub default: String,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Architecture {
+    pub layers: u32,
+    pub kv_heads: u32,
+    pub head_dim: u32,
+    pub swa_layers: Option<u32>,
+    pub window: Option<u32>,
+    pub full_kv_heads: Option<u32>,
+    pub full_head_dim: Option<u32>,
+    pub linear_layers: Option<u32>,
+    pub state_bytes: Option<u64>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtraConfig {
+    pub text_encoder: Option<PathBuf>,
+    pub vae: Option<PathBuf>,
+}
+
+/// Der Aufrufer löst auch vorhandene symbolische Links in noch nicht existierenden Pfaden auf.
+pub trait PathResolver {
+    fn resolve(&self, path: &Path) -> Result<PathBuf, PathResolutionError>;
+}
+#[derive(Debug)]
+pub struct PathResolutionError;
+
+#[derive(Debug)]
+pub struct ConfigError {
+    pub line: usize,
+    pub field: String,
+    pub message: &'static str,
+}
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Konfigurationsfehler in Zeile {}, Feld {}: {}",
+            self.line, self.field, self.message
+        )
+    }
+}
+impl std::error::Error for ConfigError {}
+
+const FIELDS: &str = "server listen api_keys_file request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb extra text_encoder vae";
+
+fn safe_path(path: &serde_path_to_error::Path) -> String {
+    let mut result = String::new();
+    for segment in path {
+        match segment {
+            Segment::Map { key } if FIELDS.split_whitespace().any(|name| name == key) => {
+                if !result.is_empty() {
+                    result.push('.');
+                }
+                result.push_str(key);
+            }
+            Segment::Seq { index } => result.push_str(&format!("[{index}]")),
+            _ => {
+                result.push_str(".<unbekannt>");
+                break;
+            }
+        }
+    }
+    if result.is_empty() {
+        "<Konfiguration>".into()
+    } else {
+        result
+    }
+}
+
+impl ConfigError {
+    fn at(input: &str, field: String, message: &'static str) -> Self {
+        Self {
+            line: field_line(input, &field),
+            field,
+            message,
+        }
+    }
+}
+
+/// Fehlerposition ohne Wiedergabe von Werten; berücksichtigt Tabellen und Modellindizes.
+fn field_line(input: &str, field: &str) -> usize {
+    let mut table = String::new();
+    let mut model_index = 0_usize;
+    let mut seen_model = false;
+    let mut best = (0, 1);
+    for (index, line) in input.lines().enumerate() {
+        let line = line.trim();
+        let header = line
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .replace(['"', '\''], "");
+        if header == "[[model]]" {
+            if seen_model {
+                model_index += 1;
+            }
+            seen_model = true;
+            table = format!("model[{model_index}]");
+        } else if line.starts_with('[') {
+            let name = header
+                .trim_start_matches('[')
+                .split(']')
+                .next()
+                .unwrap_or("");
+            table = if let Some(rest) = name.strip_prefix("model.") {
+                format!("model[{model_index}].{rest}")
+            } else {
+                name.to_owned()
+            };
+        }
+        let key = if line.starts_with('[') {
+            table.clone()
+        } else if let Some((key, _)) = line.split_once('=') {
+            let key = key.trim();
+            if table.is_empty() {
+                key.to_owned()
+            } else {
+                format!("{table}.{key}")
+            }
+        } else {
+            continue;
+        };
+        if (field == key
+            || field.starts_with(&format!("{key}."))
+            || field.starts_with(&format!("{key}[")))
+            && key.len() >= best.0
+        {
+            best = (key.len(), index + 1);
+        }
+    }
+    best.1
+}
+
+impl Config {
+    pub fn parse(input: &str) -> Result<Self, ConfigError> {
+        let de = toml::de::Deserializer::parse(input).map_err(|e| ConfigError {
+            line: input.as_bytes()[..e.span().map_or(0, |s| s.start).min(input.len())]
+                .iter()
+                .filter(|b| **b == b'\n')
+                .count()
+                + 1,
+            field: "<Konfiguration>".into(),
+            message: "Ungültige TOML-Syntax",
+        })?;
+        let config: Self = serde_path_to_error::deserialize(de).map_err(|e| ConfigError {
+            line: input.as_bytes()[..e.inner().span().map_or(0, |s| s.start).min(input.len())]
+                .iter()
+                .filter(|b| **b == b'\n')
+                .count()
+                + 1,
+            field: safe_path(e.path()),
+            message: "Unbekanntes Feld, fehlender Wert oder ungültiger Datentyp",
+        })?;
+        config.validate(input)?;
+        Ok(config)
+    }
+
+    fn validate(&self, input: &str) -> Result<(), ConfigError> {
+        let check = |ok: bool, field: &str, message| {
+            if ok {
+                Ok(())
+            } else {
+                Err(ConfigError::at(input, field.into(), message))
+            }
+        };
+        check(
+            self.server.listen.port() != 0,
+            "server.listen",
+            "Port muss größer als null sein",
+        )?;
+        check(
+            self.server.request_timeout_secs > 0,
+            "server.request_timeout_secs",
+            "Zeitlimit muss größer als null sein",
+        )?;
+        check(
+            positive(self.gpu.vram_budget_gb),
+            "gpu.vram_budget_gb",
+            "Budget muss endlich und größer als null sein",
+        )?;
+        check(
+            self.gpu.reserve_gb.is_finite()
+                && self.gpu.reserve_gb >= 0.0
+                && self.gpu.reserve_gb < self.gpu.vram_budget_gb,
+            "gpu.reserve_gb",
+            "Reserve muss endlich, nicht negativ und kleiner als das Budget sein",
+        )?;
+        check(
+            positive(self.huggingface.cache_limit_gb),
+            "huggingface.cache_limit_gb",
+            "Cache-Limit muss endlich und größer als null sein",
+        )?;
+        for (value, field) in [
+            (self.scheduler.idle_unload_secs, "idle_unload_secs"),
+            (self.scheduler.queue_wait_secs, "queue_wait_secs"),
+            (self.scheduler.failed_retry_secs, "failed_retry_secs"),
+        ] {
+            check(
+                value > 0,
+                &format!("scheduler.{field}"),
+                "Zeitlimit muss größer als null sein",
+            )?;
+        }
+        check(
+            self.scheduler.queue_max > 0,
+            "scheduler.queue_max",
+            "Warteschlange muss mindestens einen Eintrag erlauben",
+        )?;
+        for (backend, name) in [
+            (&self.backend.mistralrs, "mistralrs"),
+            (&self.backend.llamacpp, "llamacpp"),
+        ] {
+            if let Some(backend) = backend {
+                check(
+                    backend.max_loaded > 0,
+                    &format!("backend.{name}.max_loaded"),
+                    "Obergrenze muss größer als null sein",
+                )?;
+            }
+        }
+        if let Some(sd) = &self.backend.sdcpp {
+            check(
+                clean_absolute(&sd.program),
+                "backend.sdcpp.program",
+                "Absoluter Programmpfad ohne Elternkomponenten erforderlich",
+            )?;
+            check(
+                sd.port_range[0] > 0 && sd.port_range[0] <= sd.port_range[1],
+                "backend.sdcpp.port_range",
+                "Portbereich muss aufsteigend sein und oberhalb null beginnen",
+            )?;
+            check(
+                !(sd.port_range[0]..=sd.port_range[1]).contains(&self.server.listen.port()),
+                "backend.sdcpp.port_range",
+                "Portbereich überschneidet sich mit dem Dienstport",
+            )?;
+        }
+        for (path, field) in [
+            (Some(&self.storage.models_dir), "storage.models_dir"),
+            (Some(&self.huggingface.cache_dir), "huggingface.cache_dir"),
+            (self.server.api_keys_file.as_ref(), "server.api_keys_file"),
+            (
+                self.huggingface.token_file.as_ref(),
+                "huggingface.token_file",
+            ),
+        ] {
+            if let Some(path) = path {
+                check(
+                    clean_absolute(path),
+                    field,
+                    "Absoluter Pfad ohne Elternkomponenten erforderlich",
+                )?;
+            }
+        }
+        let mut keys = BTreeSet::new();
+        for (index, model) in self.model.iter().enumerate() {
+            let prefix = format!("model[{index}]");
+            let check_model = |ok, field, message| check(ok, &format!("{prefix}.{field}"), message);
+            check_model(identifier(&model.key), "key", "Ungültiger Modellschlüssel")?;
+            check_model(
+                keys.insert(&model.key),
+                "key",
+                "Modellschlüssel ist mehrfach vorhanden",
+            )?;
+            check_model(
+                model.source.file.is_some() != model.source.hf.is_some(),
+                "source",
+                "Genau eine Quelle (file oder hf) ist erforderlich",
+            )?;
+            if let Some(hf) = &model.source.hf {
+                check_model(
+                    identifier(hf),
+                    "source.hf",
+                    "Ungültige Hugging-Face-Kennung",
+                )?;
+            }
+            check_model(
+                model
+                    .source
+                    .revision
+                    .as_ref()
+                    .is_none_or(|rev| model.source.hf.is_some() && identifier(rev)),
+                "source.revision",
+                "Revision ist nur als gültige Kennung einer HF-Quelle erlaubt",
+            )?;
+            let enabled = match model.backend {
+                BackendKind::Mistralrs => {
+                    self.backend.mistralrs.as_ref().is_some_and(|b| b.enabled)
+                }
+                BackendKind::Llamacpp => self.backend.llamacpp.as_ref().is_some_and(|b| b.enabled),
+                BackendKind::Sdcpp => self.backend.sdcpp.is_some(),
+            };
+            check_model(
+                enabled,
+                "backend",
+                "Backend ist nicht konfiguriert oder deaktiviert",
+            )?;
+            check_model(
+                model.max_context > 0
+                    && model.default_context > 0
+                    && model.default_context <= model.max_context,
+                "default_context",
+                "Kontext muss positiv sein und darf die Obergrenze nicht überschreiten",
+            )?;
+            check_model(
+                model.parallel > 0 && model.parallel <= model.default_context,
+                "parallel",
+                "Parallelität muss positiv sein und in den Kontext passen",
+            )?;
+            for (value, field) in [(model.size_gb, "size_gb"), (model.vram_gb, "vram_gb")] {
+                check_model(
+                    value.is_none_or(positive),
+                    field,
+                    "Speichergröße muss endlich und größer als null sein",
+                )?;
+            }
+            check_model(
+                model.kind != ModelKind::Image || model.vram_gb.is_some(),
+                "vram_gb",
+                "Bildmodelle benötigen einen gemessenen Speicherbedarf",
+            )?;
+            check_model(
+                (model.backend == BackendKind::Sdcpp) == (model.kind == ModelKind::Image),
+                "kind",
+                "Bildmodelle benötigen sdcpp; sdcpp bedient nur Bildmodelle",
+            )?;
+            if let Some(reasoning) = &model.reasoning {
+                let mut options = BTreeSet::new();
+                check_model(
+                    !reasoning.options.is_empty()
+                        && reasoning.options.iter().all(|o| {
+                            ["none", "minimal", "low", "medium", "high", "xhigh"]
+                                .contains(&o.as_str())
+                                && options.insert(o)
+                        })
+                        && reasoning.options.contains(&reasoning.default),
+                    "reasoning",
+                    "Denkoptionen müssen eindeutig und bekannt sein und den Standard enthalten",
+                )?;
+            }
+            if let Some(arch) = &model.arch {
+                check_model(
+                    arch.layers > 0 && arch.kv_heads > 0 && arch.head_dim > 0,
+                    "arch",
+                    "Architekturgrößen müssen positiv sein",
+                )?;
+                let swa = arch.swa_layers.unwrap_or(0);
+                let linear = arch.linear_layers.unwrap_or(0);
+                check_model(
+                    u64::from(swa) + u64::from(linear) <= u64::from(arch.layers),
+                    "arch",
+                    "Spezielle Schichten überschreiten die Gesamtzahl",
+                )?;
+                check_model(
+                    swa == 0 || arch.window.is_some_and(|v| v > 0),
+                    "arch.window",
+                    "Sliding-Window-Schichten benötigen ein positives Fenster",
+                )?;
+                check_model(
+                    linear == 0 || arch.state_bytes.is_some_and(|v| v > 0),
+                    "arch.state_bytes",
+                    "Lineare Schichten benötigen einen positiven Zustandsspeicher",
+                )?;
+                check_model(
+                    arch.full_kv_heads.is_none_or(|v| v > 0)
+                        && arch.full_head_dim.is_none_or(|v| v > 0),
+                    "arch",
+                    "Optionale Kopfgrößen müssen positiv sein",
+                )?;
+            }
+            for (path, field) in model_paths(model) {
+                check_model(
+                    clean_absolute(path),
+                    field,
+                    "Absoluter Modellpfad ohne Elternkomponenten erforderlich",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_paths(
+        &self,
+        input: &str,
+        resolver: &impl PathResolver,
+    ) -> Result<(), ConfigError> {
+        let resolve = |path: &Path, field: &str| {
+            resolver.resolve(path).map_err(|_| {
+                ConfigError::at(
+                    input,
+                    field.into(),
+                    "Pfad kann nicht sicher aufgelöst werden",
+                )
+            })
+        };
+        let root = resolve(&self.storage.models_dir, "storage.models_dir")?;
+        let mut paths = vec![(
+            &self.huggingface.cache_dir as &Path,
+            "huggingface.cache_dir".to_owned(),
+        )];
+        for (index, model) in self.model.iter().enumerate() {
+            paths.extend(
+                model_paths(model)
+                    .into_iter()
+                    .map(|(path, field)| (path, format!("model[{index}].{field}"))),
+            );
+        }
+        for (path, field) in paths {
+            let resolved = resolve(path, &field)?;
+            if !resolved.starts_with(&root) {
+                return Err(ConfigError::at(
+                    input,
+                    field,
+                    "Modellpfad liegt außerhalb der zentralen Modellablage",
+                ));
+            }
+        }
+        for (path, field) in [
+            (self.server.api_keys_file.as_ref(), "server.api_keys_file"),
+            (
+                self.huggingface.token_file.as_ref(),
+                "huggingface.token_file",
+            ),
+        ] {
+            if let Some(path) = path
+                && resolve(path, field)?.starts_with(&root)
+            {
+                return Err(ConfigError::at(
+                    input,
+                    field.into(),
+                    "Geheimnisdateien müssen außerhalb der Modellablage liegen",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn positive(value: f64) -> bool {
+    value.is_finite() && value > 0.0
+}
+fn identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 200
+        && value.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        })
+}
+fn clean_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && !path.components().any(|c| matches!(c, Component::ParentDir))
+        && !path
+            .as_os_str()
+            .as_encoded_bytes()
+            .iter()
+            .any(|b| b.is_ascii_control())
+}
+fn model_paths(model: &ModelConfig) -> Vec<(&Path, &'static str)> {
+    let mut paths = Vec::new();
+    if let Some(path) = &model.source.file {
+        paths.push((path.as_path(), "source.file"));
+    }
+    if let Some(extra) = &model.extra {
+        if let Some(path) = &extra.text_encoder {
+            paths.push((path.as_path(), "extra.text_encoder"));
+        }
+        if let Some(path) = &extra.vae {
+            paths.push((path.as_path(), "extra.vae"));
+        }
+    }
+    paths
+}
