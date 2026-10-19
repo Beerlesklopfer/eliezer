@@ -23,3 +23,12 @@ indexes also include AMD's separate 7.2 repository, which is identified explicit
 in the output. Debian's HIP 5.7 and rocBLAS 5.5 packages do not match this build's
 HIP 7 / rocBLAS SONAME 5 requirements. The Candle experiment's MIOpen/rocprofiler
 packages are not dependencies of the current llama.cpp service.
+
+## Installed 0.5.0-1 smoke test
+
+`results/installed-0.5.0.json` records the user-requested check against the installed
+service: package/binary version, private library resolution, health, Mistral loading
+with context 4096, a short eight-token inference, unloading and post-test health.
+No credentials or request/response contents are recorded. This manual test needs
+the installed service, configured model and GPU; it is not part of cargo test.
+One cycle does not establish memory stability or test all configured models.
