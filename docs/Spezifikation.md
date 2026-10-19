@@ -348,6 +348,11 @@ trait Backend: Send + Sync {
     deshalb zunächst `llamacpp` einplanen und erst nach M1 entscheiden.
   - **Denkoptionen** (`reasoning_effort`) setzt Eliezer, soweit das Crate sie nicht selbst versteht, in die Chatvorlage bzw. in
     Parameter um (M4).
+- **candle (eingebettet, Rückfallstufe vor llama.cpp):** Der ursprüngliche Architekturplan nennt „Hugging Face Candle oder
+  mistral.rs“ als eingebettete Laufzeit. mistral.rs baut auf Candle auf; wo das mistral.rs-Crate eine Karte oder ein Modell nicht
+  trägt, ist **Candle direkt** (reines Rust, kein C++) die nächste Prüfung in M1, **bevor** `llamacpp` gebaut wird. Auch Candle
+  ist niedrig (Modelle, Tokenizer, Sampler selbst verdrahten); die Lücken zählen wie bei `llamacpp`. Ob Candle AMD bedient, ist
+  **nicht belegt** und wird in M1 geprüft.
 - **llamacpp (eingebettet, optional, vor allem für AMD):** llama.cpp wird über ein **Binding-Crate** eingebunden (Kandidaten:
   `llama-cpp-2`, `llama-cpp-rs`; Wahl und Version in M1 festlegen und in `docs/Abhaengigkeiten.md` begründen), hinter dem
   Cargo-Feature `llamacpp`. Es gibt keinen `llama-server`, keinen Router, keinen Port. Nur zu bauen, wenn M1 zeigt, dass das

@@ -22,7 +22,7 @@ Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
 - **M1-02** stable-diffusion.cpp (Server) mit `qwen-image-2.1-UC-Q4_K_M.gguf`, Textencoder und VAE: Befehlszeile,
   Endpunkte, Zeit je Bild, VRAM. Ebenfalls in `docs/Laufzeiten.md`.
 - **M1-02a** Hersteller der Karte klären (`/sys/class/drm/card*/device/vendor`) (NVIDIA oder AMD). mistral.rs und stable-diffusion.cpp je auf dieser Karte bauen und prüfen,
-  welche Beschleunigung läuft (CUDA, ROCm/HIP, Vulkan); bei AMD zusätzlich das llama.cpp-Binding (Vulkan/ROCm bauen und messen). Ergebnis je Backend in `docs/Laufzeiten.md`.
+  welche Beschleunigung läuft (CUDA, ROCm/HIP, Vulkan); bei AMD zusätzlich zuerst Candle direkt (reines Rust, laut Architekturplan vorgesehen), dann das llama.cpp-Binding (Vulkan/ROCm bauen und messen). Ergebnis je Backend in `docs/Laufzeiten.md`.
   Läuft das mistral.rs-Crate dort nicht, wird das **eingebettete** Backend `llamacpp` (Binding-Crate, Spezifikation 8) Teil von M4;
   dann das Binding-Crate wählen und seine Lücken (Chatvorlage, Werkzeugaufrufe, Vision, Parallelität) in `docs/Laufzeiten.md` festhalten.
 - **M1-03** Wechsel Chat ↔ Bild auf der 24-GB-Karte von Hand; zum Vergleich llama-swap mit denselben Modellen.
