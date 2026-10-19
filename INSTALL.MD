@@ -185,7 +185,7 @@ error, 3 service not reachable (start it with `systemctl start eliezer`).
 ## Debian package
 
 The package is built with `cargo-deb` (`cargo install cargo-deb`, Rust from rustup). It contains
-the model runtime of one GPU API: `rocm` (the default, also for a plain `cargo deb`), `vulkan`, `cuda`
+the model runtime of one GPU API: `rocm` (the default), `vulkan`, `cuda`
 or `cpu`. A package without a runtime would start but could not load any model, so there is none.
 
 ```bash
@@ -193,8 +193,22 @@ scripts/build-deb.sh            # rocm when ROCm is installed, otherwise cpu; or
 sudo apt install ./target/debian/eliezer_0.5.0-1_amd64.deb
 ```
 
-The ROCm variant needs AMD's ROCm libraries (`/opt/rocm`, installed by AMD's own installer, not by
-Debian); the binary finds them through an rpath. Set `ROCM_PATH` when building if ROCm lives elsewhere.
+Build the distributable package with `scripts/build-deb.sh`, not a bare `cargo deb`.
+The script bundles the ROCm runtime closure, HIP runtime compiler and rocBLAS/hipBLASLt
+kernel assets under `/usr/lib/x86_64-linux-gnu/eliezer/` (the native Debian multiarch
+triplet is detected at build time). Every bundled ELF uses a package-relative search
+path; the installed binary does not require `/opt/rocm` or `LD_LIBRARY_PATH`.
+License notices and a library manifest are installed under `/usr/share/doc/eliezer/`.
+The package is several GB because GPU kernel data is included. Standard Debian
+libraries remain apt dependencies; the kernel driver and GPU device permissions
+remain host requirements.
+
+For building the ROCm 7.2 variant, install AMD's matching SDK on the build machine
+(default `/opt/rocm`, overridden by `ROCM_PATH`), plus `python3`, `patchelf`,
+`binutils` and `dpkg-dev`. Debian 13's native HIP development packages are from 5.7
+and cannot substitute for the ROCm 7.2 ABI used by this build. Debian supplies the
+normal compiler/CMake/Clang prerequisites and the Vulkan development packages.
+A build exclusively against Debian's older ROCm SDK has not been validated.
 
 It installs `/usr/bin/eliezer`, the unit `eliezer.service`, a default
 `/etc/eliezer/config.toml` (no models, loopback only, kept on upgrades) and the example

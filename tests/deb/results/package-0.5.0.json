@@ -3,7 +3,7 @@
   "version": "0.5.0-1",
   "architecture": "amd64",
   "runtime": "rocm",
-  "sha256": "d076712d52a09115eb11afe3718b6a8e93c9c8510c10ff92da1e4813cae0b46a",
+  "sha256": "4b4afe1e21727b269cfdf9673399ce9dd4c10c3463e692754de698e73b27b316",
   "binary_version": "Eliezer 0.5.0",
   "fmt": "passed",
   "clippy": "passed",
@@ -14,5 +14,13 @@
     "home": "isolated temporary directory",
     "initial_host_home_run": "two CLI authentication tests affected by saved host credentials"
   },
-  "scope": "Version update; M5 acquisition pending; Candle experiment not merged; not installed"
+  "scope": "ROCm runtime bundled; M5 acquisition pending; Candle experiment not merged; host package not installed",
+  "size_bytes": 2902878322,
+  "bundled_libraries": 14,
+  "runtime_directory": "/usr/lib/x86_64-linux-gnu/eliezer",
+  "kernel_assets": [
+    "rocblas/library",
+    "hipblaslt/library"
+  ],
+  "clean_debian_container": "install/start/reload/reinstall/remove/purge and symlinked state directory passed without host ROCm or AMD mounts"
 }

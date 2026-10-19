@@ -64,3 +64,16 @@ The product license is **GPL-3.0-only**, per the user's decision.
 feature `preserve_order` in `eliezer-llamacpp` (pulls in `indexmap`, MIT OR Apache-2.0), so that JSON
 objects keep their insertion order when they are rendered into prompts. `strftime_now` is
 implemented with `std` only (UTC), so no date crate is needed.
+
+## Bundled ROCm Debian package
+
+Use `scripts/build-deb.sh rocm` for the final distribution package. The helper
+bundles the native shared-library closure plus HIP runtime compiler and GPU kernel
+assets under `/usr/lib/<multiarch-triplet>/eliezer/`, and preserves license notices.
+Standard system libraries remain apt dependencies. Kernel drivers are not bundled.
+
+Debian 13 provides the general C/C++, CMake, Ninja and Clang build tools and
+Vulkan headers/compiler. Its native HIP 5.7 / rocBLAS 5.5 development stack does
+not satisfy the current ROCm 7.2 binary ABI; matching AMD development libraries
+are required on the build host. No Debian-only ROCm rebuild is claimed.
+The exact apt package candidates are recorded under `tests/deb/results/`.

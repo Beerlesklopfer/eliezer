@@ -1,0 +1,126 @@
+build-essential:
+  Installed: 12.12
+  Candidate: 12.12
+  Version table:
+ *** 12.12 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+cmake:
+  Installed: 3.31.6-2
+  Candidate: 3.31.6-2
+  Version table:
+     4.3.4-1~bpo13+1 100
+        100 https://deb.debian.org/debian trixie-backports/main amd64 Packages
+ *** 3.31.6-2 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+ninja-build:
+  Installed: 1.12.1-1
+  Candidate: 1.12.1-1
+  Version table:
+ *** 1.12.1-1 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+pkg-config:
+  Installed: 1.8.1-4
+  Candidate: 1.8.1-4
+  Version table:
+ *** 1.8.1-4 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+clang-19:
+  Installed: 1:19.1.7-3+b1
+  Candidate: 1:19.1.7-3+b1
+  Version table:
+ *** 1:19.1.7-3+b1 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+libclang-dev:
+  Installed: (none)
+  Candidate: 1:19.0-63
+  Version table:
+     1:19.0-63 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+patchelf:
+  Installed: 0.18.0-1.4
+  Candidate: 0.18.0-1.4
+  Version table:
+ *** 0.18.0-1.4 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+dpkg-dev:
+  Installed: 1.22.22
+  Candidate: 1.22.22
+  Version table:
+ *** 1.22.22 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+        500 https://deb.debian.org/debian trixie/main armhf Packages
+        500 https://deb.debian.org/debian trixie/main arm64 Packages
+        100 /var/lib/dpkg/status
+libvulkan-dev:
+  Installed: 1.4.309.0-1
+  Candidate: 1.4.309.0-1
+  Version table:
+ *** 1.4.309.0-1 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+glslc:
+  Installed: (none)
+  Candidate: 2025.2-1
+  Version table:
+     2025.2-1 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+libamdhip64-dev:
+  Installed: (none)
+  Candidate: 5.7.1-6+deb13u1
+  Version table:
+     5.7.1-6+deb13u1 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+librocblas-dev:
+  Installed: (none)
+  Candidate: 5.5.1+dfsg-7
+  Version table:
+     5.5.1+dfsg-7 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+libhipblas-dev:
+  Installed: (none)
+  Candidate: 5.5.1-4
+  Version table:
+     5.5.1-4 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+librocrand-dev:
+  Installed: (none)
+  Candidate: 5.7.1-6
+  Version table:
+     5.7.1-6 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+librocsolver-dev:
+  Installed: (none)
+  Candidate: 5.5.1-7
+  Version table:
+     5.5.1-7 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+librocfft-dev:
+  Installed: (none)
+  Candidate: 6.1.2-1
+  Version table:
+     6.1.2-1 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+librocsparse-dev:
+  Installed: (none)
+  Candidate: 5.7.1-6
+  Version table:
+     5.7.1-6 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+miopen-hip-dev:
+  Installed: (none)
+  Candidate: 3.5.1.70200-43~24.04
+  Version table:
+     3.5.1.70200-43~24.04 600
+        600 https://repo.radeon.com/rocm/apt/7.2 noble/main amd64 Packages
+rocprofiler-dev:
+  Installed: (none)
+  Candidate: 2.0.70200.70200-43~24.04
+  Version table:
+     2.0.70200.70200-43~24.04 600
+        600 https://repo.radeon.com/rocm/apt/7.2 noble/main amd64 Packages

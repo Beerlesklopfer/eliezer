@@ -1,0 +1,2 @@
+Warning: storage.models_dir /var/lib/eliezer/models: not found (moved or unmounted? set storage.models_dir to the new place)
+package check passed

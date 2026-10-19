@@ -40,9 +40,18 @@ fi
 mkdir -p target/deb-assets
 sed 's|/usr/local/bin/eliezer|/usr/bin/eliezer|' packaging/eliezer.service > target/deb-assets/eliezer.service
 
-cargo deb -p eliezer --locked --variant "$variant" "$@"
-
-deb=$(ls -t target/debian/eliezer_*.deb | head -n 1)
-echo "Package: $deb"
-dpkg-deb --info "$deb"
-dpkg-deb --contents "$deb"
+# Keep the previous deliverable intact until bundling succeeds.
+stage=$(mktemp -d target/deb-stage.XXXXXX)
+trap 'rm -rf "$stage"' EXIT
+cargo deb -p eliezer --locked --variant "$variant" --output "$stage/" "$@"
+deb=$(find "$stage" -maxdepth 1 -name 'eliezer_*.deb' -print -quit)
+[ -n "$deb" ] || { echo "No package produced in the staging directory" >&2; exit 1; }
+if [ "$variant" = rocm ]; then
+    python3 scripts/bundle-rocm.py "$deb"
+fi
+mkdir -p target/debian
+final="target/debian/$(basename "$deb")"
+mv "$deb" "$final"
+echo "Package: $final"
+dpkg-deb --info "$final"
+dpkg-deb --contents "$final"

@@ -8,3 +8,18 @@ default configuration in `packaging/`).
 and checks the whole life cycle (install, user, files, start, reload, reinstall, remove, purge).
 It does not touch the host. `lintian` is not installed on the build machine, so no lintian
 result exists yet.
+
+## Bundled ROCm runtime
+
+The package script calls `scripts/bundle-rocm.py`: private shared-library closure,
+HIP runtime compiler, complete rocBLAS/hipBLASLt kernel assets, package-relative
+RUNPATHs, license notices, manifest and updated package checksums/installed size.
+`check-package.sh` exposes no host ROCm or AMD directory and rejects unresolved
+libraries or paths under `/opt`. It exercises install/start/reload/reinstall/remove.
+
+Debian 13 development-package availability was checked with apt-cache against
+the configured trixie indexes; see `results/debian-dev-libraries.txt`. These
+indexes also include AMD's separate 7.2 repository, which is identified explicitly
+in the output. Debian's HIP 5.7 and rocBLAS 5.5 packages do not match this build's
+HIP 7 / rocBLAS SONAME 5 requirements. The Candle experiment's MIOpen/rocprofiler
+packages are not dependencies of the current llama.cpp service.

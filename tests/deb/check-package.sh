@@ -11,17 +11,8 @@ trap 'rm -rf "$dl"' EXIT
 # The minimal image lacks adduser and the libraries of the ROCm variant.
 (cd "$dl" && apt-get download adduser libelf1t64 libnuma1 >/dev/null)
 
-# The ROCm variant links against AMD's libraries, which are not Debian packages: they are shared
-# into the container read-only, as they would be installed on a real machine.
-rocm=""
-for dir in "${ROCM_PATH:-/opt/rocm}" /opt/amdgpu; do
-    [ -d "$dir" ] && rocm="$rocm -v $dir:$dir:ro"
-done
-# On a real machine AMD's installer registers /opt/amdgpu/lib in the loader cache; the container has none.
-[ -d /opt/amdgpu/lib/x86_64-linux-gnu ] && rocm="$rocm -e LD_LIBRARY_PATH=/opt/amdgpu/lib/x86_64-linux-gnu"
-
-# shellcheck disable=SC2086
-podman run --rm --network none $rocm \
+# The ROCm package carries its private runtime; never expose the host SDK.
+podman run --rm --network none \
     -v "$(realpath "$deb"):/pkg.deb:ro" -v "$dl:/dl:ro" \
     docker.io/library/debian:trixie bash -c '
 set -eu
@@ -31,6 +22,14 @@ dpkg -i /pkg.deb >/dev/null 2>&1 || fail "install"
 getent passwd eliezer >/dev/null || fail "system user missing"
 [ "$(stat -c %a /etc/eliezer/config.toml)" = 644 ] || fail "config mode"
 [ -x /usr/bin/eliezer ] || fail "binary missing"
+[ -d /usr/lib/x86_64-linux-gnu/eliezer ] || fail "private runtime missing"
+[ -d /usr/lib/x86_64-linux-gnu/eliezer/rocblas/library ] || fail "rocBLAS kernels missing"
+[ -d /usr/lib/x86_64-linux-gnu/eliezer/hipblaslt/library ] || fail "hipBLASLt kernels missing"
+[ ! -d /opt/rocm ] || fail "host ROCm unexpectedly exposed"
+ldd /usr/bin/eliezer > /tmp/dependencies
+! grep -q "not found" /tmp/dependencies || fail "unresolved runtime dependency"
+! grep -q /opt/ /tmp/dependencies || fail "runtime still depends on /opt"
+
 grep -q "^ExecStart=/usr/bin/eliezer " /usr/lib/systemd/system/eliezer.service || fail "unit path"
 [ ! -e /etc/systemd/system/multi-user.target.wants/eliezer.service ] || fail "service must not be enabled"
 # the package creates the state directory for the service user (systemd StateDirectory= is not used)

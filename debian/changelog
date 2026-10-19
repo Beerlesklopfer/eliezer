@@ -1,6 +1,10 @@
 eliezer (0.5.0) UNRELEASED; urgency=low
 
   * Set the package version to 0.5.0 for apt upgrades, as requested.
+  * Bundle ROCm userspace libraries, HIP runtime compiler and GPU kernel assets
+    in /usr/lib/<multiarch-triplet>/eliezer with relative library search paths,
+    third-party license notices and a manifest. Check the package without host
+    ROCm mounts; document Debian build-library availability and ABI differences.
   * Update the installation example to eliezer_0.5.0-1_amd64.deb.
     M5 model acquisition is still pending; the Candle ROCm experiment remains
     on its separate branch and is not included in this package.

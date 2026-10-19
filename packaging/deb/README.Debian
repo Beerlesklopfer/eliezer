@@ -15,5 +15,7 @@ The service runs as the system user "eliezer" with the supplementary groups
 removing the package keeps that directory and the user.
 Configuration changes are applied with "systemctl reload eliezer".
 
-The model runtimes are not connected yet: loading a model fails with
-"502 backend_error" until the runtime milestones are finished.
+The ROCm package includes its userspace GPU libraries and kernel assets in
+/usr/lib/x86_64-linux-gnu/eliezer/. It does not require /opt/rocm on the target.
+The AMD kernel driver and access to /dev/kfd and /dev/dri are still required.
+Third-party notices and bundled-libraries.json are under /usr/share/doc/eliezer/.

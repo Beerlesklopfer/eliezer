@@ -58,7 +58,7 @@ on one GPU (NVIDIA or AMD). It serves OpenAI- and Anthropic-compatible HTTP inte
 and a management API.
 
 This package contains the service, a systemd unit and a default configuration without \
-models. The model runtimes are not connected yet."""
+models. The ROCm variant bundles its GPU runtime libraries and kernel assets in a private multiarch directory."""
 maintainer-scripts = "../../packaging/deb"
 systemd-units = { unit-scripts = "../../target/deb-assets", enable = false, start = false }
 assets = [
