@@ -22,10 +22,11 @@ Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
 - **M1-02** stable-diffusion.cpp (Server) mit `qwen-image-2.1-UC-Q4_K_M.gguf`, Textencoder und VAE: Befehlszeile,
   Endpunkte, Zeit je Bild, VRAM. Ebenfalls in `docs/Laufzeiten.md`.
 - **M1-02a** Hersteller der Karte klären (`/sys/class/drm/card*/device/vendor`) (NVIDIA oder AMD). mistral.rs und stable-diffusion.cpp je auf dieser Karte bauen und prüfen,
-  welche Beschleunigung läuft (CUDA, ROCm/HIP, Vulkan); bei AMD zusätzlich `llama-server`. Ergebnis je Backend in `docs/Laufzeiten.md`.
-  Läuft mistral.rs dort nicht, wird das Backend `llamacpp` (Spezifikation 8) Teil von M4.
+  welche Beschleunigung läuft (CUDA, ROCm/HIP, Vulkan); bei AMD zusätzlich das llama.cpp-Binding (Vulkan/ROCm bauen und messen). Ergebnis je Backend in `docs/Laufzeiten.md`.
+  Läuft das mistral.rs-Crate dort nicht, wird das **eingebettete** Backend `llamacpp` (Binding-Crate, Spezifikation 8) Teil von M4;
+  dann das Binding-Crate wählen und seine Lücken (Chatvorlage, Werkzeugaufrufe, Vision, Parallelität) in `docs/Laufzeiten.md` festhalten.
 - **M1-03** Wechsel Chat ↔ Bild auf der 24-GB-Karte von Hand; zum Vergleich llama-swap mit denselben Modellen.
-- **M1-04** Entscheidung: fertiger Verwalter (llama-swap) oder Eigenbau; mistral.rs eingebettet (entschieden) – Ausweichweg `llamacpp` für Karten, die das Crate nicht bedient.
+- **M1-04** Entscheidung: fertiger Verwalter (llama-swap) oder Eigenbau; mistral.rs eingebettet (entschieden) – Ausweichweg `llamacpp` (ebenfalls eingebettet) für Karten, die das Crate nicht bedient.
   Fällt sie auf „fertig“, wird M2 bis M3 durch eine Anpassung ersetzt und die Spezifikation entsprechend gekürzt.
 
 *Abnahme:* `docs/Laufzeiten.md` enthält je Backend eine **lauffähige Befehlszeile und die gemessenen Werte**; die Entscheidung steht darin.
@@ -60,6 +61,7 @@ auf Eliezer mit fake-backend) listet Modelle, lädt und entlädt.
 ### M4 – Laufzeit mistral.rs
 
 - **M4-01** Backend `mistralrs` als eingebettetes Crate nach `docs/Laufzeiten.md`: Laden/Entladen über das Handle, Prüfung „VRAM frei nach Entladen“ (`unload_leak`, `needs_restart`), Rechenarbeit auf eigenen Threads, Panic-Abfang, Feature `mistralrs-cuda`.
+- **M4-01a** (nur wenn M1 es verlangt) Backend `llamacpp` eingebettet über das gewählte Binding-Crate: Laden/Entladen, Chatvorlage, Streaming, Parallelität, Werkzeugaufrufe, `usage`, Vision soweit möglich; gleiche Prüfungen wie M4-01.
 - **M4-02** Chat und Vision, Werkzeugaufrufe, Streaming mit `usage`; Chatvorlage je Modell.
 - **M4-03a** Anthropic-Schnittstelle gegen ein echtes Modell: Werkzeugaufruf und Streaming mit einem Anthropic-Client prüfen (Spezifikation 12, Punkt 4).
 - **M4-03** Denkoptionen (`reasoning_effort` → Backend), Statistik im letzten SSE-Block, Gegenprobe der VRAM-Rechnung (gemessener Wert wird gespeichert).

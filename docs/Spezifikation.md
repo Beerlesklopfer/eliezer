@@ -23,7 +23,7 @@ OpenAI-Schnittstelle auch die **Anthropic-Schnittstelle (Messages API)**, damit 
 |---|---|
 | Modell | Eintrag der Positivliste (`[[model]]` in der Konfiguration), Schlüssel `key` |
 | Instanz | geladenes Modell, `instance_id` (hier gleich `key`, es gibt höchstens eine Instanz je Modell) |
-| Backend | Hintergrundprogramm, das Modelle bedient (`mistralrs`, `sdcpp`) |
+| Backend | Laufzeit, die Modelle bedient: eingebettet (`mistralrs`, `llamacpp`) oder als Kindprozess (`sdcpp`) |
 | Budget | nutzbarer VRAM = `vram_budget_gb − reserve_gb` |
 | Lease | Reservierung von VRAM für eine Instanz oder einen Ladevorgang |
 | Priorität | Zahl je Modell, höher verdrängt niedriger nicht-genutzte Modelle |
@@ -37,7 +37,7 @@ eliezer/
 ├─ Cargo.toml                 (workspace)
 ├─ crates/
 │  ├─ eliezer-core/           Typen, Konfiguration, VRAM-Rechnung, Zustandsautomat, Planer (ohne I/O)
-│  ├─ eliezer-backend/        Backend-Trait; mistral.rs eingebettet (Feature `mistralrs`), llama.cpp-/sd.cpp-Prozesssteuerung, fake-backend
+│  ├─ eliezer-backend/        Backend-Trait; mistral.rs eingebettet (Feature `mistralrs`), llama.cpp eingebettet (Feature `llamacpp`), sd.cpp-Prozesssteuerung, fake-backend
 │  ├─ eliezer-api/            axum-Router: /v1/*, /api/v1/*, Authentifizierung, Fehlerformat
 │  ├─ eliezer-gpu/            VRAM-Messung (NVML oder nvidia-smi), Trait mit Prüfstand
 │  └─ eliezer/                Programm: Argumente, Konfiguration laden, Dienst starten
@@ -52,7 +52,7 @@ Prinzip: `eliezer-core` enthält die gesamte Entscheidungslogik als **reine Funk
 
 Laufzeitmodell: ein Prozess `eliezer`, darin ein Verwalter-Task (`Supervisor`), der **allein**
 Zustand ändert (Nachrichten über `tokio::sync::mpsc`). HTTP-Handler schicken Befehle und warten auf
-Antworten (`oneshot`). Je Instanz: bei `mistralrs` ein Handle im Prozess, bei `llamacpp` und `sdcpp` ein Kindprozess.
+Antworten (`oneshot`). Je Instanz: bei `mistralrs` und `llamacpp` ein Handle im Prozess, bei `sdcpp` ein Kindprozess.
 
 ## 4. Konfiguration
 
@@ -87,9 +87,9 @@ downloads = "on_request"            # "on_request" | "never"
 enabled = true                         # ohne Cargo-Feature `mistralrs` zur Bauzeit nicht verfügbar (siehe Abschnitt 8)
 max_loaded = 4                         # Obergrenze gleichzeitig geladener Modelle dieses Backends (zusätzlich zum VRAM-Buch)
 
-[backend.llamacpp]                     # optional: Ersatz-Laufzeit für Sprachmodelle, falls mistral.rs die GPU des Rechners nicht unterstützt
-program = "/usr/local/bin/llama-server"   # Router-Modus oder ein Prozess je Modell; wird in M1 geprüft
-port_range = [24550, 24559]
+[backend.llamacpp]                     # optional, eingebettet über ein Binding-Crate (Ersatz-Laufzeit, vor allem für AMD)
+enabled = false                        # ohne Cargo-Feature `llamacpp` zur Bauzeit nicht verfügbar
+max_loaded = 4
 
 [backend.sdcpp]
 program = "/usr/local/bin/sd-server"
@@ -342,15 +342,27 @@ trait Backend: Send + Sync {
   - **Isolation:** Die Rechenarbeit läuft nicht auf den Tokio-Arbeitern, sondern auf eigenen Threads (`spawn_blocking` bzw. dem
     Laufzeit-Thread des Crates). Ein **Panic** im Backend wird abgefangen (`catch_unwind` an der Grenze, Task-Join-Fehler) und
     macht die Instanz `failed`; ein harter Absturz (CUDA-Fehler, Abbruch des Prozesses) beendet Eliezer – systemd startet neu,
-    laufende Anfragen enden mit 502. Das ist der bekannte Preis der Einbettung; wer Prozessisolation will, nimmt das Backend `llamacpp`.
+    laufende Anfragen enden mit 502. Das ist der bekannte Preis der Einbettung; das Backend `sdcpp` läuft dagegen als Kindprozess.
   - **Hardware:** Welche GPUs das Crate bedient, bestimmen dessen Cargo-Features zur Bauzeit (`cuda`, `flash-attn`, `cudnn`,
     `metal`, …). Das Eliezer-Feature `mistralrs-cuda` reicht sie durch. **AMD (ROCm/Vulkan) ist nicht belegt** – auf AMD
     deshalb zunächst `llamacpp` einplanen und erst nach M1 entscheiden.
   - **Denkoptionen** (`reasoning_effort`) setzt Eliezer, soweit das Crate sie nicht selbst versteht, in die Chatvorlage bzw. in
     Parameter um (M4).
-- **llamacpp (optional, vor allem für AMD):** Kindprozess `llama-server` je Modell (GGUF), Port aus `port_range`.
-  Nur zu bauen, wenn M1 zeigt, dass mistral.rs auf der vorhandenen GPU nicht läuft (Herstellerunterstützung
-  von mistral.rs ist **nicht geprüft**: CUDA ist belegt, ROCm/Vulkan nicht). Gleiche Schnittstelle nach außen.
+- **llamacpp (eingebettet, optional, vor allem für AMD):** llama.cpp wird über ein **Binding-Crate** eingebunden (Kandidaten:
+  `llama-cpp-2`, `llama-cpp-rs`; Wahl und Version in M1 festlegen und in `docs/Abhaengigkeiten.md` begründen), hinter dem
+  Cargo-Feature `llamacpp`. Es gibt keinen `llama-server`, keinen Router, keinen Port. Nur zu bauen, wenn M1 zeigt, dass das
+  mistral.rs-Crate die vorhandene GPU nicht bedient.
+  - **Aufwand beachten:** Das Binding ist niedrig (Modell laden, Kontext anlegen, Token, Dekodieren, Sampler). Die Schicht
+    darüber baut Eliezer selbst: Chatvorlage anwenden (llama.cpp bringt `chat template`-Funktionen mit), Streaming Stück für
+    Stück, Abbruch, Parallelität (mehrere Sequenzen in einem Kontext), Werkzeugaufrufe aus der Modellausgabe erkennen,
+    `usage`, Vision (Bildprojektor, soweit das Binding es trägt). Was das Binding nicht kann, wird in `docs/Laufzeiten.md`
+    als Lücke festgehalten und entschieden (selbst bauen oder weglassen), nicht still ausgelassen.
+  - **Bauvoraussetzungen:** Das Crate übersetzt llama.cpp (C++) zur Bauzeit (CMake, Compiler); die Beschleunigung wählen
+    Cargo-Features (`cuda`, `vulkan`, `metal`, …). **Ob ROCm/HIP über ein Feature zu haben ist, ist nicht belegt** und wird in M1
+    gebaut und gemessen; Vulkan ist der wahrscheinlichere Weg für AMD. „Alles Rust“ gilt hier für den Code von Eliezer, nicht für
+    das gelinkte llama.cpp.
+  - **Laden/Entladen, Isolation, Fehler:** wie bei `mistralrs` (Handle fallen lassen, Messung „VRAM frei“, `unload_leak`,
+    Panic-Abfang, eigene Threads). Ein harter Absturz in C++-Code beendet den Prozess (systemd startet neu).
 - **sdcpp:** Kindprozess für ein Bildmodell; Anfragen `/v1/images/generations` werden in dessen Schnittstelle
   übersetzt (in M1 am Programm festgestellt). Das GGUF enthält nur den Transformer: Textencoder und VAE
   kommen aus `extra`. Exklusiv (Abschnitt 7, Punkt 4).
