@@ -1,13 +1,13 @@
-# Vergleich mit llama-swap
+# Comparison with llama-swap
 
-Manueller GPU-Vergleich mit denselben Modelldateien und derselben Bildanfrage
-wie im [direkten Versuch](../sdcpp/README.md).
-Geprüfter Quellstand: `a2796fb0306215c6883454a8707dfb22d25c3068` vom 14.10.2026.
+Manual GPU comparison with the same model files and the same image request
+as in the [direct trial](../sdcpp/README.md).
+Source revision checked: `a2796fb0306215c6883454a8707dfb22d25c3068` of 14.10.2026.
 
-## Bau und Aufruf
+## Build and invocation
 
-Der Quellstand verlangt Go 1.27.1. Der isolierte Bau nutzt automatische
-Go-Toolchain-Auswahl; Cache, Toolchain und Module bleiben unter `/tmp`:
+The source revision requires Go 1.27.1. The isolated build uses automatic
+Go toolchain selection; cache, toolchain and modules stay under `/tmp`:
 
 ```bash
 git clone https://github.com/mostlygeek/llama-swap.git /tmp/eliezer-m1-llama-swap
@@ -17,51 +17,51 @@ GOPATH=/tmp/eliezer-m1-go GOMODCACHE=/tmp/eliezer-m1-go/pkg/mod \
   GOCACHE=/tmp/eliezer-m1-go/cache go build -o llama-swap .
 ```
 
-Aufruf aus dem Eliezer-Repository:
+Invocation from the Eliezer repository:
 
 ```bash
 LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib/llvm/lib \
 python3 tests/runtime/llama-swap/probe.py \
   --swap /tmp/eliezer-m1-llama-swap/llama-swap \
-  --chat-server /pfad/llama-server \
-  --chat-model /pfad/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf \
+  --chat-server /path/llama-server \
+  --chat-model /path/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf \
   --image-server /tmp/eliezer-m1-sdcpp/build/bin/sd-server \
-  --diffusion /pfad/qwen-image-2.1-UC-Q4_K_M.gguf \
-  --encoder /pfad/qwen3vl_8b_int8_convrot.safetensors \
-  --vae /pfad/qwen_image_2.1_vae_bf16.safetensors
+  --diffusion /path/qwen-image-2.1-UC-Q4_K_M.gguf \
+  --encoder /path/qwen3vl_8b_int8_convrot.safetensors \
+  --vae /path/qwen_image_2.1_vae_bf16.safetensors
 ```
 
-Das Skript erzeugt eine Konfiguration mit zwei Modellen, validiert sie mit
-`llama-swap -validate` und führt Chat → Bild → Chat über den Proxy aus.
-Die Standard-Gruppenplanung lässt nur ein Modell gleichzeitig laufen.
-Alle Listener sind auf `127.0.0.1` begrenzt, Ports 24606 bis 24608.
-Server und Kindprozesse werden am Ende über ihre eigene Prozessgruppe beendet.
+The script generates a configuration with two models, validates it with
+`llama-swap -validate` and runs chat → image → chat through the proxy.
+The default group planning lets only one model run at a time.
+All listeners are restricted to `127.0.0.1`, ports 24606 to 24608.
+At the end, the server and child processes are terminated via their own process group.
 
-## Vergleichsgrenze
+## Limits of the comparison
 
-Für Chat wird der vorhandene Vulkan-`llama-server` aus LM Studio verwendet,
-für Bild derselbe HIP-`sd-server` wie im direkten Versuch. Die Modelldateien und
-Anfragen sind gleich; die Chat-Laufzeiten unterscheiden sich (Vulkan-Prozess
-gegen eingebettetes ROCm-Binding). Die Messung dient dem Funktions- und
-Wechselvergleich, keiner isolierten Geschwindigkeitsbewertung des Verwalters.
+For chat, the existing Vulkan `llama-server` from LM Studio is used;
+for images, the same HIP `sd-server` as in the direct trial. The model files and
+requests are identical; the chat runtimes differ (Vulkan process
+versus embedded ROCm binding). The measurement serves the functional and
+switching comparison, not an isolated speed assessment of the manager.
 
-Messwerte, synthetische Logs, Konfiguration und Testbild entstehen unter `target/`.
-Geprüfte Ergebniszusammenfassungen liegen unter `results/`.
+Measurements, synthetic logs, configuration and test image are created under `target/`.
+Verified result summaries are in `results/`.
 
-## Ergebnisse vom 19.10.2026
+## Results of 19.10.2026
 
-Messwerte: [results/2026-10-19.json](results/2026-10-19.json).
+Measurements: [results/2026-10-19.json](results/2026-10-19.json).
 
-- Quellstand erfolgreich mit automatisch bezogener Go-Toolchain gebaut.
-- Konfiguration mit zwei Modellen erfolgreich validiert.
-- Chat → Bild → Chat über den Proxy erfolgreich, jeweils einschließlich Laden/Wechsel:
-  1,537 s → 8,714 s → 2,090 s.
-- Beide Chatantworten melden 16 Prompt- und 32 Ausgabetoken.
-- Bildantwort: gültiges PNG, 251 054 Byte, identischer synthetischer Prompt
-  und identische Einstellungen wie im direkten Versuch.
-- VRAM nach Beenden des Vergleichs: 1 173 655 552 Byte bei Ausgangswert
-  1 221 361 664 Byte; kein verbleibender Modellprozess festgestellt.
-- Entscheidung: Der fertige Verwalter beherrscht den geprüften Wechsel.
-  Eliezer bleibt der Eigenbau, weil die gewählte Architektur die Sprachlaufzeit
-  direkt einbettet und die LM-Studio-Verwaltung sowie das eigene VRAM-Buch bereitstellt.
-  Für den späteren Betrieb entsteht dadurch keine Abhängigkeit auf llama-swap.
+- Source revision built successfully with the automatically fetched Go toolchain.
+- Configuration with two models validated successfully.
+- Chat → image → chat through the proxy succeeded, each including loading/switching:
+  1.537 s → 8.714 s → 2.090 s.
+- Both chat replies report 16 prompt tokens and 32 output tokens.
+- Image reply: valid PNG, 251 054 bytes, identical synthetic prompt
+  and identical settings as in the direct trial.
+- VRAM after the comparison ended: 1 173 655 552 bytes against a baseline of
+  1 221 361 664 bytes; no remaining model process found.
+- Decision: The ready-made manager handles the verified switch.
+  Eliezer remains the in-house build, because the chosen architecture embeds the
+  language runtime directly and provides the LM Studio management and its own VRAM bookkeeping.
+  This creates no dependency on llama-swap for later operation.

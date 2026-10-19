@@ -1,25 +1,25 @@
-# Featureprüfung Candle
+# Candle feature check
 
-## Durchführung
+## Procedure
 
-Am 19.10.2026 `cargo info candle-core` ausgeführt und die heruntergeladene
-Quelle von `candle-core 0.11.0` geprüft, insbesondere `Cargo.toml` und `src/device.rs`.
+On 19.10.2026 `cargo info candle-core` was run and the downloaded
+source of `candle-core 0.11.0` was inspected, in particular `Cargo.toml` and `src/device.rs`.
 
-Quelle: [Crate 0.11.0](https://docs.rs/crate/candle-core/0.11.0/source/).
+Source: [crate 0.11.0](https://docs.rs/crate/candle-core/0.11.0/source/).
 
-## Ergebnis
+## Result
 
-- Gerätevarianten: CPU, CUDA, Metal.
-- Kein ROCm-/Vulkan-Feature in dieser veröffentlichten Version.
-- Damit ist kein direktes AMD-GPU-Backend dieser Version nachgewiesen.
-- Dies ist eine Quellenprüfung, kein GPU- oder Modelllauf. Andere Git-Stände oder
-  Forks sind durch diese Prüfung nicht bewertet.
+- Device variants: CPU, CUDA, Metal.
+- No ROCm/Vulkan feature in this published version.
+- Hence no direct AMD GPU backend is demonstrated for this version.
+- This is a source check, not a GPU or model run. Other git revisions or
+  forks are not assessed by this check.
 
-## Exakte Abhängigkeit der neuen mistral.rs-Release
+## Exact dependency of the new mistral.rs release
 
-Zusätzlich wurde der in mistral.rs v0.9.5 festgehaltene Candle-Commit
-`66a8cf184a5a519671454066b1b9efd446ec9f5c` direkt von GitHub abgerufen.
-`candle-core/Cargo.toml` und `candle-core/src/device.rs` zeigen ebenfalls nur
-CPU/CUDA/Metal als Geräte und keine ROCm-/Vulkan-Features.
-Damit gilt der negative AMD-Befund auch für die dort tatsächlich eingebundene
-Git-Abhängigkeit, nicht nur für die separat veröffentlichte Crate 0.11.0.
+In addition, the Candle commit `66a8cf184a5a519671454066b1b9efd446ec9f5c`
+pinned in mistral.rs v0.9.5 was fetched directly from GitHub.
+`candle-core/Cargo.toml` and `candle-core/src/device.rs` likewise show only
+CPU/CUDA/Metal as devices and no ROCm/Vulkan features.
+The negative AMD finding therefore also holds for the git dependency actually
+pulled in there, not only for the separately published crate 0.11.0.

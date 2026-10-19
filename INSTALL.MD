@@ -1,27 +1,27 @@
-# Eliezer installieren
+# Installing Eliezer
 
-Eliezer steht unter **GPL-3.0-only**; der vollständige Lizenztext steht in [LICENSE](LICENSE).
+Eliezer is licensed under **GPL-3.0-only**; the full license text is in [LICENSE](LICENSE).
 
-Der aktuelle Programmrahmen prüft die Konfiguration, bietet `/healthz` und verarbeitet
-SIGTERM sowie SIGHUP. Modellverwaltung, Authentifizierung, Chat und Bildgenerierung
-sind darin noch nicht implementiert. Die Laufzeit-Probeprogramme unter `tests/`
-sind eigenständige Versuche.
+The current program frame checks the configuration, offers `/healthz` and handles
+SIGTERM and SIGHUP. Model management, authentication, chat and image generation
+are not implemented in it yet. The runtime probe programs under `tests/`
+are standalone experiments.
 
-## Voraussetzungen
+## Requirements
 
-- Linux; für den späteren Modellbetrieb eine unterstützte GPU mit mindestens 8 GB VRAM.
-- Beim Bauen: Rust stable ab 1.88 und Cargo. Die Toolchain-Datei wählt `stable`;
-  die deklarierte Mindestversion bleibt 1.88.
-- Für Container: Docker mit Compose oder Podman mit einem Compose-Provider.
-- Ein eigenes Modellverzeichnis oder ein persistentes Container-Volume.
+- Linux; for later model operation a supported GPU with at least 8 GB VRAM.
+- For building: Rust stable 1.88 or later and Cargo. The toolchain file selects `stable`;
+  the declared minimum version remains 1.88.
+- For containers: Docker with Compose or Podman with a Compose provider.
+- A dedicated model directory or a persistent container volume.
 
-Details zu GPU-Laufzeiten und Rechten: [Laufzeitvoraussetzungen](docs/Laufzeiten.md).
-Für das reine M2-Gerüst wird keine GPU benötigt. GPU-Entwicklungsbibliotheken
-werden erst beim Bau der entsprechenden Modellbackends erforderlich.
+Details on GPU runtimes and permissions: [Runtime requirements](docs/Runtimes.md).
+The pure M2 scaffold needs no GPU. GPU development libraries
+become necessary only when building the corresponding model backends.
 
-## Aus dem Quellcode bauen
+## Building from source
 
-Im ausgecheckten Repository:
+In the checked-out repository:
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -30,12 +30,12 @@ cargo --version
 cargo build --release --locked -p eliezer
 ```
 
-Das Programm liegt anschließend unter `target/release/eliezer`.
-Falls Rust noch fehlt, die Installation über die [offizielle Rust-Seite](https://www.rust-lang.org/tools/install)
-vornehmen. Auf einem Rechner mit Rustup verwendet Eliezer die Benutzerinstallation.
+The program is then located at `target/release/eliezer`.
+If Rust is still missing, install it via the [official Rust site](https://www.rust-lang.org/tools/install).
+On a machine with Rustup, Eliezer uses the user installation.
 
-Die Entwicklungsprüfungen lassen sich nach einmaligem Bezug der Abhängigkeiten
-auch ohne Netz ausführen:
+After fetching the dependencies once, the development checks can also be run
+without network:
 
 ```bash
 cargo fetch --locked
@@ -44,21 +44,21 @@ cargo clippy --workspace --all-targets --offline --locked -- -D warnings
 cargo test --workspace --offline --locked
 ```
 
-GPU-Probeprogramme werden dabei nicht gestartet.
+GPU probe programs are not started in the process.
 
-## Konfiguration prüfen und lokal starten
+## Checking the configuration and starting locally
 
-Eine vollständige Beispielkonfiguration liegt unter
+A complete example configuration is at
 [packaging/config.example.toml](packaging/config.example.toml).
 
 ```bash
 cargo run --locked -- --check-config packaging/config.example.toml
 ```
 
-Bei Erfolg erscheint `Konfiguration in Ordnung`. Ungültige Konfigurationen
-enden mit Code 2 und einer deutschen Meldung mit Zeile und Feld.
+On success, `Configuration OK` appears. Invalid configurations
+end with exit code 2 and a message with line and field.
 
-Für eine Benutzerinstallation kann die ausführbare Datei lokal installiert werden:
+For a user installation, the executable can be installed locally:
 
 ```bash
 install -Dm755 target/release/eliezer "$HOME/.local/bin/eliezer"
@@ -66,41 +66,41 @@ mkdir -p "$HOME/.config/eliezer" "$HOME/.local/share/eliezer/models"
 cp packaging/config.example.toml "$HOME/.config/eliezer/config.toml"
 ```
 
-In dieser Kopie die folgenden Pfade auf das tatsächlich verwendete, absolute
-Modellverzeichnis einstellen:
+In this copy, set the following paths to the absolute model directory
+actually used:
 
-- `storage.models_dir`, beispielsweise `/home/NAME/.local/share/eliezer/models`.
-- `huggingface.cache_dir`, beispielsweise `/home/NAME/.local/share/eliezer/models/hf`.
-- Sämtliche `source.file`-, Textencoder- und VAE-Pfade unterhalb der Modellablage.
+- `storage.models_dir`, for example `/home/NAME/.local/share/eliezer/models`.
+- `huggingface.cache_dir`, for example `/home/NAME/.local/share/eliezer/models/hf`.
+- All `source.file`, text encoder and VAE paths below the model store.
 
-TOML-Dateien ersetzen weder `$HOME` noch `~` durch das Home-Verzeichnis.
-Es sind absolute Pfade einzutragen. Vorhandene Symlinks werden bei der Prüfung
-aufgelöst; auch darüber dürfen Modellpfade die gemeinsame Ablage nicht verlassen.
-Noch nicht vorhandene Downloadziele sind innerhalb dieser Ablage erlaubt.
+TOML files replace neither `$HOME` nor `~` with the home directory.
+Absolute paths must be entered. Existing symlinks are resolved during the check;
+even through them, model paths must not leave the shared store.
+Download targets that do not exist yet are allowed within this store.
 
 ```bash
 "$HOME/.local/bin/eliezer" --config "$HOME/.config/eliezer/config.toml" --check-config
 "$HOME/.local/bin/eliezer" --config "$HOME/.config/eliezer/config.toml"
 ```
 
-In einem zweiten Terminal:
+In a second terminal:
 
 ```bash
 curl --fail http://127.0.0.1:1234/healthz
 ```
 
-Erwartete Antwort: `ok`. Mit Strg+C wird der Dienst geordnet beendet.
-Alternativ zum Argument kann `ELIEZER_CONFIG` den Konfigurationspfad angeben;
-`--config` hat Vorrang. Ohne beides gilt `/etc/eliezer/config.toml`.
+Expected response: `ok`. Ctrl+C shuts the service down in an orderly way.
+As an alternative to the argument, `ELIEZER_CONFIG` can specify the configuration path;
+`--config` takes precedence. With neither, `/etc/eliezer/config.toml` applies.
 
-SIGHUP prüft im M2-Gerüst die Datei erneut. Gültige Änderungen werden noch nicht
-in den laufenden Dienst übernommen; dafür ist vorerst ein Neustart erforderlich.
-Eine ungültige Datei beendet den laufenden Dienst nicht.
+In the M2 scaffold, SIGHUP re-checks the file. Valid changes are not yet applied
+to the running service; a restart is required for that for now.
+An invalid file does not terminate the running service.
 
-## Als systemd-Dienst betreiben
+## Running as a systemd service
 
-Die folgenden Einrichtungsschritte benötigen Administrationsrechte. Den Benutzer
-`eliezer` nur anlegen, wenn er noch nicht existiert:
+The following setup steps require administrative privileges. Create the user
+`eliezer` only if it does not exist yet:
 
 ```bash
 sudo useradd --system --user-group --home-dir /var/lib/eliezer --shell /usr/sbin/nologin eliezer
@@ -112,12 +112,12 @@ sudo install -m640 -o root -g eliezer packaging/config.example.toml /etc/eliezer
 sudo install -m644 packaging/eliezer.service /etc/systemd/system/eliezer.service
 ```
 
-Die Gerätegruppen müssen auf dem jeweiligen System existieren und zu den
-Geräteberechtigungen passen. Bei abweichenden Gruppennamen auch
-`SupplementaryGroups` in der Unit anpassen. Die Rechte des angemeldeten Benutzers
-ersetzen nicht die des Dienstbenutzers.
+The device groups must exist on the respective system and match the
+device permissions. If the group names differ, also adjust
+`SupplementaryGroups` in the unit. The permissions of the logged-in user
+do not replace those of the service user.
 
-Vor dem Start die Konfiguration an Modelle und Hardware anpassen, dann:
+Before starting, adapt the configuration to models and hardware, then:
 
 ```bash
 sudo -u eliezer /usr/local/bin/eliezer --config /etc/eliezer/config.toml --check-config
@@ -127,17 +127,17 @@ systemctl status eliezer.service
 journalctl -u eliezer.service
 ```
 
-Die Unit erzeugt `/var/lib/eliezer` und `/run/eliezer` mit passenden Besitzrechten.
-Schreibzugriffe sind auf die vorgesehenen Verzeichnisse begrenzt. Bei einem
-Modellverzeichnis außerhalb von `/var/lib/eliezer` dessen Schreibfreigabe mit
-`ReadWritePaths` ergänzen. Liegt es unter einem Home-Verzeichnis, muss auch
-`ProtectHome` passend angepasst werden.
+The unit creates `/var/lib/eliezer` and `/run/eliezer` with suitable ownership.
+Write access is limited to the intended directories. For a
+model directory outside `/var/lib/eliezer`, add its write permission with
+`ReadWritePaths`. If it is under a home directory, `ProtectHome`
+must also be adjusted accordingly.
 
-## Container: Modellverzeichnis als Bind-Mount
+## Container: model directory as a bind mount
 
-Die mitgelieferte [Containerkonfiguration](packaging/config.container.toml)
-startet das Gerüst ohne Modelle und ohne GPU. Sie wird schreibgeschützt eingebunden.
-Der Port ist auf dem Host standardmäßig nur unter `127.0.0.1:1234` erreichbar.
+The supplied [container configuration](packaging/config.container.toml)
+starts the scaffold without models and without GPU. It is mounted read-only.
+The port is by default reachable on the host only at `127.0.0.1:1234`.
 
 ```bash
 mkdir -p models
@@ -148,56 +148,56 @@ docker compose logs eliezer
 docker compose down
 ```
 
-Der Container läuft standardmäßig mit UID/GID `10001:10001`. Das Host-Modellverzeichnis
-muss für diese Containeridentität lesbar und für Downloads beschreibbar sein.
-Die tatsächliche Host-Zuordnung hängt davon ab, ob die Containerengine rootlos läuft.
-Ein existierender Modellbestand sollte vorab passend berechtigt werden.
+By default the container runs with UID/GID `10001:10001`. The host model directory
+must be readable for this container identity and writable for downloads.
+The actual host mapping depends on whether the container engine runs rootless.
+An existing model inventory should be given suitable permissions beforehand.
 
-Konfigurierbar sind:
+Configurable are:
 
-| Variable | Bedeutung | Vorgabe |
+| Variable | Meaning | Default |
 |---|---|---|
-| `ELIEZER_CONFIG_FILE` | Host-Datei für die Konfiguration | `./packaging/config.container.toml` |
-| `ELIEZER_MODELS_DIR` | Host-Verzeichnis für Modelle | `./models` |
-| `ELIEZER_PORT` | Auf `127.0.0.1` veröffentlichter Host-Port | `1234` |
-| `ELIEZER_UID`, `ELIEZER_GID` | Identität des Containerprozesses | jeweils `10001` |
+| `ELIEZER_CONFIG_FILE` | Host file for the configuration | `./packaging/config.container.toml` |
+| `ELIEZER_MODELS_DIR` | Host directory for models | `./models` |
+| `ELIEZER_PORT` | Host port published on `127.0.0.1` | `1234` |
+| `ELIEZER_UID`, `ELIEZER_GID` | Identity of the container process | `10001` each |
 
-Bei einer anderen UID/GID müssen auch Volume- und Laufzeitverzeichnisrechte dazu
-passen. Für die mitgelieferte rootlose Podman-Variante die Vorgabe `10001:10001`
-beibehalten; deren Benutzerzuordnung bildet den aufrufenden Benutzer darauf ab.
+With a different UID/GID, the volume and runtime directory permissions must match
+as well. For the supplied rootless Podman variant, keep the default `10001:10001`;
+its user mapping maps the calling user onto it.
 
-Für rootloses Podman die Benutzerzuordnung ergänzen:
+For rootless Podman, add the user mapping:
 
 ```bash
 podman-compose -f compose.yaml -f compose.podman.yaml up -d --build
 podman-compose -f compose.yaml -f compose.podman.yaml down
 ```
 
-Diese Variante benötigt für das M2-Gerüst weder GPU-Geräte noch `crun`.
-Die Ergänzung deaktiviert beim Podman-Compose-Provider außerdem die automatische
-Pod-Erzeugung, damit die Benutzerzuordnung funktioniert.
+For the M2 scaffold this variant needs neither GPU devices nor `crun`.
+With the Podman Compose provider, the addition also disables the automatic
+pod creation so that the user mapping works.
 
-## Container: persistentes Modell-Volume
+## Container: persistent model volume
 
-Die Ergänzungsdatei ersetzt den Modell-Bind-Mount durch ein benanntes Volume:
+The supplementary file replaces the model bind mount with a named volume:
 
 ```bash
 docker compose -f compose.yaml -f compose.volume.yaml up -d --build
 docker compose -f compose.yaml -f compose.volume.yaml down
 ```
 
-Sowohl Modell-Volume als auch Zustands-Volume bleiben bei `down` und bei einer
-Neuerstellung des Containers erhalten. `down --volumes` würde diese Daten löschen.
-Beim Bind-Mount bleiben die Modelle unabhängig vom Container im Host-Verzeichnis.
-Ein neues Modell-Volume enthält zunächst keine Modelle.
+Both the model volume and the state volume are preserved on `down` and when the
+container is re-created. `down --volumes` would delete this data.
+With the bind mount, the models remain in the host directory independently of the container.
+A new model volume initially contains no models.
 
-## GPU-Zugriff im Container
+## GPU access in the container
 
-Die folgenden Ergänzungen reichen Geräte durch. Das M2-Image enthält noch kein
-Modellbackend und keine ROCm-/CUDA-Laufzeitbibliotheken; Gerätezugriff allein
-aktiviert daher noch keine Inferenz.
+The following additions pass devices through. The M2 image does not yet contain a
+model backend or ROCm/CUDA runtime libraries; device access alone
+therefore does not enable inference yet.
 
-Für Docker auf AMD die tatsächlichen Gerätegruppen ermitteln und setzen:
+For Docker on AMD, determine and set the actual device groups:
 
 ```bash
 export ELIEZER_RENDER_GID="$(getent group render | cut -d: -f3)"
@@ -205,30 +205,30 @@ export ELIEZER_VIDEO_GID="$(getent group video | cut -d: -f3)"
 docker compose -f compose.yaml -f compose.amd.yaml up -d
 ```
 
-Für GPU-Zugriff unter rootlosem Podman ist die mitgelieferte Ergänzung auf `crun` und dessen
-`keep-groups`-Unterstützung ausgelegt. Der Benutzer muss auf dem Host Zugriff
-auf `/dev/dri` und für ROCm/HIP auf `/dev/kfd` haben. `crun` muss dafür installiert sein; die Ergänzung wählt es ausdrücklich als Runtime.
+For GPU access under rootless Podman, the supplied addition is designed for `crun` and its
+`keep-groups` support. The user must have access on the host
+to `/dev/dri` and, for ROCm/HIP, to `/dev/kfd`. `crun` must be installed for this; the addition explicitly selects it as the runtime.
 
 ```bash
 podman-compose -f compose.yaml -f compose.podman.yaml -f compose.amd.podman.yaml up -d --build
-# Alternativ zusätzlich mit Modell-Volume:
+# Alternatively, additionally with a model volume:
 podman-compose -f compose.yaml -f compose.volume.yaml -f compose.podman.yaml -f compose.amd.podman.yaml up -d --build
 ```
 
-`compose.amd.yaml` ist die Docker-GPU-Variante, `compose.amd.podman.yaml` die rootlose
-Podman-GPU-Variante; sie werden nicht miteinander kombiniert.
-Für NVIDIA ist eine passende NVIDIA-Containerintegration erforderlich; eine
-NVIDIA-Compose-Variante wurde auf der vorhandenen AMD-Hardware nicht geprüft.
+`compose.amd.yaml` is the Docker GPU variant, `compose.amd.podman.yaml` the rootless
+Podman GPU variant; they are not combined with each other.
+For NVIDIA a suitable NVIDIA container integration is required; an
+NVIDIA Compose variant was not tested on the existing AMD hardware.
 
-## Token und API-Schlüssel
+## Token and API keys
 
-Geheimnisse gehören weder ins Repository noch in Images, Compose-Dateien oder
-Kommandozeilen. Später konfigurierte Token- und API-Schlüsseldateien müssen dem
-Dienstbenutzer gehören und Modus `0600` haben. Sie liegen außerhalb der Modellablage
-und werden im Container separat schreibgeschützt eingebunden.
+Secrets belong neither in the repository nor in images, Compose files or
+command lines. Token and API key files configured later must be owned by the
+service user and have mode `0600`. They are located outside the model store
+and are mounted separately read-only in the container.
 
-Die Authentifizierung und der Token-Bezug sind noch nicht Bestandteil des M2-Gerüsts.
-Bis diese Funktionen implementiert sind, die veröffentlichte Adresse auf den
-lokalen Rechner begrenzen.
+Authentication and token retrieval are not yet part of the M2 scaffold.
+Until these functions are implemented, restrict the published address to the
+local machine.
 
-Prüfungen und gemessene Ergebnisse: [tests/README.md](tests/README.md).
+Tests and measured results: [tests/README.md](tests/README.md).

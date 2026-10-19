@@ -1,21 +1,21 @@
-# Umgebungsprüfung
+# Environment check
 
-Aufruf aus dem Repository:
+Invocation from the repository:
 
 ```bash
 bash tests/environment/check.sh
 ```
 
-Das Skript nennt Rust-Versionen, sichtbare GPU-Geräte, sysfs-Speicherangaben,
-Werkzeuge im PATH und vorhandene LM-Studio-Laufzeiten. Es lädt keine Modelle,
-benötigt kein Netz und liest keine Geheimnisse. Fehlende optionale Werkzeuge
-werden gemeldet, ohne den Aufruf fehlschlagen zu lassen.
+The script reports Rust versions, visible GPU devices, sysfs memory figures,
+tools in the PATH and existing LM Studio runtimes. It loads no models,
+needs no network and reads no secrets. Missing optional tools are reported
+without making the invocation fail.
 
-## Prüfergebnis vom 19.10.2026
+## Check result of 19.10.2026
 
-- Syntaxprüfung mit `bash -n` und Ausführung erfolgreich.
-- Benutzerinstallation: Rust und Cargo 1.99.0.
-- Innerhalb der Sandbox fehlen die GPU-Geräte.
-- Gegenprüfung auf dem Host: `/dev/dri` und `/dev/kfd` vorhanden;
-  ROCm und der vorhandene Vulkan-`llama-server` erkennen Radeon RX 7900 XTX.
-- Das ist eine Bestandsaufnahme, kein Nachweis eines Modelllaufs.
+- Syntax check with `bash -n` and execution succeeded.
+- User installation: Rust and Cargo 1.99.0.
+- Inside the sandbox the GPU devices are missing.
+- Cross-check on the host: `/dev/dri` and `/dev/kfd` present;
+  ROCm and the existing Vulkan `llama-server` detect the Radeon RX 7900 XTX.
+- This is an inventory, not proof of a model run.

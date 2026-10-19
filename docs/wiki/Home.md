@@ -1,8 +1,8 @@
-# Eliezer – Projekt-Wiki
+# Eliezer – Project Wiki
 
-- [Warum heißt das Projekt Eliezer?](Projektname.md)
-- [Abhängigkeiten und Voraussetzungen](Abhaengigkeiten.md)
-- [Spezifikation](../Spezifikation.md)
-- [Implementierungsplan](../Implementierung.md)
-- [Prüfungen und Ergebnisprotokolle](../../tests/README.md)
-- [Installation und Betrieb](../../INSTALL.MD)
+- [Why is the project called Eliezer?](ProjectName.md)
+- [Dependencies and requirements](Dependencies.md)
+- [Specification](../Specification.md)
+- [Implementation plan](../Implementation.md)
+- [Tests and result logs](../../tests/README.md)
+- [Installation and operation](../../INSTALL.MD)

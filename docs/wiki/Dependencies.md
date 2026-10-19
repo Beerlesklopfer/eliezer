@@ -1,89 +1,89 @@
-# Abhängigkeiten und Voraussetzungen
+# Dependencies and Requirements
 
-Der Cargo-Workspace ist angelegt. Die Abhängigkeiten des Programmrahmens stehen
-in `Cargo.lock`; Versionen und Begründungen sind in
-[Abhängigkeitsentscheidungen](../Abhaengigkeiten.md) dokumentiert. Modelllaufzeiten
-werden erst bei ihrer tatsächlichen Einbindung hinzugefügt.
+The Cargo workspace is set up. The dependencies of the program frame are in
+`Cargo.lock`; versions and rationale are documented in
+[Dependency Decisions](../Dependencies.md). Model runtimes
+are added only when they are actually integrated.
 
-## Rust und Entwicklungswerkzeuge
+## Rust and development tools
 
-| Komponente | Zweck | Vorgabe / geprüfter Stand |
+| Component | Purpose | Requirement / verified state |
 |---|---|---|
-| Rust stable | Compiler, Edition 2024 | Mindestversion 1.88; lokal 1.99.0 unter `~/.cargo/bin` |
-| Cargo | Bau und Tests | Lokal 1.99.0 unter `~/.cargo/bin` |
-| rustfmt | Einheitliche Formatierung | Lokal 1.10.0-stable |
-| Clippy | Statische Codeprüfung | Lokal 0.1.99 |
+| Rust stable | Compiler, edition 2024 | Minimum version 1.88; locally 1.99.0 under `~/.cargo/bin` |
+| Cargo | Build and tests | Locally 1.99.0 under `~/.cargo/bin` |
+| rustfmt | Consistent formatting | Locally 1.10.0-stable |
+| Clippy | Static code analysis | Locally 0.1.99 |
 
-Die Benutzerinstallation muss vor der älteren Systeminstallation im `PATH` stehen:
+The user installation must come before the older system installation in `PATH`:
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
-Die Projektprüfungen sind `cargo fmt --check`,
-`cargo clippy --all-targets -- -D warnings` und `cargo test`.
-Sie prüfen den gesamten Workspace; die eigenständigen M1-GPU-Probeprogramme bleiben separat.
+The project checks are `cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings` and `cargo test`.
+They cover the entire workspace; the standalone M1 GPU probe programs remain separate.
 
-## Vorgesehene Rust-Crates
+## Intended Rust crates
 
-| Crate | Begründung |
+| Crate | Rationale |
 |---|---|
-| `tokio` | Asynchrone Laufzeit und Kommunikation mit dem Verwalter |
-| `axum` | HTTP-Endpunkte und Streaming |
-| `reqwest` mit rustls | Ausgehende HTTP-Anfragen ohne OpenSSL-Abhängigkeit im Client |
-| `serde` | Typisierte Serialisierung und Konfiguration |
-| `tracing` | Strukturierte Betriebslogs |
-| `mistralrs` | Vorgesehene eingebettete Modelllaufzeit; aktueller geprüfter Git-Stand 0.9.5 verlangt Rust 1.94. Version und Hardware-Eignung sind vor Aufnahme festzulegen |
+| `tokio` | Asynchronous runtime and communication with the supervisor |
+| `axum` | HTTP endpoints and streaming |
+| `reqwest` with rustls | Outgoing HTTP requests without an OpenSSL dependency in the client |
+| `serde` | Typed serialization and configuration |
+| `tracing` | Structured operational logs |
+| `mistralrs` | Intended embedded model runtime; the currently reviewed Git state 0.9.5 requires Rust 1.94. Version and hardware suitability must be determined before adoption |
 
-Neue Crates werden sparsam ergänzt und mit ihrer Begründung in
-[`docs/Abhaengigkeiten.md`](../Abhaengigkeiten.md) festgehalten.
-Diese Seite ersetzt weder `Cargo.toml` die Versionsbindung in `Cargo.lock`.
+New crates are added sparingly and recorded with their rationale in
+[`docs/Dependencies.md`](../Dependencies.md).
+This page replaces neither `Cargo.toml` nor the version pinning in `Cargo.lock`.
 
-## Modelllaufzeiten
+## Model runtimes
 
-| Komponente | Rolle | Stand |
+| Component | Role | State |
 |---|---|---|
-| mistral.rs | Sprach- und Vision-Modelle im Eliezer-Prozess | Vorgesehen; Modelllauf und Speicherfreigabe noch zu prüfen |
-| Candle direkt | Prüfung als Rust-Ausweichweg vor llama.cpp | AMD-Eignung noch offen |
-| llama.cpp mit Rust-Binding | Optionaler eingebetteter Ausweichweg, besonders für AMD | Binding und Features noch nicht beschlossen |
-| stable-diffusion.cpp | Separater Bildmodell-Prozess | Programm und Schnittstelle noch zu prüfen |
-| fake-backend | Prüfstand für automatisierte Tests ohne Netz und GPU | In M3 zu implementieren |
+| mistral.rs | Language and vision models in the Eliezer process | Intended; model run and memory release still to be verified |
+| Candle directly | Evaluation as a Rust fallback before llama.cpp | AMD suitability still open |
+| llama.cpp with Rust binding | Optional embedded fallback, especially for AMD | Binding and features not yet decided |
+| stable-diffusion.cpp | Separate image model process | Program and interface still to be verified |
+| fake-backend | Test bench for automated tests without network and GPU | To be implemented in M3 |
 
-Der lokal vorhandene LM-Studio-`llama-server` dient bisher nur der Geräteprüfung.
-Sein Nachweis belegt noch keine funktionierende Einbettung von llama.cpp in Rust.
+The locally installed LM Studio `llama-server` has so far served only for the device check.
+Its detection does not yet prove a working embedding of llama.cpp in Rust.
 
-## GPU und Zugriffsrechte
+## GPU and access permissions
 
-Ziel ist Linux mit einer GPU und mindestens **8 GB VRAM**. Modellgröße,
-Quantisierung und Kontext müssen zum verfügbaren Speicher passen.
+The target is Linux with a GPU and at least **8 GB VRAM**. Model size,
+quantization and context must fit the available memory.
 
-- NVIDIA: CUDA für die passende Modelllaufzeit; VRAM-Messung über NVML oder `nvidia-smi`.
-- AMD: je nach geprüftem Backend ROCm/HIP oder Vulkan; VRAM-Messung über sysfs
-  beziehungsweise `rocm-smi` als Rückfallstufe.
-- Auf dem aktuellen Host sind eine Radeon RX 7900 XTX (`gfx1100`), HIP 7.2.26015
-  und funktionierende ROCm- sowie Vulkan-Geräteerkennung nachgewiesen.
-- Der Benutzer gehört zu `video` und `render`. `/dev/dri/card0`,
-  `/dev/dri/renderD128` und `/dev/kfd` sind auf dem Host vorhanden.
-  Weitere Gruppenänderungen sind dafür derzeit nicht nötig.
-- In der Agenten-Sandbox sind die Geräte nicht sichtbar. GPU-Versuche benötigen
-  die Ausführung außerhalb dieser Sandbox. Container benötigen ebenfalls den
-  passenden Gerätezugriff.
+- NVIDIA: CUDA for the matching model runtime; VRAM measurement via NVML or `nvidia-smi`.
+- AMD: ROCm/HIP or Vulkan depending on the verified backend; VRAM measurement via sysfs
+  or `rocm-smi` as a fallback.
+- On the current host, a Radeon RX 7900 XTX (`gfx1100`), HIP 7.2.26015
+  and working ROCm and Vulkan device detection have been verified.
+- The user belongs to `video` and `render`. `/dev/dri/card0`,
+  `/dev/dri/renderD128` and `/dev/kfd` are present on the host.
+  No further group changes are currently needed for this.
+- In the agent sandbox the devices are not visible. GPU experiments need
+  to run outside this sandbox. Containers also need the
+  appropriate device access.
 
-## Systemwerkzeuge und Betrieb
+## System tools and operation
 
-| Komponente | Zweck | Stand |
+| Component | Purpose | State |
 |---|---|---|
-| CMake und C/C++-Compiler | Bau von stable-diffusion.cpp und gegebenenfalls llama.cpp | Lokal vorhanden; erfolgreicher Backend-Bau noch offen |
-| GPU-Entwicklungsbibliotheken | Bau des gewählten GPU-Backends | Abhängig von den Ergebnissen in M1 |
-| Docker Compose oder Podman mit Compose-Ausführung | Alternative zum nativen Betrieb; persistente Modellablage | Docker-Compose-Konfiguration validiert, Podman-Betrieb mit beiden Ablagearten geprüft |
-| systemd | Nativer Dienstbetrieb und Neustart | Unit unter `packaging/eliezer.service` |
-| Hugging Face | Modellsuche und ausdrücklich angeforderte Downloads | Laufzeitintegration für M5 vorgesehen |
+| CMake and C/C++ compiler | Build of stable-diffusion.cpp and possibly llama.cpp | Present locally; successful backend build still open |
+| GPU development libraries | Build of the chosen GPU backend | Depends on the results in M1 |
+| Docker Compose or Podman with Compose execution | Alternative to native operation; persistent model store | Docker Compose configuration validated, Podman operation tested with both storage types |
+| systemd | Native service operation and restart | Unit at `packaging/eliezer.service` |
+| Hugging Face | Model search and explicitly requested downloads | Runtime integration planned for M5 |
 
-Die `hf`-CLI ist ein optionales Werkzeug für manuelle Modellprüfungen;
-eine Pflicht zur Installation für den späteren Eliezer-Dienst ist bislang nicht festgelegt.
-Modelle, Tokenizer, Bildprojektoren, Textencoder und VAE liegen künftig im eigenen
-Modellverzeichnis oder im persistenten Container-Volume. Geheimnisse werden separat gehalten.
+The `hf` CLI is an optional tool for manual model checks;
+there is so far no requirement to install it for the later Eliezer service.
+Models, tokenizers, image projectors, text encoders and VAE will in future reside in the dedicated
+model directory or in the persistent container volume. Secrets are kept separately.
 
-Die gemessenen Ergebnisse und noch offenen Laufzeitprüfungen stehen in
-[Laufzeiten.md](../Laufzeiten.md). Eine lokale Bestandsaufnahme ohne Downloads oder
-Modellladen ist mit `bash tests/environment/check.sh` aus dem Repository möglich.
+The measured results and still-open runtime checks are in
+[Runtimes.md](../Runtimes.md). A local inventory without downloads or
+model loading is possible with `bash tests/environment/check.sh` from the repository.

@@ -1,22 +1,22 @@
-# Warum heißt das Projekt Eliezer?
+# Why is the project called Eliezer?
 
-Der Name bezieht sich auf **Eliezer von Damaskus aus dem Haushalt Abrahams**.
-Er wird in [Genesis 15,2](https://www.biblegateway.com/verse/en/Genesis%2015%3A2)
-namentlich erwähnt. Der vertraute Hausverwalter, den Abraham in Genesis 24 mit
-einem Auftrag betraut, wird traditionell mit diesem Eliezer gleichgesetzt;
-im Kapitel selbst bleibt der Diener unbenannt.
-Diese Unterscheidung erläutert die
+The name refers to **Eliezer of Damascus from Abraham's household**.
+He is mentioned by name in [Genesis 15:2](https://www.biblegateway.com/verse/en/Genesis%2015%3A2).
+The trusted steward of the house whom Abraham entrusts with a mission in Genesis 24
+is traditionally identified with this Eliezer;
+in the chapter itself the servant remains unnamed.
+This distinction is explained by the
 [Jewish Bible Quarterly](https://www.jewishbible.org/articles/the-meaning-of-dammesek-eliezer/).
 
-Für das Projekt steht Eliezer für einen zuverlässigen Verwalter: Er kümmert
-sich um die anvertrauten Mittel und führt Aufträge aus. Diese Rolle überträgt
-der Dienst auf lokale KI-Modelle und den verfügbaren Grafikspeicher.
+For the project, Eliezer stands for a reliable steward: he takes care
+of the resources entrusted to him and carries out assignments. The service
+transfers this role to local AI models and the available graphics memory.
 
-Eliezer hält den Modellbestand zusammen, lädt das angeforderte Modell,
-teilt den knappen VRAM zu und räumt ungenutzte Modelle wieder aus dem Speicher.
-Er meldet, was geladen ist, was wartet und welche Ressourcen verfügbar sind.
-MultiGPT bestimmt die übergeordneten Rechte und Regeln; Eliezer übernimmt
-die technische Ausführung.
+Eliezer keeps the model inventory together, loads the requested model,
+allocates the scarce VRAM and clears unused models from memory again.
+It reports what is loaded, what is waiting and which resources are available.
+MultiGPT determines the overarching permissions and rules; Eliezer handles
+the technical execution.
 
-Der Projektname beschreibt damit die Aufgabe des Programms: **Modelle und
-Ressourcen verlässlich verwalten und die erteilten Aufträge ausführen.**
+The project name thus describes the program's task: **to manage models and
+resources reliably and to carry out the assignments given.**

@@ -1,41 +1,41 @@
 eliezer (0.3.0) UNRELEASED; urgency=low
 
-  * Berechne den VRAM-Bedarf je Architekturtyp und plane Laden, Verdrängen,
-    Anheften, Bündeln und Leerlauf über einen Zustandsautomaten mit Uhr-Trait.
-  * Messe die GPU-Belegung einheitlich über ein Trait (sysfs, nvidia-smi,
-    rocm-smi) mit Herstellererkennung, Zeitlimit und Rückfall auf Buchführung.
-  * Ergänze Backend-Trait, fake-backend und Verwalter-Task ohne echte Laufzeit.
-  * Stelle Verwaltungs-API, OpenAI- und Anthropic-Schnittstelle mit
-    ungepuffertem SSE, Anmeldung und einheitlichem Fehlerformat bereit.
-  * Binde Verwalter, Schlüsseldatei (0600) und GPU-Messung in das
-    Dienstprogramm ein; Laufzeiten folgen mit M4.
-  * Prüfe die Modellliste im Vertragstest gegen eine echte LM-Studio-Antwort.
+  * Calculate the VRAM requirement per architecture type and schedule loading, eviction,
+    pinning, batching and idle handling via a state machine with a clock trait.
+  * Measure GPU usage uniformly via a trait (sysfs, nvidia-smi,
+    rocm-smi) with vendor detection, timeout and fallback to bookkeeping.
+  * Add backend trait, fake-backend and supervisor task without a real runtime.
+  * Provide management API, OpenAI and Anthropic interface with
+    unbuffered SSE, authentication and a uniform error format.
+  * Integrate supervisor, key file (0600) and GPU measurement into the
+    service program; runtimes follow with M4.
+  * Verify the model list in the contract test against a real LM Studio response.
 
  -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 19:00:00 +0200
 
 eliezer (0.2.0) UNRELEASED; urgency=low
 
-  * Lege den Rust-Workspace mit fünf Crates und GPL-3.0-only-Lizenz an.
-  * Prüfe TOML-Konfigurationen strikt mit deutschen Zeilen- und Feldangaben.
-  * Begrenze Modellpfade einschließlich Symlinks auf die zentrale Ablage.
-  * Ergänze CLI, Bereitschaftsendpunkt, Protokollierung und Signalbehandlung.
-  * Richte Linux-CI, systemd-Unit und Containerbau mit Rust 1.88 ein.
-  * Prüfe in der GitHub-CI zusätzlich den Container-Bau (Image-Build ohne Push).
-  * Stelle Compose-Varianten für Bind-Mount, Modell-Volume und GPU-Geräte bereit.
-  * Dokumentiere Installation und Rechte in INSTALL.MD sowie Prüfungen unter tests/m2.
+  * Create the Rust workspace with five crates and GPL-3.0-only license.
+  * Check TOML configurations strictly, with line and field information.
+  * Restrict model paths, including symlinks, to the central store.
+  * Add CLI, readiness endpoint, logging and signal handling.
+  * Set up Linux CI, systemd unit and container build with Rust 1.88.
+  * Also check the container build in GitHub CI (image build without push).
+  * Provide Compose variants for bind mount, model volume and GPU devices.
+  * Document installation and permissions in INSTALL.MD and checks under tests/m2.
 
  -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 17:55:32 +0200
 
 eliezer (0.1.0) UNRELEASED; urgency=low
 
-  * Schließe M1 als Machbarkeitsprüfung auf AMD Radeon RX 7900 XTX ab.
-  * Prüfe aktuelle Laufzeitquellen und dokumentiere fehlende AMD-Features
-    von mistral.rs sowie Candle; bestätige llama.cpp mit ROCm als Ausweichweg.
-  * Weise Modellladen, Token-Ausgabe, zwei Sequenzen und Neuladen nach;
-    dokumentiere die verbleibende kalte VRAM-Restbelegung und den Neustartpfad.
-  * Baue stable-diffusion.cpp mit HIP und prüfe Qwen Image 2.1 über HTTP.
-  * Prüfe Chat-Bild-Chat direkt und mit llama-swap; führe den Eigenbau fort.
-  * Bündele Prüfprogramme, Anleitungen und Messprotokolle unter tests/.
-  * Dokumentiere Mindesthardware, Rechte, Modellablage und Compose-Anforderungen.
+  * Complete M1 as a feasibility study on AMD Radeon RX 7900 XTX.
+  * Review current runtime sources and document missing AMD features
+    of mistral.rs and Candle; confirm llama.cpp with ROCm as a fallback.
+  * Demonstrate model loading, token output, two sequences and reloading;
+    document the remaining cold VRAM residue and the restart path.
+  * Build stable-diffusion.cpp with HIP and test Qwen Image 2.1 over HTTP.
+  * Test chat-image-chat directly and with llama-swap; continue with the custom build.
+  * Bundle test programs, guides and measurement logs under tests/.
+  * Document minimum hardware, permissions, model store and Compose requirements.
 
  -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 17:29:30 +0200

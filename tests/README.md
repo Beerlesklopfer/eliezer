@@ -1,33 +1,33 @@
-# Prüfungen
+# Tests
 
-Alle Prüfungen, Probeprogramme, Anleitungen und Ergebnisprotokolle liegen hier.
-Abschluss der ersten Laufzeitprüfung: [M1-Ergebnis](m1/README.md).
-Automatisierte Tests laufen ohne Netz und GPU; manuelle Hardwareprüfungen werden
-ausdrücklich gestartet. Der spätere Cargo-Workspace bindet Hardwareprüfungen nur
-als ignorierte Tests mit Begründung ein.
+All tests, probe programs, instructions and result logs live here.
+Conclusion of the first runtime evaluation: [M1 result](m1/README.md).
+Automated tests run without network and GPU; manual hardware checks are started
+explicitly. The future Cargo workspace includes hardware checks only as ignored
+tests with a stated reason.
 
 ```text
 tests/
 ├── README.md
-├── m1/README.md              Abschluss und Entscheidungen
-├── m2/                      Konfiguration, CLI, Dienst- und Containerprüfung
+├── m1/README.md              Conclusion and decisions
+├── m2/                      Configuration, CLI, service and container checks
 ├── reference-clients/
-│   └── README.md             Geprüfte Ollama-/LM-Studio-Kommandozeilen
+│   └── README.md             Verified Ollama / LM Studio command lines
 ├── environment/
-│   ├── README.md             Voraussetzungen und Aufruf
-│   └── check.sh              Lokale Bestandsaufnahme
+│   ├── README.md             Prerequisites and invocation
+│   └── check.sh              Local inventory
 └── runtime/
-    ├── mistralrs/README.md   Versions- und Featureprüfung
-    ├── candle/README.md      Featureprüfung
-    ├── sdcpp/               Bildserver und Chat-/Bildwechsel
-    ├── llama-swap/          Vergleich mit fertigem Verwalter
+    ├── mistralrs/README.md   Version and feature check
+    ├── candle/README.md      Feature check
+    ├── sdcpp/               Image server and chat/image switching
+    ├── llama-swap/          Comparison with a ready-made manager
     └── llamacpp/
-        ├── README.md         Versuch, Durchführung und Ergebnisse
-        ├── Cargo.toml        Isoliertes Probeprogramm
-        ├── Cargo.lock        Festgehaltene Abhängigkeiten
-        └── src/main.rs       Laden, Generieren, Entladen, Neuladen
+        ├── README.md         Experiment, procedure and results
+        ├── Cargo.toml        Isolated probe program
+        ├── Cargo.lock        Pinned dependencies
+        └── src/main.rs       Load, generate, unload, reload
 ```
 
-Weitere Laufzeiten erhalten eigene Verzeichnisse unter `runtime/`.
-Vertragstests und Integrationstests werden später unter `contract/` beziehungsweise
-`integration/` ergänzt. Rust-Bauausgaben in `target/` bleiben ignoriert.
+Further runtimes get their own directories under `runtime/`.
+Contract tests and integration tests will be added later under `contract/` and
+`integration/` respectively. Rust build output in `target/` stays ignored.

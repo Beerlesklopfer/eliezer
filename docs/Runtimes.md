@@ -1,80 +1,80 @@
-# Laufzeitvoraussetzungen
+# Runtime Requirements
 
-Zielhardware: mindestens 8 GB VRAM; größere Modelle benötigen entsprechend mehr Speicher.
+Target hardware: at least 8 GB VRAM; larger models need correspondingly more memory.
 
-## Verbindliche Voraussetzungen (Must-haves)
+## Mandatory requirements (must-haves)
 
-| Bereich | Voraussetzung |
+| Area | Requirement |
 |---|---|
-| Betriebssystem | Linux mit funktionierendem GPU-Treiber |
-| Grafikkarte | Eine NVIDIA- oder AMD-GPU mit mindestens 8 GB VRAM; Modell, Quantisierung und Kontext passen in das verfügbare Speicherbudget |
-| GPU-Laufzeit | Zum gewählten Backend passende Beschleunigung: CUDA für NVIDIA, nachgewiesene ROCm/HIP- oder Vulkan-Unterstützung für AMD |
-| Gerätezugriff | Der Dienstbenutzer kann auf die GPU zugreifen; bei AMD auf die benötigten DRM-Geräte und für ROCm/HIP zusätzlich `/dev/kfd`. Gruppen und ACLs müssen diesen Zugriff erlauben |
-| Containerbetrieb | Bei Nutzung von Docker/Podman sind GPU-Geräte und benötigte Treiberbibliotheken im Container verfügbar |
-| Modellablage | Eigenes, konfigurierbares Verzeichnis für sämtliche Modellbestandteile; im Container als Bind-Mount oder persistentes Volume |
-| Modellbestand | Nur konfigurierte Modelle werden geladen; benötigte Tokenizer, Bildprojektoren, Textencoder und VAE sind vollständig vorhanden |
-| Speicherverwaltung | Geladene Modelle lassen sich entladen; die Freigabe des VRAM wird gemessen |
-| Geheimnisse | Token und API-Schlüssel kommen aus geschützten Dateien (0600) oder der Umgebung und erscheinen nicht in Logs oder Prozessargumenten |
+| Operating system | Linux with a working GPU driver |
+| Graphics card | An NVIDIA or AMD GPU with at least 8 GB VRAM; model, quantization and context fit into the available memory budget |
+| GPU runtime | Acceleration matching the chosen backend: CUDA for NVIDIA, verified ROCm/HIP or Vulkan support for AMD |
+| Device access | The service user can access the GPU; on AMD the required DRM devices and, for ROCm/HIP, additionally `/dev/kfd`. Groups and ACLs must allow this access |
+| Container operation | When using Docker/Podman, GPU devices and required driver libraries are available in the container |
+| Model store | Own, configurable directory for all model components; in the container as a bind mount or persistent volume |
+| Model inventory | Only configured models are loaded; required tokenizers, image projectors, text encoders and VAE are fully present |
+| Memory management | Loaded models can be unloaded; the release of VRAM is measured |
+| Secrets | Tokens and API keys come from protected files (0600) or the environment and do not appear in logs or process arguments |
 
-## Rechteverwaltung
+## Permission management
 
-Eliezer läuft als eigener unprivilegierter Dienstbenutzer `eliezer`. Bei einer
-Benutzerinstallation gelten die folgenden Anforderungen entsprechend für den
-ausführenden Benutzer. Der laufende Dienst benötigt weder `root` noch `sudo`.
-Die Einrichtung von Benutzer, Gruppen und Systemverzeichnissen übernimmt die Administration.
+Eliezer runs as its own unprivileged service user `eliezer`. For a
+user installation the following requirements apply accordingly to the
+executing user. The running service needs neither `root` nor `sudo`.
+Setting up the user, groups and system directories is up to the administration.
 
-| Ressource | Erforderliche Rechte |
+| Resource | Required permissions |
 |---|---|
-| GPU-Geräte | Zugriff über die tatsächlichen Gerätegruppen oder passende ACLs. Auf AMD sind insbesondere `render` und gegebenenfalls `video` relevant; ROCm/HIP benötigt zusätzlich Zugriff auf `/dev/kfd` |
-| Konfiguration | Für den Dienst lesbar, nur durch die Administration änderbar; alle übergeordneten Verzeichnisse müssen durchsuchbar sein |
-| HF-Token und API-Schlüsseldatei | Eigentümer ist der ausführende Dienstbenutzer, Dateimodus `0600`; andere Benutzer erhalten keinen Zugriff |
-| Modellverzeichnis | Lesen und Durchsuchen für die Inferenz; Schreiben zusätzlich für Downloads und Cache-Verwaltung |
-| Zustandsverzeichnis `/var/lib/eliezer` | Lesen, Schreiben und Durchsuchen für den Dienst, insbesondere für `pins.json` und `measured.json` |
-| Laufzeitverzeichnis `/run/eliezer` | Für den Dienst beschreibbar, insbesondere für PID-Dateien; bei Dienststart bereitstellen |
-| Backend-Programme und Bibliotheken | Für den Dienst ausführbar beziehungsweise lesbar; nicht durch HTTP-Anfragen austauschbar |
+| GPU devices | Access via the actual device groups or suitable ACLs. On AMD, `render` and possibly `video` are particularly relevant; ROCm/HIP additionally needs access to `/dev/kfd` |
+| Configuration | Readable by the service, changeable only by the administration; all parent directories must be searchable |
+| HF token and API key file | Owned by the executing service user, file mode `0600`; other users get no access |
+| Model directory | Read and search for inference; additionally write for downloads and cache management |
+| State directory `/var/lib/eliezer` | Read, write and search for the service, in particular for `pins.json` and `measured.json` |
+| Runtime directory `/run/eliezer` | Writable by the service, in particular for PID files; provide at service start |
+| Backend programs and libraries | Executable or readable by the service; not replaceable through HTTP requests |
 
-Gruppenmitgliedschaften gelten für den tatsächlich gestarteten Dienstprozess.
-Nach einer Änderung muss dieser mit den neuen Gruppen neu gestartet werden.
-Die Rechte des angemeldeten Benutzers allein belegen nicht die Rechte eines separat
-eingerichteten Dienstbenutzers. Geräte werden nicht pauschal für alle Benutzer freigegeben.
+Group memberships apply to the service process as actually started.
+After a change, it must be restarted with the new groups.
+The permissions of the logged-in user alone do not prove the permissions of a separately
+set-up service user. Devices are not released blanket-wise to all users.
 
-### API-Zugriff und Modellauswahl
+### API access and model selection
 
-- Ist `server.api_keys_file` gesetzt, erfordern die geschützten Endpunkte einen
-  konfigurierten API-Schlüssel; `/healthz` bleibt ohne Anmeldung erreichbar.
-- Ohne Schlüsseldatei ist die API ohne Anmeldung erreichbar. Die konfigurierte
-  Bind-Adresse und die Netzfreigabe bestimmen, wer sie erreichen kann.
-- Nur Modelle aus der Positivliste sind ausführbar. Modellschlüssel aus Anfragen
-  werden gegen diese Liste geprüft; sie gewähren keinen beliebigen Dateizugriff.
-- Benutzerrollen, individuelle Modellberechtigungen und Abrechnung verwaltet MultiGPT.
-  Die Eliezer-API-Schlüssel unterscheiden keine Rollen; wer direkten API-Zugriff erhält,
-  erhält auch Zugriff auf die geschützten Verwaltungsendpunkte.
+- If `server.api_keys_file` is set, the protected endpoints require a
+  configured API key; `/healthz` remains reachable without authentication.
+- Without a key file, the API is reachable without authentication. The configured
+  bind address and network exposure determine who can reach it.
+- Only models on the allowlist are executable. Model keys from requests
+  are checked against this list; they do not grant arbitrary file access.
+- User roles, individual model permissions and billing are managed by MultiGPT.
+  The Eliezer API keys do not distinguish roles; whoever gets direct API access
+  also gets access to the protected management endpoints.
 
-### Containerbetrieb
+### Container operation
 
-Der Containerprozess erhält die erforderlichen GPU-Geräte und Gerätegruppen.
-UID/GID-Zuordnung, zusätzliche Gruppen und gegebenenfalls ACLs müssen auch bei
-rootlosem Docker-/Podman-Betrieb den Zugriff auf Geräte und eingebundene Dateien erlauben.
-Die Prüfung erfolgt mit der Identität des Containerprozesses.
+The container process receives the required GPU devices and device groups.
+UID/GID mapping, supplementary groups and, where applicable, ACLs must allow access to devices and mounted files even with
+rootless Docker/Podman operation.
+The check is made with the identity of the container process.
 
-Konfiguration und Geheimnisdateien werden schreibgeschützt eingebunden.
-Modell- und Zustandsvolumes müssen für die Containeridentität passend berechtigt sein;
-die Geheimnisdateien müssen dabei ihre restriktiven Zugriffsrechte behalten.
-Der Containerbetrieb soll ohne privilegierten Container auskommen.
+Configuration and secret files are mounted read-only.
+Model and state volumes must have suitable permissions for the container identity;
+the secret files must keep their restrictive access permissions.
+Container operation should work without a privileged container.
 
-### Nativer Dienstbetrieb
+### Native service operation
 
-Die systemd-Unit verwendet `User=eliezer`, die benötigten Gerätegruppen,
-`NoNewPrivileges` und `ProtectSystem=strict`. Schreibzugriff wird gezielt auf
-Modell-, Zustands- und Laufzeitverzeichnisse begrenzt. Ein abweichendes
-Modellverzeichnis muss dabei ausdrücklich berücksichtigt werden.
+The systemd unit uses `User=eliezer`, the required device groups,
+`NoNewPrivileges` and `ProtectSystem=strict`. Write access is limited specifically to
+the model, state and runtime directories. A differing
+model directory must be explicitly taken into account.
 
-## Zusätzlich beim Bauen aus Quellcode
+## Additionally when building from source
 
-- Rust stable ab 1.88 mit Cargo, Edition 2024; rustfmt und Clippy für die Projektprüfungen.
-- Die für das gewählte Backend erforderlichen Entwicklungsbibliotheken und GPU-Werkzeuge.
-- CMake und ein C/C++-Compiler beim Bau von stable-diffusion.cpp beziehungsweise llama.cpp.
+- Rust stable 1.88 or later with Cargo, edition 2024; rustfmt and Clippy for the project checks.
+- The development libraries and GPU tools required for the chosen backend.
+- CMake and a C/C++ compiler when building stable-diffusion.cpp or llama.cpp.
 
-Konkrete Backend-Versionen und unterstützte GPU-Kombinationen werden erst nach einem
-bestätigten Bau- und Modelllauf als unterstützt dokumentiert. Eine installierte Bibliothek
-oder erfolgreiche Geräteerkennung allein genügt dafür nicht.
+Concrete backend versions and supported GPU combinations are documented as supported only after a
+confirmed build and model run. An installed library
+or successful device detection alone is not sufficient for that.

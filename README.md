@@ -1,25 +1,25 @@
 # Eliezer
 
-**Ersatz für LM Studio** im Familienbetrieb (NVIDIA und AMD, OpenAI- und Anthropic-kompatibel): Verwalter für lokale KI-Modelle auf einem Rechner mit knapper GPU. Benannt nach Eliezer, dem Knecht
-Abrahams, der das Haus verwaltet und Aufträge ausführt.
+**Replacement for LM Studio** for family use (NVIDIA and AMD, OpenAI- and Anthropic-compatible): a manager for local AI models on a machine with a scarce GPU. Named after Eliezer, the servant
+of Abraham who managed the household and carried out his errands.
 
-Die Herkunft des Namens und seine Bedeutung für das Projekt erklärt das
-[Projekt-Wiki](docs/wiki/Projektname.md).
+The origin of the name and what it means for the project are explained in the
+[project wiki](docs/wiki/ProjectName.md).
 
-Eliezer teilt den Grafikspeicher zu: Chat-, Vision- und Bildmodelle laden bei Bedarf, werden im
-Leerlauf entladen und wechseln sich auf einer GPU ab. Der Dienst steht hinter einer
-OpenAI-kompatiblen Schnittstelle und wird von [MultiGPT](https://github.com/Beerlesklopfer/multi-gpt)
-über den Runner gesteuert; Rechte, Rangfolge und Abrechnung bleiben dort.
+Eliezer allocates GPU memory: chat, vision and image models are loaded on demand, unloaded when idle,
+and take turns on one GPU. The service sits behind an
+OpenAI-compatible interface and is driven by [MultiGPT](https://github.com/Beerlesklopfer/multi-gpt)
+through its runner; permissions, ranking and billing stay there.
 
-**Stand:** M2 abgeschlossen: Konfigurationsprüfung, HTTP-Programmrahmen und Installationsdateien vorhanden. Modellverwaltung folgt in M3. [Prüfungen](tests/m2/README.md). Spezifikation: [docs/Spezifikation.md](docs/Spezifikation.md), Roadmap: [docs/Implementierung.md](docs/Implementierung.md), Regeln für Agenten: [AGENTS.md](AGENTS.md).
+**Status:** M2 is complete: configuration checks, the HTTP skeleton and installation files are in place. Model management follows in M3. [Checks](tests/m2/README.md). Specification: [docs/Specification.md](docs/Specification.md), roadmap: [docs/Implementation.md](docs/Implementation.md), rules for agents: [AGENTS.md](AGENTS.md).
 
-Installation und Betrieb: [INSTALL.MD](INSTALL.MD).
+Installation and operation: [INSTALL.MD](INSTALL.MD).
 
-## Vorhaben
+## Goals
 
-- Ersetzt LM Studio als Modellserver von MultiGPT. Der Provider `lmstudio` in MultiGPT läuft weiter, bis Eliezer denselben Vertrag erfüllt: Modellliste mit Zustand und Speicherschätzung, Laden/Entladen mit Kontext und Parallelität, Denkoptionen je Modell, Statistik je Antwort.
-- Laufzeit für Sprachmodelle: [mistral.rs](https://github.com/EricLBuehler/mistral.rs) (Rust).
-- Bildmodelle: zunächst stable-diffusion.cpp als austauschbarer Dienst, später Rust.
-- Verwalter: Anfragen nach `model` verteilen, VRAM-Buch, Leerlauf-Entladen, Warteschlange.
-  Vergleich mit llama-swap abgeschlossen; der eigene Rust-Verwalter wird umgesetzt.
-- Modelle laden per Hugging-Face-Token (nur auf dem GPU-Rechner, nie im Repository).
+- Replace LM Studio as the model server of MultiGPT. The `lmstudio` provider in MultiGPT keeps working until Eliezer fulfils the same contract: model list with state and memory estimate, load/unload with context and parallelism, reasoning options per model, statistics per response.
+- Runtime for language models: [mistral.rs](https://github.com/EricLBuehler/mistral.rs) (Rust).
+- Image models: stable-diffusion.cpp first as a replaceable service, Rust later.
+- Manager: route requests by `model`, VRAM ledger, idle unloading, queue.
+  The comparison with llama-swap is finished; the own Rust manager is being implemented.
+- Models are downloaded with a Hugging Face token (only on the GPU machine, never in the repository).

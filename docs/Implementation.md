@@ -1,122 +1,122 @@
-# Implementierungsgerüst Eliezer
+# Implementation Framework for Eliezer
 
-Stand 2026-10-19, Entwurf. Eliezer ersetzt LM Studio als Modellserver von
-[MultiGPT](https://github.com/Beerlesklopfer/multi-gpt) (dort Meilenstein M16 = Anbindung).
-**Vorab lesen:** [../AGENTS.md](../AGENTS.md) (Regeln) und [Spezifikation.md](Spezifikation.md)
-(Aufbau, Konfiguration, Schnittstellen, Planer, Tests). Dieses Dokument ordnet die Arbeit.
+As of 2026-10-19, draft. Eliezer replaces LM Studio as the model server of
+[MultiGPT](https://github.com/Beerlesklopfer/multi-gpt) (there, milestone M16 = integration).
+**Read first:** [../AGENTS.md](../AGENTS.md) (rules) and [Specification.md](Specification.md)
+(structure, configuration, interfaces, scheduler, tests). This document organizes the work.
 
-Entschieden: alles Rust, Laufzeit mistral.rs, Modelle per Hugging-Face-Token (nur auf dem GPU-Rechner),
-im Chat eine einzige Bildauswahl. Zielversion legt der Nutzer fest.
+Decided: everything in Rust, runtime mistral.rs, models via Hugging Face token (only on the GPU machine),
+a single image selection in chat. The target version is set by the user.
 
-Arbeitsweise: Meilensteine der Reihe nach. Nach jedem Meilenstein `cargo fmt --check`, `cargo clippy -D warnings`,
-`cargo test` grün, kurze Notiz in `docs/Stand.md`, dann Freigabe abwarten. Die Spezifikation wird bei
-Entscheidungen nachgeführt (nicht still abweichen).
+Way of working: milestones in order. After each milestone `cargo fmt --check`, `cargo clippy -D warnings`,
+`cargo test` green, a short note in `docs/Status.md`, then wait for approval. The specification is kept
+up to date with decisions (no silent deviations).
 
-Ergebnisse jedes Meilensteins werden zusätzlich in `debian/changelog` im Debian-Format
-festgehalten. Versionsnummern bestimmt der Nutzer; offene Arbeiten werden nicht als
-abgeschlossen ausgewiesen. Zielhardware: mindestens 8 GB VRAM, mit angepasster Modellauswahl.
+The results of each milestone are also recorded in `debian/changelog` in Debian format.
+Version numbers are set by the user; open work is not reported as
+completed. Target hardware: at least 8 GB VRAM, with an adapted model selection.
 
-## Meilensteine
+## Milestones
 
-### M1 – Versuch auf dem GPU-Rechner (isolierte Probeprogramme, kein Produktionscode)
+### M1 – Trial on the GPU machine (isolated probe programs, no production code)
 
-**Abgeschlossen:** [Ergebnis und Entscheidungen](../tests/m1/README.md),
-Meilensteinfassung 0.1.0; Eintrag in `debian/changelog`.
+**Completed:** [Result and decisions](../tests/m1/README.md),
+milestone version 0.1.0; entry in `debian/changelog`.
 
-Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
+Goal: **establish** the interfaces of third-party programs, do not guess.
 
-Start-, Lade- und Entladeparameter werden anhand der vorhandenen Ollama- und
-LM-Studio-Installationen übernommen und auf die eingebetteten Laufzeiten abgebildet.
-Geprüfte Kommandozeilen, Zuordnungen und Ergebnisse werden unter
-`tests/reference-clients/` dokumentiert.
+Start, load and unload parameters are taken from the existing Ollama and
+LM Studio installations and mapped onto the embedded runtimes.
+Verified command lines, mappings and results are documented under
+`tests/reference-clients/`.
 
-- **M1-01** mistral.rs **als Crate** in einem kleinen Testprogramm einbinden (kein Kindprozess): Modell laden, antworten, entladen. Feststellen und in `docs/Laufzeiten.md` festhalten: Version, Cargo-Features je Hardware, Builder-Aufrufe (Text, Vision), Ob/wie Entladen und Neuladen im Prozess geht und der VRAM danach frei ist, Streaming und `usage`, Werkzeugaufrufe, Denkoptionen, Chatvorlage, ob `mistralrs-server-core` einbettbar ist. Messwerte: Ladezeit, Token/s, VRAM, zwei gleichzeitige Anfragen.
-- **M1-02** stable-diffusion.cpp (Server) mit `qwen-image-2.1-UC-Q4_K_M.gguf`, Textencoder und VAE: Befehlszeile,
-  Endpunkte, Zeit je Bild, VRAM. Ebenfalls in `docs/Laufzeiten.md`.
-- **M1-02a** Hersteller der Karte klären (`/sys/class/drm/card*/device/vendor`) (NVIDIA oder AMD). mistral.rs und stable-diffusion.cpp je auf dieser Karte bauen und prüfen,
-  welche Beschleunigung läuft (CUDA, ROCm/HIP, Vulkan); bei AMD zusätzlich zuerst Candle direkt (reines Rust, laut Architekturplan vorgesehen), dann das llama.cpp-Binding (Vulkan/ROCm bauen und messen). Ergebnis je Backend in `docs/Laufzeiten.md`.
-  Läuft das mistral.rs-Crate dort nicht, wird das **eingebettete** Backend `llamacpp` (Binding-Crate, Spezifikation 8) Teil von M4;
-  dann das Binding-Crate wählen und seine Lücken (Chatvorlage, Werkzeugaufrufe, Vision, Parallelität) in `docs/Laufzeiten.md` festhalten.
-- **M1-03** Wechsel Chat ↔ Bild auf der 24-GB-Karte von Hand; zum Vergleich llama-swap mit denselben Modellen.
-- **M1-04** Entscheidung: fertiger Verwalter (llama-swap) oder Eigenbau; mistral.rs eingebettet (entschieden) – Ausweichweg `llamacpp` (ebenfalls eingebettet) für Karten, die das Crate nicht bedient.
-  Fällt sie auf „fertig“, wird M2 bis M3 durch eine Anpassung ersetzt und die Spezifikation entsprechend gekürzt.
+- **M1-01** Embed mistral.rs **as a crate** in a small test program (no child process): load a model, answer, unload. Establish and record in `docs/Runtimes.md`: version, Cargo features per hardware, builder calls (text, vision), whether/how unloading and reloading work in-process and whether the VRAM is free afterwards, streaming and `usage`, tool calls, reasoning options, chat template, whether `mistralrs-server-core` can be embedded. Measurements: load time, tokens/s, VRAM, two simultaneous requests.
+- **M1-02** stable-diffusion.cpp (server) with `qwen-image-2.1-UC-Q4_K_M.gguf`, text encoder and VAE: command line,
+  endpoints, time per image, VRAM. Also in `docs/Runtimes.md`.
+- **M1-02a** Determine the card vendor (`/sys/class/drm/card*/device/vendor`) (NVIDIA or AMD). Build mistral.rs and stable-diffusion.cpp on that card and check
+  which acceleration runs (CUDA, ROCm/HIP, Vulkan); on AMD additionally first Candle directly (pure Rust, as provided for in the architecture plan), then the llama.cpp binding (build and measure Vulkan/ROCm). Result per backend in `docs/Runtimes.md`.
+  If the mistral.rs crate does not run there, the **embedded** backend `llamacpp` (binding crate, Specification 8) becomes part of M4;
+  then choose the binding crate and record its gaps (chat template, tool calls, vision, parallelism) in `docs/Runtimes.md`.
+- **M1-03** Switch between chat and image on the 24 GB card by hand; for comparison llama-swap with the same models.
+- **M1-04** Decision: off-the-shelf manager (llama-swap) or custom build; mistral.rs embedded (decided) – fallback `llamacpp` (also embedded) for cards the crate does not support.
+  If it falls back to "off-the-shelf", M2 to M3 are replaced by an adaptation and the specification is shortened accordingly.
 
-*Abnahme:* `docs/Laufzeiten.md` enthält je Backend eine **lauffähige Befehlszeile und die gemessenen Werte**; die Entscheidung steht darin.
+*Acceptance:* `docs/Runtimes.md` contains for each backend a **working command line and the measured values**; the decision is recorded in it.
 
-### M2 – Gerüst
+### M2 – Scaffold
 
-**Abgeschlossen:** [Prüfungen und Ergebnisse](../tests/m2/README.md),
-Version 0.2.0; Installation in [INSTALL.MD](../INSTALL.MD).
+**Completed:** [Checks and results](../tests/m2/README.md),
+version 0.2.0; installation in [INSTALL.MD](../INSTALL.MD).
 
-- **M2-01** Workspace nach Spezifikation 3, Lizenz (Nutzer wählt), `rust-toolchain.toml`.
-- **M2-02** CI (`.github/workflows/rust.yml`): Format, Clippy, Test, nur Linux.
-- **M2-03** Konfiguration (`eliezer-core::config`): Strukturen mit `deny_unknown_fields`, Prüfungen (doppelte Schlüssel,
-  Portbereiche, Pfade), deutsche Fehlermeldungen mit Zeile. Test: Beispiel aus Spezifikation 4 lädt; je ein Fehlerfall.
-- **M2-03a** Zentrale Modellablage (`storage.models_dir`) und Pfadprüfung: alle Modellbestandteile
-  sowie der HF-Cache darunter; Pfade außerhalb der Ablage auch über Symlinks ablehnen.
-- **M2-04** Programmrahmen (`eliezer`): Argumente (`--config`, `--check-config`), `tracing`, Start/Beenden mit `SIGTERM`,
-  `SIGHUP`-Neuladen als Platzhalter, Einheit `packaging/eliezer.service`.
+- **M2-01** Workspace per Specification 3, license (user chooses), `rust-toolchain.toml`.
+- **M2-02** CI (`.github/workflows/rust.yml`): format, Clippy, test, Linux only.
+- **M2-03** Configuration (`eliezer-core::config`): structs with `deny_unknown_fields`, checks (duplicate keys,
+  port ranges, paths), error messages with line numbers. Test: the example from Specification 4 loads; one error case each.
+- **M2-03a** Central model store (`storage.models_dir`) and path check: all model components
+  and the HF cache below it; reject paths outside the store, including via symlinks.
+- **M2-04** Program frame (`eliezer`): arguments (`--config`, `--check-config`), `tracing`, start/stop with `SIGTERM`,
+  `SIGHUP` reload as a placeholder, unit `packaging/eliezer.service`.
 
-- **M2-05** Container-Bau und `compose.yaml` einrichten, ergänzt um `compose.volume.yaml`:
-  eigenes Modellverzeichnis als Bind-Mount oder alternativ persistentes Docker-/Podman-Volume;
-  persistente Zustandsdaten, schreibgeschützte Konfiguration, separate Geheimnisdateien und
-  GPU-Zugriff nach M1. Start, Stopp und Neuerstellung mit beiden Ablagevarianten prüfen;
-  Docker-/Podman-Voraussetzungen und Unterschiede dokumentieren.
+- **M2-05** Set up container build and `compose.yaml`, extended by `compose.volume.yaml`:
+  own model directory as a bind mount or alternatively a persistent Docker/Podman volume;
+  persistent state data, read-only configuration, separate secret files and
+  GPU access per M1. Verify start, stop and re-creation with both storage variants;
+  document Docker/Podman prerequisites and differences.
 
-*Abnahme:* Compose-Konfigurationen sind geprüft, der Dienst startet und Modelldateien bleiben
-bei Container-Neuerstellung erhalten. `cargo run -- --check-config beispiel.toml` meldet „in Ordnung“; fehlerhafte Dateien nennen Zeile und Feld.
+*Acceptance:* Compose configurations are verified, the service starts and model files are preserved
+when the container is re-created. `cargo run -- --check-config beispiel.toml` reports "Configuration OK"; faulty files name line and field.
 
-### M3 – Verwalter (ohne echte Backends)
+### M3 – Supervisor (without real backends)
 
-- **M3-01** `eliezer-core`: VRAM-Rechnung (Spezifikation 6) mit allen Architekturtypen; Tests mit den Beispielwerten.
-- **M3-02** Zustandsautomat und Planer (Spezifikation 7), `Clock`-Trait; Tests für Verdrängung, Anheften, Bündeln,
-  Leerlauf, Warteschlange, Fehlerzustand.
-- **M3-03** `eliezer-gpu`: **ein** Trait `GpuProbe` (Spezifikation 6a) mit den Verfahren `nvml`, `nvidia-smi`, `sysfs`, `rocm-smi`, `none` und Prüfstand; Herstellererkennung über `device/vendor`; einheitliche Bedeutung (Byte, gesamt belegt), Zeitlimit und Rückfall; ein gemeinsamer Testsatz.
-- **M3-04** `eliezer-backend`: Trait `Backend` und **fake-backend**; Verwalter-Task (`Supervisor`) mit mpsc/oneshot.
-- **M3-05** `eliezer-api`: `/api/v1/models`, `/load`, `/unload`, `/api/v1/status`, `/healthz`, Authentifizierung, Fehlerformat;
-  Chat-Weiterleitung `/v1/chat/completions` mit **ungepuffertem SSE** gegen das fake-backend.
-- **M3-05a** Anthropic-Schnittstelle (Spezifikation 5.1a): Modul `eliezer-api::anthropic` mit Übersetzung hin und zurück, `POST /v1/messages`
-  (mit und ohne Streaming), `count_tokens`, Modellliste, Fehlerformat; Tests gegen das fake-backend.
-- **M3-06** Vertragstest (Spezifikation 11) mit `tests/contract/`-Dateien.
+- **M3-01** `eliezer-core`: VRAM calculation (Specification 6) with all architecture types; tests with the example values.
+- **M3-02** State machine and scheduler (Specification 7), `Clock` trait; tests for eviction, pinning, batching,
+  idle, queue, error state.
+- **M3-03** `eliezer-gpu`: **one** trait `GpuProbe` (Specification 6a) with the methods `nvml`, `nvidia-smi`, `sysfs`, `rocm-smi`, `none` and test bench; vendor detection via `device/vendor`; uniform meaning (bytes, total used), timeout and fallback; one shared test suite.
+- **M3-04** `eliezer-backend`: trait `Backend` and **fake-backend**; supervisor task (`Supervisor`) with mpsc/oneshot.
+- **M3-05** `eliezer-api`: `/api/v1/models`, `/load`, `/unload`, `/api/v1/status`, `/healthz`, authentication, error format;
+  chat forwarding `/v1/chat/completions` with **unbuffered SSE** against the fake-backend.
+- **M3-05a** Anthropic interface (Specification 5.1a): module `eliezer-api::anthropic` with translation in both directions, `POST /v1/messages`
+  (with and without streaming), `count_tokens`, model list, error format; tests against the fake-backend.
+- **M3-06** Contract test (Specification 11) with `tests/contract/` files.
 
-*Abnahme:* Alle Integrationstests aus Spezifikation 11 laufen ohne Netz und GPU; dieselbe Anfrage liefert über OpenAI- und Anthropic-Schnittstelle denselben Inhalt; MultiGPT (Provider `lmstudio`, `base_url`
-auf Eliezer mit fake-backend) listet Modelle, lädt und entlädt.
+*Acceptance:* All integration tests from Specification 11 run without network and GPU; the same request yields the same content via the OpenAI and Anthropic interfaces; MultiGPT (provider `lmstudio`, `base_url`
+pointing to Eliezer with fake-backend) lists models, loads and unloads.
 
-### M4 – Laufzeit mistral.rs
+### M4 – mistral.rs runtime
 
-- **M4-01** Backend `mistralrs` als eingebettetes Crate nach `docs/Laufzeiten.md`: Laden/Entladen über das Handle, Prüfung „VRAM frei nach Entladen“ (`unload_leak`, `needs_restart`), Rechenarbeit auf eigenen Threads, Panic-Abfang, Feature `mistralrs-cuda`.
-- **M4-01a** (nur wenn M1 es verlangt) Backend `llamacpp` eingebettet über das gewählte Binding-Crate: Laden/Entladen, Chatvorlage, Streaming, Parallelität, Werkzeugaufrufe, `usage`, Vision soweit möglich; gleiche Prüfungen wie M4-01.
-- **M4-02** Chat und Vision, Werkzeugaufrufe, Streaming mit `usage`; Chatvorlage je Modell.
-- **M4-03a** Anthropic-Schnittstelle gegen ein echtes Modell: Werkzeugaufruf und Streaming mit einem Anthropic-Client prüfen (Spezifikation 12, Punkt 4).
-- **M4-03** Denkoptionen (`reasoning_effort` → Backend), Statistik im letzten SSE-Block, Gegenprobe der VRAM-Rechnung (gemessener Wert wird gespeichert).
-- **M4-04** GPU-Tests (`#[ignore]`) und Messwerte in `docs/Stand.md`.
+- **M4-01** Backend `mistralrs` as an embedded crate per `docs/Runtimes.md`: load/unload via the handle, check "VRAM free after unload" (`unload_leak`, `needs_restart`), compute work on dedicated threads, panic catching, feature `mistralrs-cuda`.
+- **M4-01a** (only if M1 requires it) Backend `llamacpp` embedded via the chosen binding crate: load/unload, chat template, streaming, parallelism, tool calls, `usage`, vision as far as possible; same checks as M4-01.
+- **M4-02** Chat and vision, tool calls, streaming with `usage`; chat template per model.
+- **M4-03a** Anthropic interface against a real model: verify tool call and streaming with an Anthropic client (Specification 12, point 4).
+- **M4-03** Reasoning options (`reasoning_effort` → backend), statistics in the last SSE chunk, cross-check of the VRAM calculation (measured value is stored).
+- **M4-04** GPU tests (`#[ignore]`) and measurements in `docs/Status.md`.
 
-*Abnahme:* Mit nur geänderter `base_url` arbeitet MultiGPT mit einem echten Chat-Modell (Modellliste, Laden mit Kontext und
-Parallelität, Chat mit Streaming, Denkoptionen, Statistik).
+*Acceptance:* With only `base_url` changed, MultiGPT works with a real chat model (model list, loading with context and
+parallelism, chat with streaming, reasoning options, statistics).
 
-### M5 – Modellbezug
+### M5 – Model acquisition
 
-- **M5-00** Gezielte Suche nach spezialisierten Modellen auf Hugging Face: Suchschnittstelle und
-  Ergebnisformat festlegen; Einsatzzweck, Format, Quantisierung, Lizenz, Backend-Unterstützung und
-  VRAM-Bedarf berücksichtigen. Kandidaten mit Modellkarte und Zusatzdateien prüfen; Aufnahme in
-  die Positivliste und Download bleiben ausdrückliche Verwaltungsschritte.
-- **M5-01** Positivliste mit Revision/Commit-Hash (`pins.json`), Abweichungen melden.
-- **M5-02** `POST /api/v1/models/download`, Fortschritt in `/api/v1/status`, Prüfung `cache_limit_gb` (507), Lizenzhinweis bei 401/403.
-- **M5-03** Token aus Datei (0600, Rechte beim Start prüfen) oder `HF_TOKEN`; nur per Umgebung an Kindprozesse; Prüfskript `scripts/check-secrets.sh`
-  (sucht in Logs, `ps`, Fehlermeldungen).
+- **M5-00** Targeted search for specialized models on Hugging Face: define search interface and
+  result format; take purpose, format, quantization, license, backend support and
+  VRAM requirement into account. Check candidates with model card and additional files; adding to
+  the allowlist and downloading remain explicit administrative steps.
+- **M5-01** Allowlist with revision/commit hash (`pins.json`), report deviations.
+- **M5-02** `POST /api/v1/models/download`, progress in `/api/v1/status`, check `cache_limit_gb` (507), license notice on 401/403.
+- **M5-03** Token from file (0600, check permissions at startup) or `HF_TOKEN`; passed to child processes only via the environment; check script `scripts/check-secrets.sh`
+  (searches logs, `ps`, error messages).
 
-*Abnahme:* Spezialisierte Modelle lassen sich gezielt finden und auf Eignung prüfen. Downloads landen
-ausschließlich in der zentralen Modellablage. Modelle lassen sich auf Anforderung laden; kein Token in Logs, Prozessliste oder Meldungen.
+*Acceptance:* Specialized models can be found in a targeted way and checked for suitability. Downloads land
+exclusively in the central model store. Models can be loaded on request; no token in logs, process list or messages.
 
-### M6 – Bilddienst
+### M6 – Image service
 
-- **M6-01** Backend `sdcpp` (Qwen-Image-GGUF) nach `docs/Laufzeiten.md`; `/v1/images/generations`; exklusive Planung (Spezifikation 7, Punkt 4).
-- **M6-02** GPU-Test Wechsel Chat ↔ Bild, Messwerte.
-- **M6-03** (später) FLUX.2 klein 4B in Rust, sobald die Architektur in mistral.rs/candle vorliegt: eigener Plan, nicht Teil der Abnahme.
+- **M6-01** Backend `sdcpp` (Qwen-Image-GGUF) per `docs/Runtimes.md`; `/v1/images/generations`; exclusive scheduling (Specification 7, point 4).
+- **M6-02** GPU test switching chat ↔ image, measurements.
+- **M6-03** (later) FLUX.2 klein 4B in Rust, as soon as the architecture is available in mistral.rs/candle: separate plan, not part of the acceptance.
 
-*Abnahme (gesamt):* Spezifikation 12.
+*Acceptance (overall):* Specification 12.
 
-## Reihenfolge
+## Order
 
 ```
 M1 ─> M2 ─> M3 ─┬─> M4 ─> M5
