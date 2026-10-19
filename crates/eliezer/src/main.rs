@@ -1,3 +1,5 @@
+mod runtime;
+
 use eliezer_core::config::{Config, PathResolutionError, PathResolver};
 use std::{
     path::{Path, PathBuf},
@@ -98,18 +100,39 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
         signal(SignalKind::terminate()).map_err(|_| "SIGTERM kann nicht registriert werden")?;
     let mut hangup =
         signal(SignalKind::hangup()).map_err(|_| "SIGHUP kann nicht registriert werden")?;
+    let keys = match &config.server.api_keys_file {
+        Some(path) => runtime::read_keys(path)?,
+        None => {
+            tracing::warn!(
+                event = "no_auth",
+                "Keine Schlüsseldatei konfiguriert; die Schnittstelle ist ohne Anmeldung offen"
+            );
+            Vec::new()
+        }
+    };
+    let config = std::sync::Arc::new(config);
+    let (router, supervisor) = runtime::build(config.clone(), keys)?;
+    let ticker = {
+        let supervisor = supervisor.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            while supervisor.tick().await.is_ok() {
+                interval.tick().await;
+            }
+        })
+    };
     let listener = TcpListener::bind(config.server.listen)
         .await
         .map_err(|_| "HTTP-Adresse kann nicht gebunden werden")?;
     let (stop_tx, stop_rx) = oneshot::channel();
     let task = tokio::spawn(async move {
-        axum::serve(listener, eliezer_api::router())
+        axum::serve(listener, router)
             .with_graceful_shutdown(async {
                 let _ = stop_rx.await;
             })
             .await
     });
-    tracing::info!(event="start", address=%config.server.listen, models=config.model.len(), "Dienst gestartet; Modellverwaltung folgt in M3");
+    tracing::info!(event="start", address=%config.server.listen, models=config.model.len(), "Dienst gestartet; Laufzeiten folgen in M4");
     let mut task = task;
     loop {
         tokio::select! {
@@ -134,6 +157,8 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
     }
     tracing::info!(event = "stop", "Dienst wird geordnet beendet");
     let _ = stop_tx.send(());
+    ticker.abort();
+    supervisor.shutdown().await;
     match tokio::time::timeout(Duration::from_secs(30), &mut task).await {
         Ok(Ok(Ok(()))) => Ok(()),
         Ok(_) => Err("HTTP-Programmrahmen konnte nicht geordnet beendet werden"),

@@ -10,6 +10,7 @@ autotests = false
 [dependencies]
 eliezer-core.workspace = true
 eliezer-api.workspace = true
+eliezer-backend.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true

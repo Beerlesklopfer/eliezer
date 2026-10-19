@@ -74,6 +74,7 @@ version = "0.2.0"
 dependencies = [
  "axum",
  "eliezer-api",
+ "eliezer-backend",
  "eliezer-core",
  "tokio",
  "tracing",
