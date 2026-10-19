@@ -20,3 +20,10 @@ tracing-subscriber.workspace = true
 [[test]]
 name = "cli"
 path = "../../tests/m2/cli.rs"
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[[test]]
+name = "reload"
+path = "../../tests/m3/reload.rs"

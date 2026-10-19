@@ -99,18 +99,10 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
     let mut terminate =
         signal(SignalKind::terminate()).map_err(|_| "SIGTERM cannot be registered")?;
     let mut hangup = signal(SignalKind::hangup()).map_err(|_| "SIGHUP cannot be registered")?;
-    let keys = match &config.server.api_keys_file {
-        Some(path) => runtime::read_keys(path)?,
-        None => {
-            tracing::warn!(
-                event = "no_auth",
-                "No key file configured; the interface is open without authentication"
-            );
-            Vec::new()
-        }
-    };
     let config = std::sync::Arc::new(config);
-    let (router, supervisor) = runtime::build(config.clone(), keys)?;
+    let runtime = runtime::build(config.clone(), runtime::keys(&config)?)?;
+    let supervisor = runtime.supervisor.clone();
+    let router = runtime.router.clone();
     let ticker = {
         let supervisor = supervisor.clone();
         tokio::spawn(async move {
@@ -147,9 +139,16 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), &'static str>
                 break;
             }
             _ = hangup.recv() => {
-                match load(&config_path) {
-                    Ok(_) => tracing::info!(event="config_check", "New configuration is valid; adoption follows with the supervisor in M3"),
-                    Err(error) => tracing::warn!(event="config_rejected", %error, "New configuration was rejected; previous state is kept"),
+                let reloaded = match load(&config_path) {
+                    Ok(new) => match runtime::keys(&new) {
+                        Ok(keys) => runtime.reload(std::sync::Arc::new(new), keys).await.map_err(str::to_owned),
+                        Err(error) => Err(error.to_owned()),
+                    },
+                    Err(error) => Err(error),
+                };
+                match reloaded {
+                    Ok(()) => tracing::info!(event = "config_reloaded", "New configuration applied"),
+                    Err(error) => tracing::warn!(event = "config_rejected", %error, "New configuration was rejected; previous state is kept"),
                 }
             }
         }

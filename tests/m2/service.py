@@ -50,7 +50,7 @@ def main():
                 config.write_text(valid)
                 os.kill(process.pid, signal.SIGHUP)
                 deadline = time.monotonic()+5
-                while 'config_check' not in log.read_text():
+                while 'config_reloaded' not in log.read_text():
                     if time.monotonic() > deadline:
                         raise TimeoutError('Valid reload not reported')
                     time.sleep(0.05)
@@ -60,7 +60,7 @@ def main():
                 if process.poll() is None:
                     process.kill()
                     process.wait(timeout=5)
-        print(json.dumps({'healthz': 'ok', 'invalid_reload': 'rejected', 'valid_reload': 'checked', 'sigterm': 'clean', 'secret_value_in_log': False}))
+        print(json.dumps({'healthz': 'ok', 'invalid_reload': 'rejected', 'valid_reload': 'applied', 'sigterm': 'clean', 'secret_value_in_log': False}))
 
 
 if __name__ == '__main__':

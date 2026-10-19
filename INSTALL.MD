@@ -2,10 +2,12 @@
 
 Eliezer is licensed under **GPL-3.0-only**; the full license text is in [LICENSE](LICENSE).
 
-The current program frame checks the configuration, offers `/healthz` and handles
-SIGTERM and SIGHUP. Model management, authentication, chat and image generation
-are not implemented in it yet. The runtime probe programs under `tests/`
-are standalone experiments.
+The service checks the configuration, manages the models of the configuration
+(load, unload, queue, eviction, idle unloading), measures GPU memory, authenticates
+requests and serves the OpenAI- and Anthropic-compatible interfaces. It handles
+SIGTERM and SIGHUP. The model runtimes (mistral.rs, llama.cpp, stable-diffusion.cpp)
+are not connected yet (M4 to M6): loading a model fails with `502 backend_error`
+until then. The runtime probe programs under `tests/` are standalone experiments.
 
 ## Requirements
 
@@ -93,9 +95,13 @@ Expected response: `ok`. Ctrl+C shuts the service down in an orderly way.
 As an alternative to the argument, `ELIEZER_CONFIG` can specify the configuration path;
 `--config` takes precedence. With neither, `/etc/eliezer/config.toml` applies.
 
-In the M2 scaffold, SIGHUP re-checks the file. Valid changes are not yet applied
-to the running service; a restart is required for that for now.
-An invalid file does not terminate the running service.
+SIGHUP reloads the configuration and the key file. New models appear, changed
+priorities, pins, memory budget and scheduler settings take effect, and models that were
+removed from the file refuse new requests and are unloaded as soon as they are idle.
+Loaded models stay loaded. The listen address changes only with a restart (the service
+logs `restart_required`). An invalid configuration or a key file that is readable by
+others is rejected with a log line (`config_rejected`); the service keeps running with
+the previous state.
 
 ## Running as a systemd service
 
@@ -193,7 +199,7 @@ A new model volume initially contains no models.
 
 ## GPU access in the container
 
-The following additions pass devices through. The M2 image does not yet contain a
+The following additions pass devices through. The image does not yet contain a
 model backend or ROCm/CUDA runtime libraries; device access alone
 therefore does not enable inference yet.
 
@@ -227,8 +233,8 @@ command lines. Token and API key files configured later must be owned by the
 service user and have mode `0600`. They are located outside the model store
 and are mounted separately read-only in the container.
 
-Authentication and token retrieval are not yet part of the M2 scaffold.
-Until these functions are implemented, restrict the published address to the
-local machine.
+Authentication is active as soon as `server.api_keys_file` is set; without it the API
+is open, so restrict the published address to the local machine in that case. Token
+retrieval from Hugging Face is not implemented yet (M5).
 
 Tests and measured results: [tests/README.md](tests/README.md).

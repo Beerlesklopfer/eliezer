@@ -93,26 +93,68 @@ fn models(config: &Config) -> Vec<Model> {
     out
 }
 
-/// Starts the supervisor and returns the router and supervisor handle.
-pub fn build(
-    config: Arc<Config>,
-    keys: Vec<String>,
-) -> Result<(axum::Router, Supervisor), &'static str> {
+fn settings(config: &Config) -> Result<Settings, &'static str> {
     let budget = gb_bytes(config.gpu.vram_budget_gb)
         .and_then(|b| gb_bytes(config.gpu.reserve_gb).map(|r| b.saturating_sub(r)))
         .map_err(|_| "VRAM budget is invalid")?;
     let s = &config.scheduler;
+    Ok(Settings {
+        budget,
+        idle_ms: s.idle_unload_secs.saturating_mul(1000),
+        wait_ms: s.queue_wait_secs.saturating_mul(1000),
+        queue_max: s.queue_max,
+        retry_ms: s.failed_retry_secs.saturating_mul(1000),
+    })
+}
+
+/// Reads the API keys named in the configuration; without a key file the API is open.
+pub fn keys(config: &Config) -> Result<Vec<String>, &'static str> {
+    match &config.server.api_keys_file {
+        Some(path) => read_keys(path),
+        None => {
+            tracing::warn!(
+                event = "no_auth",
+                "No key file configured; the API is open without authentication"
+            );
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// The running service: router for the HTTP server plus the handles needed to reload it.
+pub struct Runtime {
+    pub router: axum::Router,
+    pub supervisor: Supervisor,
+    app: App,
+    listen: std::net::SocketAddr,
+}
+impl Runtime {
+    /// Applies a reloaded configuration. Loaded models stay, removed ones are unloaded once idle.
+    /// The listen address cannot change without a restart.
+    pub async fn reload(&self, config: Arc<Config>, keys: Vec<String>) -> Result<(), &'static str> {
+        let settings = settings(&config)?;
+        if config.server.listen != self.listen {
+            tracing::warn!(
+                event = "restart_required",
+                "The listen address changed; it takes effect only after a restart"
+            );
+        }
+        self.supervisor
+            .reconfigure(models(&config), settings)
+            .await
+            .map_err(|_| "Supervisor is not running")?;
+        self.app.replace(config, keys);
+        Ok(())
+    }
+}
+
+/// Starts the supervisor and builds the router.
+pub fn build(config: Arc<Config>, keys: Vec<String>) -> Result<Runtime, &'static str> {
     let supervisor = Supervisor::spawn(
         models(&config),
         Arc::new(NoBackend),
         Arc::new(SystemClock(Instant::now())),
-        Settings {
-            budget,
-            idle_ms: s.idle_unload_secs.saturating_mul(1000),
-            wait_ms: s.queue_wait_secs.saturating_mul(1000),
-            queue_max: s.queue_max,
-            retry_ms: s.failed_retry_secs.saturating_mul(1000),
-        },
+        settings(&config)?,
     );
     let gpu = &config.gpu;
     let root = std::path::PathBuf::from("/sys/class/drm");
@@ -127,13 +169,13 @@ pub fn build(
         gb_bytes(gpu.vram_budget_gb).map_err(|_| "VRAM budget is invalid")?,
         root,
     ));
-    tracing::info!(event = "gpu", ?vendor, "GPU-Hersteller bestimmt");
-    let app = App {
-        config,
-        supervisor: supervisor.clone(),
-        backend: Arc::new(NoBackend),
-        probe,
-        keys: Arc::new(keys),
-    };
-    Ok((managed_router(app), supervisor))
+    tracing::info!(event = "gpu", ?vendor, "GPU vendor determined");
+    let listen = config.server.listen;
+    let app = App::new(config, supervisor.clone(), Arc::new(NoBackend), probe, keys);
+    Ok(Runtime {
+        router: managed_router(app.clone()),
+        supervisor,
+        app,
+        listen,
+    })
 }

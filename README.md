@@ -11,7 +11,7 @@ and take turns on one GPU. The service sits behind an
 OpenAI-compatible interface and is driven by [MultiGPT](https://github.com/Beerlesklopfer/multi-gpt)
 through its runner; permissions, ranking and billing stay there.
 
-**Status:** M2 is complete: configuration checks, the HTTP skeleton and installation files are in place. Model management follows in M3. [Checks](tests/m2/README.md). Specification: [docs/Specification.md](docs/Specification.md), roadmap: [docs/Implementation.md](docs/Implementation.md), rules for agents: [AGENTS.md](AGENTS.md).
+**Status:** M3 is implemented: supervisor with queue, eviction and idle unloading, GPU measurement, and the OpenAI- and Anthropic-compatible interfaces, tested against a fake backend. The model runtimes follow in M4 to M6. [Checks](tests/m2/README.md). Specification: [docs/Specification.md](docs/Specification.md), roadmap: [docs/Implementation.md](docs/Implementation.md), rules for agents: [AGENTS.md](AGENTS.md).
 
 Installation and operation: [INSTALL.MD](INSTALL.MD).
 

@@ -2,7 +2,7 @@ eliezer (0.3.0) UNRELEASED; urgency=low
 
   * Calculate the VRAM requirement per architecture type and schedule loading, eviction,
     pinning, batching and idle handling via a state machine with a clock trait.
-  * Measure GPU usage uniformly via a trait (sysfs, nvidia-smi,
+  * Measure GPU usage uniformly via a trait (NVML, sysfs, nvidia-smi,
     rocm-smi) with vendor detection, timeout and fallback to bookkeeping.
   * Add backend trait, fake-backend and supervisor task without a real runtime.
   * Provide management API, OpenAI and Anthropic interface with
@@ -10,6 +10,12 @@ eliezer (0.3.0) UNRELEASED; urgency=low
   * Integrate supervisor, key file (0600) and GPU measurement into the
     service program; runtimes follow with M4.
   * Verify the model list in the contract test against a real LM Studio response.
+  * Add the /v1/completions, /v1/embeddings and /v1/images/generations endpoints and
+    report queue, queue length and last use per model in /api/v1/status.
+  * Apply a changed configuration and key file on SIGHUP: add and remove models,
+    unload removed ones when idle, keep loaded models.
+  * Test the documented cases over HTTP, including chat/image alternation, request
+    cancellation, GPU measurement failures and an end-to-end configuration reload.
 
  -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 19:00:00 +0200
 
