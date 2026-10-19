@@ -5,7 +5,7 @@ MultiGPT zu kennen. Alles, was MultiGPT von Eliezer erwartet, steht in Abschnitt
 
 ## 1. Zweck
 
-Eliezer läuft als Dienst auf einem Rechner mit **einer** GPU (Ziel: 24 GB VRAM, Linux, **NVIDIA (CUDA) oder AMD (ROCm/HIP, ersatzweise Vulkan)**) und
+Eliezer läuft als Dienst auf einem Rechner mit **einer** GPU (mindestens 8 GB VRAM; Referenz für große Modelle: 24 GB, Linux, **NVIDIA (CUDA) oder AMD (ROCm/HIP, ersatzweise Vulkan)**) und
 bedient lokale Modelle:
 
 - Chat- und Vision-Modelle (Sprachmodelle) über mistral.rs,
@@ -116,7 +116,7 @@ source = { file = "/srv/models/qwen-image-2.1-UC-Q4_K_M.gguf" }
 kind = "image"
 priority = 5
 vram_gb = 14.0                         # gemessener Wert hat immer Vorrang vor der Rechnung
-extra = { text_encoder = "/srv/models/qwen2.5-vl.gguf", vae = "/srv/models/vae.safetensors" }
+extra = { text_encoder = "/srv/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/srv/models/qwen_image_2.1_vae_bf16.safetensors" }
 ```
 
 Regeln: Unbekannte Felder sind ein Fehler (`#[serde(deny_unknown_fields)]`). `key` ist eindeutig.
@@ -223,6 +223,10 @@ läuft gerade eine Anfrage, wird sie abgewartet (bis `request_timeout_secs`), da
 - Streaming-Statistik: im letzten SSE-Block der Chat-Antwort zusätzlich `"eliezer": {"ttft_ms", "gen_ms",
   "tokens"}` (MultiGPT misst selbst und ignoriert es; Eliezer dient der Gegenprobe).
 
+Die Mindestanforderung beträgt **8 GB VRAM**. Die konkrete Modellauswahl, Quantisierung und
+Kontextlänge müssen zum verfügbaren Budget passen; die 24-GB-Beispiele sind keine
+Mindestanforderung. Die Modellsuche berücksichtigt auch die 8-GB-Zielklasse.
+
 ## 6. VRAM-Rechnung
 
 Alle Größen in Byte, 1 GB = 10⁹ Byte. Belegung einer Instanz (bewusst konservativ):
@@ -315,6 +319,14 @@ einer früheren Instanz werden beendet (PID-Datei in `/run/eliezer`).
 
 ## 8. Backends
 
+Entscheidung aus der Laufzeitprüfung: Auf der geprüften AMD-Karte wird das eingebettete
+Backend `llamacpp` umgesetzt; mistral.rs v0.9.5 und dessen Candle-Abhängigkeit bieten
+kein ROCm-/Vulkan-Backend. Der Eigenbau wird fortgeführt. Der Bilddienst verwendet
+stable-diffusion.cpp als Kindprozess. Prüfungen, Messwerte und Grenzen stehen im
+[M1-Ergebnis](../tests/m1/README.md). Der Neustartpfad bei Restbelegung bleibt verbindlich.
+Die von mistral.rs v0.9.5 verlangte Rust-Mindestversion 1.94 ist vor dessen späterer
+Aufnahme gegen die Projektvorgabe 1.88 zu entscheiden.
+
 Trait (vereinfacht):
 
 ```rust
@@ -375,7 +387,36 @@ trait Backend: Send + Sync {
 - Umgebung der Kindprozesse: nur `HF_HOME`, `HF_TOKEN` (aus Datei gelesen, nicht aus der Eltern-Umgebung
   durchgereicht), `PATH` und die Gerätewahl des Herstellers (`CUDA_VISIBLE_DEVICES` bzw. `HIP_VISIBLE_DEVICES`/`ROCR_VISIBLE_DEVICES`). Nie Tokens in Argumenten.
 
-## 9. Modellbezug (Hugging Face)
+## 9. Modellsuche, Modellablage und Modellbezug (Hugging Face)
+
+### 9.1 Gezielte Modellsuche
+
+Eliezer soll auch die gezielte Suche nach spezialisierten Modellen auf Hugging Face ermöglichen.
+Suchkriterien sind insbesondere Einsatzzweck (z. B. Programmieren, Vision, Embeddings oder
+Bildgenerierung), Modellformat, Quantisierung, Lizenz und Eignung für die vorhandene Laufzeit
+und das VRAM-Budget. Suchergebnisse sind zunächst Kandidaten: Sie werden nicht automatisch
+heruntergeladen, in die Positivliste aufgenommen oder ausgeführt. Vor der Aufnahme werden
+Modellkarte, benötigte Zusatzdateien und die tatsächliche Backend-Unterstützung geprüft.
+Suchschnittstelle und Ergebnisformat werden vor der Umsetzung in M5 konkretisiert.
+
+### 9.2 Gemeinsame, persistente Modellablage
+
+Alle Modelldateien liegen unter einem eigenen, konfigurierbaren Modellverzeichnis
+(`[storage].models_dir`, Standard `/var/lib/eliezer/models`). Das schließt lokal bereitgestellte
+Gewichte, Hugging-Face-Downloads, Tokenizer, Bildprojektoren, Textencoder und VAE ein.
+Je Modell und festgehaltener Revision werden getrennte Unterverzeichnisse verwendet;
+Dateinamen und Unterverzeichnisse werden aus geprüfter Konfiguration abgeleitet.
+Modellpfade müssen nach Auflösung symbolischer Links innerhalb dieses Verzeichnisses liegen.
+Die bisherigen `/srv/models`-Beispielpfade sind entsprechend unter dieses Verzeichnis zu legen.
+`huggingface.cache_dir` liegt ebenfalls darin (Standard: `/var/lib/eliezer/models/hf`).
+Geheimnisse liegen außerhalb der Modellablage.
+
+Im Container ist derselbe Pfad entweder als Bind-Mount eines eigenen Host-Verzeichnisses
+oder alternativ als benanntes, persistentes Docker-/Podman-Volume einzubinden.
+Ein Containerwechsel darf keine erneuten Modelldownloads erfordern. Die Ablage von
+`pins.json` und `measured.json` bleibt ebenfalls persistent unter `/var/lib/eliezer`.
+
+### 9.3 Kontrollierter Bezug
 
 - Bezug nur für Modelle der Liste. `downloads = "on_request"`: Herunterladen beginnt erst, wenn ein
   Verwalter `POST /api/v1/models/download` mit `{"model": "<key>"}` aufruft (Antwort 202; Fortschritt in
@@ -393,6 +434,22 @@ trait Backend: Send + Sync {
   von Anfragen oder Antworten, nie Tokens.
 - Beenden (`SIGTERM`): laufende Anfragen beenden (bis 30 s), dann Kindprozesse stoppen.
 - Metriken (optional, M3): `GET /metrics` im Prometheus-Format (geladene Modelle, VRAM, Wartezeiten).
+
+### 10.1 Containerbetrieb mit Compose
+
+Zusätzlich zur systemd-Unit gehört eine Compose-Konfiguration zum Lieferumfang:
+`compose.yaml` für den Betrieb mit einem eigenen Modellverzeichnis als Bind-Mount und
+`compose.volume.yaml` als Alternative mit benanntem Modell-Volume. Konfiguration wird
+schreibgeschützt eingebunden; Token und API-Schlüssel werden als separate Dateien mit
+restriktiven Rechten eingebunden, niemals in Image oder Compose-Datei gespeichert.
+Zustandsdaten bleiben persistent, Laufzeitdaten unter `/run/eliezer` sind flüchtig.
+
+Container-Bauanleitung, GPU-Zugriff und Start-/Stopp-Anleitung werden nach den Ergebnissen
+von M1 für die vorhandene Hardware eingerichtet. Docker Compose und eine geeignete
+Podman-Compose-Ausführung werden geprüft; Unterschiede und Voraussetzungen werden dokumentiert.
+Die Abnahme umfasst beide Ablagevarianten sowie den Erhalt der Modelle nach Neuerstellung
+des Containers. Der Container muss die konfigurierte HTTP-Adresse erreichbar machen und
+SIGTERM geordnet verarbeiten.
 
 ## 11. Tests
 

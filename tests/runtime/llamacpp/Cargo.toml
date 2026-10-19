@@ -1,0 +1,10 @@
+[package]
+name = "eliezer-m1-probe"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[workspace]
+
+[dependencies]
+llama-cpp-2 = { version = "=0.1.160", default-features = false, features = ["rocm"] }

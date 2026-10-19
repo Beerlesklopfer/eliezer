@@ -12,11 +12,23 @@ Arbeitsweise: Meilensteine der Reihe nach. Nach jedem Meilenstein `cargo fmt --c
 `cargo test` grün, kurze Notiz in `docs/Stand.md`, dann Freigabe abwarten. Die Spezifikation wird bei
 Entscheidungen nachgeführt (nicht still abweichen).
 
+Ergebnisse jedes Meilensteins werden zusätzlich in `debian/changelog` im Debian-Format
+festgehalten. Versionsnummern bestimmt der Nutzer; offene Arbeiten werden nicht als
+abgeschlossen ausgewiesen. Zielhardware: mindestens 8 GB VRAM, mit angepasster Modellauswahl.
+
 ## Meilensteine
 
-### M1 – Versuch auf dem GPU-Rechner (macht der Nutzer mit dem Agenten, keine Rust-Arbeit)
+### M1 – Versuch auf dem GPU-Rechner (isolierte Probeprogramme, kein Produktionscode)
+
+**Abgeschlossen:** [Ergebnis und Entscheidungen](../tests/m1/README.md),
+Meilensteinfassung 0.1.0; Eintrag in `debian/changelog`.
 
 Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
+
+Start-, Lade- und Entladeparameter werden anhand der vorhandenen Ollama- und
+LM-Studio-Installationen übernommen und auf die eingebetteten Laufzeiten abgebildet.
+Geprüfte Kommandozeilen, Zuordnungen und Ergebnisse werden unter
+`tests/reference-clients/` dokumentiert.
 
 - **M1-01** mistral.rs **als Crate** in einem kleinen Testprogramm einbinden (kein Kindprozess): Modell laden, antworten, entladen. Feststellen und in `docs/Laufzeiten.md` festhalten: Version, Cargo-Features je Hardware, Builder-Aufrufe (Text, Vision), Ob/wie Entladen und Neuladen im Prozess geht und der VRAM danach frei ist, Streaming und `usage`, Werkzeugaufrufe, Denkoptionen, Chatvorlage, ob `mistralrs-server-core` einbettbar ist. Messwerte: Ladezeit, Token/s, VRAM, zwei gleichzeitige Anfragen.
 - **M1-02** stable-diffusion.cpp (Server) mit `qwen-image-2.1-UC-Q4_K_M.gguf`, Textencoder und VAE: Befehlszeile,
@@ -37,10 +49,19 @@ Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
 - **M2-02** CI (`.github/workflows/rust.yml`): Format, Clippy, Test, nur Linux.
 - **M2-03** Konfiguration (`eliezer-core::config`): Strukturen mit `deny_unknown_fields`, Prüfungen (doppelte Schlüssel,
   Portbereiche, Pfade), deutsche Fehlermeldungen mit Zeile. Test: Beispiel aus Spezifikation 4 lädt; je ein Fehlerfall.
+- **M2-03a** Zentrale Modellablage (`storage.models_dir`) und Pfadprüfung: alle Modellbestandteile
+  sowie der HF-Cache darunter; Pfade außerhalb der Ablage auch über Symlinks ablehnen.
 - **M2-04** Programmrahmen (`eliezer`): Argumente (`--config`, `--check-config`), `tracing`, Start/Beenden mit `SIGTERM`,
   `SIGHUP`-Neuladen als Platzhalter, Einheit `packaging/eliezer.service`.
 
-*Abnahme:* `cargo run -- --check-config beispiel.toml` meldet „in Ordnung“; fehlerhafte Dateien nennen Zeile und Feld.
+- **M2-05** Container-Bau und `compose.yaml` einrichten, ergänzt um `compose.volume.yaml`:
+  eigenes Modellverzeichnis als Bind-Mount oder alternativ persistentes Docker-/Podman-Volume;
+  persistente Zustandsdaten, schreibgeschützte Konfiguration, separate Geheimnisdateien und
+  GPU-Zugriff nach M1. Start, Stopp und Neuerstellung mit beiden Ablagevarianten prüfen;
+  Docker-/Podman-Voraussetzungen und Unterschiede dokumentieren.
+
+*Abnahme:* Compose-Konfigurationen sind geprüft, der Dienst startet und Modelldateien bleiben
+bei Container-Neuerstellung erhalten. `cargo run -- --check-config beispiel.toml` meldet „in Ordnung“; fehlerhafte Dateien nennen Zeile und Feld.
 
 ### M3 – Verwalter (ohne echte Backends)
 
@@ -72,12 +93,17 @@ Parallelität, Chat mit Streaming, Denkoptionen, Statistik).
 
 ### M5 – Modellbezug
 
+- **M5-00** Gezielte Suche nach spezialisierten Modellen auf Hugging Face: Suchschnittstelle und
+  Ergebnisformat festlegen; Einsatzzweck, Format, Quantisierung, Lizenz, Backend-Unterstützung und
+  VRAM-Bedarf berücksichtigen. Kandidaten mit Modellkarte und Zusatzdateien prüfen; Aufnahme in
+  die Positivliste und Download bleiben ausdrückliche Verwaltungsschritte.
 - **M5-01** Positivliste mit Revision/Commit-Hash (`pins.json`), Abweichungen melden.
 - **M5-02** `POST /api/v1/models/download`, Fortschritt in `/api/v1/status`, Prüfung `cache_limit_gb` (507), Lizenzhinweis bei 401/403.
 - **M5-03** Token aus Datei (0600, Rechte beim Start prüfen) oder `HF_TOKEN`; nur per Umgebung an Kindprozesse; Prüfskript `scripts/check-secrets.sh`
   (sucht in Logs, `ps`, Fehlermeldungen).
 
-*Abnahme:* Modelle lassen sich auf Anforderung laden; kein Token in Logs, Prozessliste oder Meldungen.
+*Abnahme:* Spezialisierte Modelle lassen sich gezielt finden und auf Eignung prüfen. Downloads landen
+ausschließlich in der zentralen Modellablage. Modelle lassen sich auf Anforderung laden; kein Token in Logs, Prozessliste oder Meldungen.
 
 ### M6 – Bilddienst
 

@@ -1,0 +1,14 @@
+Nach HIP-Initialisierung: 1390972928 Byte; vor Initialisierung 1390915584 Byte
+GPU-Auslagerung verfügbar; VRAM vor Backend 1390915584 Byte
+Durchlauf 1: Laden 319 ms; VRAM vorher 1390972928, geladen 5835165696 Byte
+Parallelität 1: Prompt je 16 Token; Ausgabe [32]; erstes Token [Some(61)] ms; Gesamtzeit 311 ms; VRAM 6192791552 Byte
+Durchlauf 1: VRAM nach Entladen 1649180672 Byte nach 10007 ms; Restdifferenz 258207744 Byte
+Durchlauf 2: Laden 284 ms; VRAM vorher 1649180672, geladen 5946253312 Byte
+Parallelität 1: Prompt je 16 Token; Ausgabe [32]; erstes Token [Some(24)] ms; Gesamtzeit 259 ms; VRAM 6205083648 Byte
+Durchlauf 2: VRAM nach Entladen 1649184768 Byte nach 100 ms; Restdifferenz 4096 Byte
+Durchlauf 3: Laden 280 ms; VRAM vorher 1649184768, geladen 5946253312 Byte
+Parallelität 2: Prompt je 16 Token; Ausgabe [32, 32]; erstes Token [Some(49), Some(49)] ms; Gesamtzeit 317 ms; VRAM 6209409024 Byte
+Durchlauf 3: VRAM nach Entladen 1649180672 Byte nach 100 ms; Restdifferenz -4096 Byte
+Nach Backend-Drop: 1649180672 Byte, Ausgangswert 1390915584 Byte
+test gpu_lifecycle ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.06s

@@ -1,0 +1,24 @@
+{
+  "chat_before_image": {
+    "seconds": 13.07933484800742,
+    "before_bytes": 1194037248,
+    "after_exit_bytes": 1194037248
+  },
+  "model_list_received": true,
+  "image_ready_bytes": 1194094592,
+  "image_dimensions": [
+    512,
+    512
+  ],
+  "image_size_bytes": 251054,
+  "image_peak_bytes": 8374263808,
+  "image_baseline_bytes": 1194037248,
+  "after_image_exit_bytes": 1194037248,
+  "chat_after_image": {
+    "seconds": 13.129337398000644,
+    "before_bytes": 1194037248,
+    "after_exit_bytes": 1284792320
+  },
+  "server_ready_seconds": 0.2018778109923005,
+  "first_image_seconds_including_model_load": 8.08696561200486
+}

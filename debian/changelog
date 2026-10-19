@@ -1,0 +1,13 @@
+eliezer (0.1.0) UNRELEASED; urgency=low
+
+  * Schließe M1 als Machbarkeitsprüfung auf AMD Radeon RX 7900 XTX ab.
+  * Prüfe aktuelle Laufzeitquellen und dokumentiere fehlende AMD-Features
+    von mistral.rs sowie Candle; bestätige llama.cpp mit ROCm als Ausweichweg.
+  * Weise Modellladen, Token-Ausgabe, zwei Sequenzen und Neuladen nach;
+    dokumentiere die verbleibende kalte VRAM-Restbelegung und den Neustartpfad.
+  * Baue stable-diffusion.cpp mit HIP und prüfe Qwen Image 2.1 über HTTP.
+  * Prüfe Chat-Bild-Chat direkt und mit llama-swap; führe den Eigenbau fort.
+  * Bündele Prüfprogramme, Anleitungen und Messprotokolle unter tests/.
+  * Dokumentiere Mindesthardware, Rechte, Modellablage und Compose-Anforderungen.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 17:29:30 +0200

@@ -1,0 +1,38 @@
+{
+  "baseline_bytes": 1221361664,
+  "requests": [
+    {
+      "kind": "chat",
+      "seconds_including_load_and_swap": 1.5365195820049848,
+      "vram_bytes": 5732737024,
+      "usage": {
+        "completion_tokens": 32,
+        "prompt_tokens": 16,
+        "total_tokens": 48,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "kind": "image",
+      "seconds_including_load_and_swap": 8.713760746992193,
+      "vram_bytes": 1770819584,
+      "image_size_bytes": 251054
+    },
+    {
+      "kind": "chat",
+      "seconds_including_load_and_swap": 2.0898268119926797,
+      "vram_bytes": 5726674944,
+      "usage": {
+        "completion_tokens": 32,
+        "prompt_tokens": 16,
+        "total_tokens": 48,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    }
+  ],
+  "after_exit_bytes": 1173655552
+}
