@@ -105,18 +105,19 @@ the previous state.
 
 ## Model store outside `/var/lib/eliezer`
 
-By default the models live in `/var/lib/eliezer/models`, which the unit may write. If they live
-elsewhere, for example under `/home`, two things must change:
+By default the models live in `/var/lib/eliezer/models`. If they live elsewhere, for example on a big
+disk under `/home`, name the real directory in the configuration (`storage.models_dir` and
+`huggingface.cache_dir`, in that order of sections: `[storage]` and `[huggingface]`).
 
-1. `storage.models_dir` and `huggingface.cache_dir` in the configuration name the real directory.
-2. The unit hides `/home` from the service (`ProtectHome=true`), so a drop-in has to open that one
-   directory; `packaging/eliezer-models-in-home.conf.example` (installed under
-   `/usr/share/doc/eliezer/examples/`) shows how.
-
-Do **not** make `/var/lib/eliezer` a symbolic link to another directory: systemd refuses to use a
-symbolic link as the state directory and the service fails at start with `Failed at step
-STATE_DIRECTORY ... Too many levels of symbolic links`. Remove the link; systemd creates the real
-directory (it holds the service's state, not the models).
+- **Reading** needs nothing more: the unit makes `/home` read-only instead of hiding it.
+- **Writing** (model downloads and state files, later milestones) needs the directory opened with
+  `ReadWritePaths` in a drop-in; `packaging/eliezer-models-in-home.conf.example` (installed under
+  `/usr/share/doc/eliezer/examples/`) shows how.
+- `/var/lib/eliezer` may be a symbolic link or a mount point. The unit does not use systemd's
+  `StateDirectory=` (which refuses a symbolic link and fails at start with `Failed at step
+  STATE_DIRECTORY ... Too many levels of symbolic links`); the package only creates the directory when
+  nothing is there. The service user needs permission on the target: read for the models, write for
+  the state files.
 
 ## Importing existing models (for example from LM Studio)
 
@@ -234,11 +235,10 @@ systemctl status eliezer.service
 journalctl -u eliezer.service
 ```
 
-The unit creates `/var/lib/eliezer` and `/run/eliezer` with suitable ownership.
-Write access is limited to the intended directories. For a
-model directory outside `/var/lib/eliezer`, add its write permission with
-`ReadWritePaths`. If it is under a home directory, `ProtectHome`
-must also be adjusted accordingly.
+The unit creates `/run/eliezer`; the state directory `/var/lib/eliezer` is created by the package (or
+by the `install -d` command above). Write access is limited to those two directories, and `/home` is
+read-only for the service. For a model store that the service must write to outside
+`/var/lib/eliezer`, add `ReadWritePaths` in a drop-in (see "Model store outside `/var/lib/eliezer`").
 
 ## Container: model directory as a bind mount
 

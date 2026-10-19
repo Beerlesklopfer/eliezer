@@ -33,7 +33,9 @@ getent passwd eliezer >/dev/null || fail "system user missing"
 [ -x /usr/bin/eliezer ] || fail "binary missing"
 grep -q "^ExecStart=/usr/bin/eliezer " /usr/lib/systemd/system/eliezer.service || fail "unit path"
 [ ! -e /etc/systemd/system/multi-user.target.wants/eliezer.service ] || fail "service must not be enabled"
-mkdir -p /var/lib/eliezer && chown eliezer:eliezer /var/lib/eliezer
+# the package creates the state directory for the service user (systemd StateDirectory= is not used)
+[ -d /var/lib/eliezer ] || fail "state directory not created"
+[ "$(stat -c %U:%a /var/lib/eliezer)" = eliezer:750 ] || fail "state directory owner/mode: $(stat -c %U:%a /var/lib/eliezer)"
 run() { setpriv --reuid=eliezer --regid=eliezer --clear-groups "$@"; }
 run /usr/bin/eliezer --check-config /etc/eliezer/config.toml | grep -q "Configuration OK" || fail "check-config"
 # no shell function here: the signals must reach the service itself
@@ -53,5 +55,16 @@ dpkg -P eliezer >/dev/null 2>&1
 [ ! -e /etc/eliezer ] || fail "purge must remove the config"
 getent passwd eliezer >/dev/null || fail "purge must keep the user"
 [ -d /var/lib/eliezer ] || fail "purge must keep the state directory"
+# A model store on another disk: /var/lib/eliezer is a symbolic link. systemd refuses that as a
+# StateDirectory, so the package must leave an existing link alone and still install.
+rm -rf /var/lib/eliezer
+mkdir -p /srv/store
+ln -s /srv/store /var/lib/eliezer
+dpkg -i /pkg.deb >/dev/null 2>&1 || fail "install over a symbolic link"
+[ -L /var/lib/eliezer ] || fail "the symbolic link must stay a link"
+[ "$(readlink /var/lib/eliezer)" = /srv/store ] || fail "the link target changed"
+[ -z "$(ls -A /srv/store)" ] || fail "the package must not write into the link target"
+dpkg -P eliezer >/dev/null 2>&1
+[ -L /var/lib/eliezer ] || fail "purge must keep the link"
 echo "package check passed"
 '

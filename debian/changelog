@@ -25,6 +25,9 @@ eliezer (0.3.0) UNRELEASED; urgency=low
     configuration (language and embedding models; image models are only noted).
   * Identify the service with a Server header and make the command line client refuse other
     programs on the port (LM Studio listens on 1234 as well).
+  * Fix the systemd unit for a state directory or model store that is a symbolic link, a mount or
+    under /home: drop StateDirectory= (systemd refuses a link there), create /var/lib/eliezer in the
+    package, make /home read-only instead of hidden.
   * Build a Debian package with cargo-deb (scripts/build-deb.sh): service, systemd unit,
     default configuration, system user; checked in a clean container (tests/deb).
   * Test the documented cases over HTTP, including chat/image alternation, request

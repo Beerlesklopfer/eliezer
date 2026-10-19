@@ -1,19 +1,16 @@
-# Drop-in for a model store outside /var/lib/eliezer, for example on a big disk under /home.
+# Drop-in for a model store under /home that the service must WRITE to (downloads, state files).
+#
+# Reading models under /home needs no drop-in: the unit makes /home read-only, not invisible.
 #
 #   sudo mkdir -p /etc/systemd/system/eliezer.service.d
 #   sudo cp /usr/share/doc/eliezer/examples/eliezer-models-in-home.conf.example \
 #           /etc/systemd/system/eliezer.service.d/models.conf
 #   sudo systemctl daemon-reload && sudo systemctl restart eliezer
 #
-# and set in /etc/eliezer/config.toml:
+# and name the directory in /etc/eliezer/config.toml:
 #   [storage]
 #   models_dir = "/home/eliezer/models"
 #   [huggingface]
 #   cache_dir = "/home/eliezer/models/hf"
-#
-# The unit hides /home from the service (ProtectHome=true). Make it read-only instead and open
-# the model directory for writing. Do not point /var/lib/eliezer at another directory with a
-# symbolic link: systemd refuses to use a symbolic link as the state directory.
 [Service]
-ProtectHome=read-only
 ReadWritePaths=/home/eliezer
