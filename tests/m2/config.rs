@@ -139,3 +139,17 @@ fn semantic_locations_accept_comments_and_quoted_table_names() {
             + 1
     );
 }
+
+#[test]
+fn duplicate_model_keys_and_duplicate_toml_keys_name_the_place() {
+    let model = "[[model]]\nkey=\"a\"\nbackend=\"mistralrs\"\nsource={hf=\"t/a\"}\nkind=\"llm\"\nvram_gb=1.0\n";
+    let head = "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\nmeasure=\"none\"\nvram_budget_gb=8.0\nreserve_gb=1.0\n[backend.mistralrs]\nenabled=true\n";
+    let two = format!("{head}{model}{model}");
+    let message = Config::parse(&two).unwrap_err().to_string();
+    assert!(message.contains("mehrfach"), "{message}");
+    assert!(message.contains("model[1].key"), "{message}");
+    // doppelter TOML-Schlüssel im selben Abschnitt
+    let dup = format!("{head}vram_budget_gb=9.0\n{model}");
+    let message = Config::parse(&dup).unwrap_err().to_string();
+    assert!(message.contains("Zeile"), "{message}");
+}

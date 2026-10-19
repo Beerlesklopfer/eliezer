@@ -52,3 +52,116 @@ fn fake_sysfs_command_and_fallback() {
     assert_eq!(fallback.active_name(), "nvidia-smi");
     std::fs::remove_dir_all(root).unwrap();
 }
+
+fn temp(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "eliezer-probe-{name}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+fn script(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+    let program = dir.join("smi");
+    std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    program
+}
+#[test]
+fn rocm_smi_script_gives_same_bytes_as_nvidia_smi() {
+    let dir = temp("rocm");
+    let rocm = Smi {
+        program: script(
+            &dir,
+            r#"printf '%s' '{"card0":{"VRAM Total Memory (B)":"8388608","VRAM Total Used Memory (B)":"2097152"}}'"#,
+        ),
+        index: 0,
+        kind: SmiKind::Rocm,
+    };
+    assert_eq!(rocm.name(), "rocm-smi");
+    assert_eq!(rocm.memory(), GpuMemory::new(8_388_608, 2_097_152));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn hanging_failing_and_garbled_programs_are_reported() {
+    let dir = temp("fehler");
+    let smi = |body: &str| Smi {
+        program: script(&dir, body),
+        index: 0,
+        kind: SmiKind::Nvidia,
+    };
+    let start = std::time::Instant::now();
+    assert_eq!(smi("sleep 30").memory(), Err(ProbeError::Timeout));
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(4),
+        "Zeitlimit muss greifen"
+    );
+    assert_eq!(smi("exit 3").memory(), Err(ProbeError::Unavailable));
+    assert_eq!(
+        smi("printf 'Müll'").memory(),
+        Err(ProbeError::InvalidOutput)
+    );
+    assert_eq!(
+        smi("printf '9, 1'").memory(),
+        GpuMemory::new(9 << 20, 1 << 20)
+    );
+    let missing = Smi {
+        program: dir.join("gibt-es-nicht"),
+        index: 0,
+        kind: SmiKind::Nvidia,
+    };
+    assert_eq!(missing.memory(), Err(ProbeError::Unavailable));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn vendor_detection_and_none_fallback() {
+    use eliezer_core::config::{GpuVendor, ProbeMethod};
+    let root = temp("vendor");
+    for (index, vendor) in [(0, "0x10de"), (1, "0x8086")] {
+        let device = root.join(format!("card{index}/device"));
+        std::fs::create_dir_all(&device).unwrap();
+        std::fs::write(device.join("vendor"), vendor).unwrap();
+    }
+    assert_eq!(detect_vendor(&root, 0), GpuVendor::Nvidia);
+    assert_eq!(
+        detect_vendor(&root, 1),
+        GpuVendor::None,
+        "fremder Hersteller"
+    );
+    assert_eq!(detect_vendor(&root, 7), GpuVendor::None, "Karte fehlt");
+    // Verfahren none: nur Buchführung, gleiche Byte-Bedeutung
+    let none = sources(
+        GpuVendor::None,
+        ProbeMethod::None,
+        0,
+        5_000_000_000,
+        root.clone(),
+    );
+    assert_eq!(none.active_name(), "none");
+    assert_eq!(none.memory(), GpuMemory::new(5_000_000_000, 0));
+    // Sysfs ausgewählt, aber Dateien fehlen: Rückfall auf die Buchführung
+    let broken = sources(
+        GpuVendor::Amd,
+        ProbeMethod::Sysfs,
+        0,
+        5_000_000_000,
+        root.clone(),
+    );
+    assert_eq!(broken.memory(), GpuMemory::new(5_000_000_000, 0));
+    assert_eq!(broken.active_name(), "none");
+    // Sysfs mit Dateien: Messung gewinnt vor der Buchführung
+    let device = root.join("card0/device");
+    std::fs::write(device.join("mem_info_vram_total"), "100").unwrap();
+    std::fs::write(device.join("mem_info_vram_used"), "40").unwrap();
+    let ok = sources(
+        GpuVendor::Amd,
+        ProbeMethod::Sysfs,
+        0,
+        5_000_000_000,
+        root.clone(),
+    );
+    assert_eq!(ok.memory(), GpuMemory::new(100, 40));
+    assert_eq!(ok.active_name(), "sysfs");
+    std::fs::remove_dir_all(root).unwrap();
+}
