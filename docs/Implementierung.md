@@ -1,57 +1,86 @@
 # Implementierungsgerüst Eliezer
 
 Stand 2026-10-19, Entwurf. Eliezer ersetzt LM Studio als Modellserver von
-[MultiGPT](https://github.com/Beerlesklopfer/multi-gpt). Die Anbindung auf Seite von MultiGPT steht
-dort als Meilenstein M16 in `docs/Implementierung.md`; Hintergrund und Recherche in MultiGPT unter
-`docs/plans/Runner-Plotter.md`.
+[MultiGPT](https://github.com/Beerlesklopfer/multi-gpt) (dort Meilenstein M16 = Anbindung).
+**Vorab lesen:** [../AGENTS.md](../AGENTS.md) (Regeln) und [Spezifikation.md](Spezifikation.md)
+(Aufbau, Konfiguration, Schnittstellen, Planer, Tests). Dieses Dokument ordnet die Arbeit.
 
-Entschieden: alles Rust, Laufzeit mistral.rs, Modelle per Hugging-Face-Token (nur auf dem GPU-Rechner,
-nie im Repository oder in Logs), im Chat eine einzige Bildauswahl. Offen: Verwalter fertig einsetzen
-(llama-swap, LocalAI) oder klein in Rust bauen – entscheidet M1. Zielversion legt der Nutzer fest.
+Entschieden: alles Rust, Laufzeit mistral.rs, Modelle per Hugging-Face-Token (nur auf dem GPU-Rechner),
+im Chat eine einzige Bildauswahl. Zielversion legt der Nutzer fest.
 
-## Arbeitspakete je Meilenstein
+Arbeitsweise: Meilensteine der Reihe nach. Nach jedem Meilenstein `cargo fmt --check`, `cargo clippy -D warnings`,
+`cargo test` grün, kurze Notiz in `docs/Stand.md`, dann Freigabe abwarten. Die Spezifikation wird bei
+Entscheidungen nachgeführt (nicht still abweichen).
 
-### M1 – Versuch auf dem GPU-Rechner
+## Meilensteine
 
-- **M1-01** mistral.rs mit einem Chat-Modell: Ladezeit, Token/s, VRAM, `unload`/`reload`, Anfrage an ein entladenes Modell, zwei gleichzeitige Anfragen.
-- **M1-02** stable-diffusion.cpp mit `qwen-image-2.1-UC-Q4_K_M.gguf` (Textencoder und VAE prüfen): Zeit je Bild, VRAM.
-- **M1-03** Wechsel Chat ↔ Bild auf der 24-GB-Karte; zum Vergleich llama-swap mit denselben Modellen.
-- **M1-04** Entscheidung: fertiger Verwalter oder Eigenbau; Einbettung von mistral.rs (Bibliothek oder eigener Prozess).
+### M1 – Versuch auf dem GPU-Rechner (macht der Nutzer mit dem Agenten, keine Rust-Arbeit)
 
-*Abnahme:* Messwerte liegen vor und die Entscheidung steht in diesem Dokument.
+Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
+
+- **M1-01** mistral.rs installieren; `--help` und Probeaufrufe mit einem Chat-Modell: Ladezeit, Token/s, VRAM,
+  `unload`/`reload`, Anfrage an ein entladenes Modell, zwei gleichzeitige Anfragen. Ergebnis in `docs/Laufzeiten.md`
+  (genaue Befehlszeile, Ports, Endpunkte, Umgebungsvariablen, Denkoptionen, Chatvorlage).
+- **M1-02** stable-diffusion.cpp (Server) mit `qwen-image-2.1-UC-Q4_K_M.gguf`, Textencoder und VAE: Befehlszeile,
+  Endpunkte, Zeit je Bild, VRAM. Ebenfalls in `docs/Laufzeiten.md`.
+- **M1-03** Wechsel Chat ↔ Bild auf der 24-GB-Karte von Hand; zum Vergleich llama-swap mit denselben Modellen.
+- **M1-04** Entscheidung: fertiger Verwalter (llama-swap) oder Eigenbau; mistral.rs als Prozess (Standard) oder Bibliothek.
+  Fällt sie auf „fertig“, wird M2 bis M3 durch eine Anpassung ersetzt und die Spezifikation entsprechend gekürzt.
+
+*Abnahme:* `docs/Laufzeiten.md` enthält je Backend eine **lauffähige Befehlszeile und die gemessenen Werte**; die Entscheidung steht darin.
 
 ### M2 – Gerüst
 
-- **M2-01** Cargo-Workspace, Lizenz (vom Nutzer zu wählen), `rust-toolchain`.
-- **M2-02** CI: Format, Clippy, Tests (wie `runner-rs` in MultiGPT).
-- **M2-03** Konfigurationsdatei und Dienst-Unit (`systemd`), Protokollierung ohne Token.
+- **M2-01** Workspace nach Spezifikation 3, Lizenz (Nutzer wählt), `rust-toolchain.toml`.
+- **M2-02** CI (`.github/workflows/rust.yml`): Format, Clippy, Test, nur Linux.
+- **M2-03** Konfiguration (`eliezer-core::config`): Strukturen mit `deny_unknown_fields`, Prüfungen (doppelte Schlüssel,
+  Portbereiche, Pfade), deutsche Fehlermeldungen mit Zeile. Test: Beispiel aus Spezifikation 4 lädt; je ein Fehlerfall.
+- **M2-04** Programmrahmen (`eliezer`): Argumente (`--config`, `--check-config`), `tracing`, Start/Beenden mit `SIGTERM`,
+  `SIGHUP`-Neuladen als Platzhalter, Einheit `packaging/eliezer.service`.
 
-### M3 – Verwalter
+*Abnahme:* `cargo run -- --check-config beispiel.toml` meldet „in Ordnung“; fehlerhafte Dateien nennen Zeile und Feld.
 
-- **M3-01** Routing nach dem Feld `model`, Zustände geladen/lädt/entladen.
-- **M3-02** `ttl` je Modell (Leerlauf-Entladen), Zeitgeber im Verwalter.
-- **M3-03** VRAM-Buch: Modelldatei + KV-Cache + Zuschlag, Reserve für Anzeige/System.
-- **M3-04** Warteschlange und Verdrängung nach Priorität; laufende Anfragen werden abgewartet; nichts laden, wenn es nicht passt.
-- **M3-05** Schnittstelle für MultiGPT: Modellliste mit Zustand und Speicherschätzung, Laden/Entladen mit Kontext und Parallelität, Status und VRAM, Abbrechen.
+### M3 – Verwalter (ohne echte Backends)
+
+- **M3-01** `eliezer-core`: VRAM-Rechnung (Spezifikation 6) mit allen Architekturtypen; Tests mit den Beispielwerten.
+- **M3-02** Zustandsautomat und Planer (Spezifikation 7), `Clock`-Trait; Tests für Verdrängung, Anheften, Bündeln,
+  Leerlauf, Warteschlange, Fehlerzustand.
+- **M3-03** `eliezer-gpu`: Trait `GpuProbe`, Implementierung NVML (Feature `nvml`), `nvidia-smi`-Auszug, `none`, Prüfstand.
+- **M3-04** `eliezer-backend`: Trait `Backend` und **fake-backend**; Verwalter-Task (`Supervisor`) mit mpsc/oneshot.
+- **M3-05** `eliezer-api`: `/api/v1/models`, `/load`, `/unload`, `/api/v1/status`, `/healthz`, Authentifizierung, Fehlerformat;
+  Chat-Weiterleitung `/v1/chat/completions` mit **ungepuffertem SSE** gegen das fake-backend.
+- **M3-06** Vertragstest (Spezifikation 11) mit `tests/contract/`-Dateien.
+
+*Abnahme:* Alle Integrationstests aus Spezifikation 11 laufen ohne Netz und GPU; MultiGPT (Provider `lmstudio`, `base_url`
+auf Eliezer mit fake-backend) listet Modelle, lädt und entlädt.
 
 ### M4 – Laufzeit mistral.rs
 
-- **M4-01** Chat und Vision, OpenAI-kompatibel (`/v1`).
-- **M4-02** Denkoptionen je Modell (`none` = aus), Werkzeugaufrufe.
-- **M4-03** Statistik je Antwort (erstes Token, Token/s), Speicherschätzung bekannter Architekturen.
+- **M4-01** Backend `mistralrs` nach `docs/Laufzeiten.md`: Prozesssteuerung, Bereitschaftsprüfung, sanftes und hartes Beenden,
+  PID-Datei, Aufräumen verwaister Prozesse.
+- **M4-02** Chat und Vision, Werkzeugaufrufe, Streaming mit `usage`; Chatvorlage je Modell.
+- **M4-03** Denkoptionen (`reasoning_effort` → Backend), Statistik im letzten SSE-Block, Gegenprobe der VRAM-Rechnung (gemessener Wert wird gespeichert).
+- **M4-04** GPU-Tests (`#[ignore]`) und Messwerte in `docs/Stand.md`.
+
+*Abnahme:* Mit nur geänderter `base_url` arbeitet MultiGPT mit einem echten Chat-Modell (Modellliste, Laden mit Kontext und
+Parallelität, Chat mit Streaming, Denkoptionen, Statistik).
 
 ### M5 – Modellbezug
 
-- **M5-01** Positivliste (Modell-ID mit Revision), geladen wird nur, was dort steht.
-- **M5-02** Cache-Volume (`HF_HOME`) mit Größengrenze; Herunterladen nur auf Anforderung, mit Fortschritt.
-- **M5-03** Hugging-Face-Token: Datei 0600 oder Umgebungsvariable des Dienstes, nur an die Laufzeit weitergereicht.
+- **M5-01** Positivliste mit Revision/Commit-Hash (`pins.json`), Abweichungen melden.
+- **M5-02** `POST /api/v1/models/download`, Fortschritt in `/api/v1/status`, Prüfung `cache_limit_gb` (507), Lizenzhinweis bei 401/403.
+- **M5-03** Token aus Datei (0600, Rechte beim Start prüfen) oder `HF_TOKEN`; nur per Umgebung an Kindprozesse; Prüfskript `scripts/check-secrets.sh`
+  (sucht in Logs, `ps`, Fehlermeldungen).
+
+*Abnahme:* Modelle lassen sich auf Anforderung laden; kein Token in Logs, Prozessliste oder Meldungen.
 
 ### M6 – Bilddienst
 
-- **M6-01** Übergang: stable-diffusion.cpp (Qwen-Image-GGUF) hinter demselben Vertrag, eine einzige Bildauswahl.
-- **M6-02** Ziel: FLUX.2 klein 4B (Apache-2.0) in Rust, sobald die Architektur in mistral.rs/candle vorliegt.
+- **M6-01** Backend `sdcpp` (Qwen-Image-GGUF) nach `docs/Laufzeiten.md`; `/v1/images/generations`; exklusive Planung (Spezifikation 7, Punkt 4).
+- **M6-02** GPU-Test Wechsel Chat ↔ Bild, Messwerte.
+- **M6-03** (später) FLUX.2 klein 4B in Rust, sobald die Architektur in mistral.rs/candle vorliegt: eigener Plan, nicht Teil der Abnahme.
 
-*Abnahme (gesamt):* Ein Chat-Modell und ein Bildauftrag wechseln sich auf der 24-GB-Karte ab, das Chat-Modell kommt danach von selbst zurück, die Statistik stimmt mit der Messung überein, MultiGPT läuft ohne LM Studio.
+*Abnahme (gesamt):* Spezifikation 12.
 
 ## Reihenfolge
 
