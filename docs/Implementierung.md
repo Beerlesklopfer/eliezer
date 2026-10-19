@@ -38,6 +38,7 @@ Ziel: Schnittstellen der Fremdprogramme **feststellen**, nicht raten.
 - **M2-03** Konfiguration (`eliezer-core::config`): Strukturen mit `deny_unknown_fields`, Prüfungen (doppelte Schlüssel,
   Portbereiche, Pfade), deutsche Fehlermeldungen mit Zeile. Test: Beispiel aus Spezifikation 4 lädt; je ein Fehlerfall.
 - **M2-04** Programmrahmen (`eliezer`): Argumente (`--config`, `--check-config`), `tracing`, Start/Beenden mit `SIGTERM`,
+- **M2-05** `scripts/deploy.sh` und `scripts/deploy.fish` (Bauen, Installieren, Prüfen, Neustart mit Rückfall) nach [Auslieferung.md](Auslieferung.md), dazu `packaging/config.example.toml` und `scripts/test-deploy.sh`.
   `SIGHUP`-Neuladen als Platzhalter, Einheit `packaging/eliezer.service`.
 
 *Abnahme:* `cargo run -- --check-config beispiel.toml` meldet „in Ordnung“; fehlerhafte Dateien nennen Zeile und Feld.
