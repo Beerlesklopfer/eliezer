@@ -103,3 +103,7 @@ path = "../../tests/m4/cli_client.rs"
 [[test]]
 name = "keys_cli"
 path = "../../tests/m4/keys_cli.rs"
+
+[[test]]
+name = "check_secrets"
+path = "../../tests/m5/check_secrets.rs"

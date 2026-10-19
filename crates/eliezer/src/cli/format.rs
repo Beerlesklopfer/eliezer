@@ -550,3 +550,165 @@ pub fn inspect_text(detail: &Value) -> String {
     out.push_str("\nNothing is downloaded. Downloading is not implemented yet: put the files in the model store and run `eliezer --import`.\n");
     out
 }
+
+/// One progress line of a download job: the file in progress and the total.
+pub fn download_line(job: &Value) -> String {
+    let done = job["done_bytes"].as_u64().unwrap_or(0);
+    let total = job["total_bytes"].as_u64().unwrap_or(0);
+    let percent = (done * 100).checked_div(total).unwrap_or(0);
+    let current = job["files"]
+        .as_array()
+        .and_then(|files| files.iter().find(|f| f["state"] == "running"))
+        .and_then(|f| f["file"].as_str())
+        .unwrap_or("-");
+    // The line only changes in steps of 5 %, so a terminal log stays short.
+    format!(
+        "{:>3}%  {} of {}  {}  ({})",
+        percent / 5 * 5,
+        bytes(done),
+        bytes(total),
+        current,
+        job["state"].as_str().unwrap_or("?")
+    )
+}
+
+/// What to do after a finished download.
+pub fn download_done(job: &Value) -> String {
+    let dir = job["directory"].as_str().unwrap_or("the model store");
+    let mut out = format!("\nDone. The files are in {dir}\n");
+    for file in job["files"].as_array().into_iter().flatten() {
+        out.push_str(&format!(
+            "  {}  {}  {}\n",
+            file["file"].as_str().unwrap_or("-"),
+            opt_bytes(&file["total_bytes"]),
+            file["state"].as_str().unwrap_or("-")
+        ));
+    }
+    out.push_str(
+        "\nNothing is on the allowlist of models yet. Print a [[model]] block for a file with\n\
+         `eliezer --suggest FILE.gguf` and add it to the configuration.\n",
+    );
+    out
+}
+
+/// `eliezer pins`.
+pub fn pins_text(report: &Value) -> String {
+    let pins = report["pins"].as_array().cloned().unwrap_or_default();
+    if pins.is_empty() {
+        return "No files fetched with `eliezer download` yet.\n".to_owned();
+    }
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for pin in &pins {
+        for file in pin["files"].as_array().into_iter().flatten() {
+            rows.push(vec![
+                pin["repo"].as_str().unwrap_or("-").to_owned(),
+                file["file"].as_str().unwrap_or("-").to_owned(),
+                opt_bytes(&file["bytes"]),
+                file["revision"]
+                    .as_str()
+                    .unwrap_or("-")
+                    .get(..8)
+                    .unwrap_or("-")
+                    .to_owned(),
+                file["status"].as_str().unwrap_or("-").replace('_', " "),
+            ]);
+        }
+    }
+    let mut out = table(
+        &["REPOSITORY", "FILE", "SIZE", "COMMIT", "STATUS"],
+        &rows,
+        &[2],
+    );
+    let deviations = report["deviations"].as_u64().unwrap_or(0);
+    let verified = report["verified"].as_bool() == Some(true);
+    out.push_str(&match (deviations, verified) {
+        (0, true) => "\nAll files match their pins (sizes and hashes).\n".to_owned(),
+        (0, false) => {
+            "\nAll sizes match; `eliezer pins --verify` also checks the hashes.\n".to_owned()
+        }
+        (n, _) => format!("\n{n} file(s) differ from their pin.\n"),
+    });
+    out
+}
+
+/// The quantizations `eliezer get` prefers, best first: a good balance of size and quality.
+const PREFERRED: &[&str] = &[
+    "Q4_K_M", "Q5_K_M", "Q4_K_S", "Q6_K", "MXFP4", "Q8_0", "Q4_0", "Q5_K_S", "Q3_K_M", "Q5_0",
+    "IQ4_XS", "Q3_K_L", "Q3_K_S", "Q2_K", "BF16", "F16",
+];
+
+/// The files `eliezer get` fetches for a repository: the weight file (the named quantization, or the
+/// preferred one that fits), the vision projector if there is one, and the files named with `--with`.
+/// Image models list their text encoders and VAE as further files; they are not guessed.
+pub fn choose_files(
+    detail: &Value,
+    quant: Option<&str>,
+    with: &[String],
+) -> Result<Vec<String>, String> {
+    let variants = detail["variants"].as_array().cloned().unwrap_or_default();
+    let repo = detail["repo"].as_str().unwrap_or("this repository");
+    let names = |v: &Value| -> Vec<String> {
+        v["files"]
+            .as_array()
+            .map(|l| {
+                l.iter()
+                    .filter_map(|f| f.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let fits = |v: &Value| v["fit"].as_str().is_some_and(|f| f != "too_large");
+    let listing = || {
+        variants
+            .iter()
+            .map(|v| {
+                format!(
+                    "  {}  {}  {}",
+                    v["quantization"].as_str().unwrap_or("-"),
+                    bytes(v["bytes"].as_u64().unwrap_or(0)),
+                    v["fit"].as_str().unwrap_or("-").replace('_', " ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let chosen = match quant {
+        Some(wanted) => variants
+            .iter()
+            .find(|v| {
+                v["quantization"]
+                    .as_str()
+                    .is_some_and(|q| q.eq_ignore_ascii_case(wanted))
+            })
+            .ok_or_else(|| format!("{repo} has no {wanted} file. Available:\n{}", listing()))?,
+        None => match variants.len() {
+            0 => return Err(format!("{repo} has no weight files of a supported format")),
+            1 => &variants[0],
+            _ => PREFERRED
+                .iter()
+                .find_map(|p| variants.iter().find(|v| v["quantization"] == *p && fits(v)))
+                .or_else(|| {
+                    variants
+                        .iter()
+                        .filter(|v| fits(v))
+                        .max_by_key(|v| v["bytes"].as_u64())
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "No file of {repo} fits the memory budgets. Available:\n{}",
+                        listing()
+                    )
+                })?,
+        },
+    };
+    let mut files = names(chosen);
+    if let Some(projector) = detail["projector"]["file"].as_str() {
+        files.push(projector.to_owned());
+    }
+    for extra in with {
+        if !files.contains(extra) {
+            files.push(extra.clone());
+        }
+    }
+    Ok(files)
+}

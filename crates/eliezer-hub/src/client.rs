@@ -6,7 +6,10 @@
 //! `GET /api/models/{org}/{repo}?blobs=true` gives `sha`, `gated`, `gguf.architecture` and
 //! `siblings[]` with `rfilename` and `size`.
 
-use crate::{Detail, Hub, HubError, HubFuture, Query, RepoFile, Summary, valid_repo};
+use crate::{
+    ChunkSource, Detail, FileStream, Hub, HubError, HubFuture, Query, RepoFile, Summary, Token,
+    valid_file, valid_repo, valid_revision,
+};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -23,7 +26,9 @@ impl HfClient {
     pub fn new(base: &str, timeout: Duration) -> Result<Self, HubError> {
         let http = reqwest::Client::builder()
             .timeout(timeout)
-            .redirect(reqwest::redirect::Policy::limited(3))
+            // The file download goes through a few redirects to the storage host; the token is
+            // not forwarded to another host (reqwest drops the Authorization header then).
+            .redirect(reqwest::redirect::Policy::limited(5))
             .user_agent(concat!("eliezer/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|_| HubError::Unreachable)?;
@@ -119,38 +124,104 @@ impl Hub for HfClient {
     }
 
     fn detail<'a>(&'a self, repo: &'a str) -> HubFuture<'a, Detail> {
+        Box::pin(self.detail_of(repo, None))
+    }
+
+    fn detail_at<'a>(&'a self, repo: &'a str, revision: &'a str) -> HubFuture<'a, Detail> {
         Box::pin(async move {
-            if !valid_repo(repo) {
+            if !valid_revision(revision) {
                 return Err(HubError::NotFound);
             }
-            let value = self
-                .get(
-                    format!("{}/api/models/{repo}", self.base),
-                    &[("blobs", "true".to_owned())],
-                )
-                .await?;
-            let sha = value["sha"].as_str().ok_or(HubError::BadResponse)?;
-            let files = value["siblings"]
-                .as_array()
-                .ok_or(HubError::BadResponse)?
-                .iter()
-                .filter_map(|f| {
-                    Some(RepoFile {
-                        name: f["rfilename"].as_str()?.to_owned(),
-                        bytes: f["size"].as_u64().unwrap_or(0),
-                    })
-                })
-                .collect();
-            Ok(Detail {
-                repo: repo.to_owned(),
-                sha: sha.to_owned(),
-                task: value["pipeline_tag"].as_str().map(str::to_owned),
-                license: license_of(&value["tags"]),
-                gated: !matches!(value["gated"], Value::Bool(false) | Value::Null),
-                downloads: value["downloads"].as_u64().unwrap_or(0),
-                architecture: value["gguf"]["architecture"].as_str().map(str::to_owned),
-                files,
+            self.detail_of(repo, Some(revision)).await
+        })
+    }
+
+    fn open<'a>(
+        &'a self,
+        repo: &'a str,
+        revision: &'a str,
+        file: &'a str,
+        offset: u64,
+        token: Option<&'a Token>,
+    ) -> HubFuture<'a, FileStream> {
+        Box::pin(async move {
+            if !valid_repo(repo) || !valid_revision(revision) || !valid_file(file) {
+                return Err(HubError::NotFound);
+            }
+            let mut request = self
+                .http
+                .get(format!("{}/{repo}/resolve/{revision}/{file}", self.base));
+            if offset > 0 {
+                request = request.header("Range", format!("bytes={offset}-"));
+            }
+            if let Some(token) = token {
+                request = request.bearer_auth(token.expose());
+            }
+            let response = request.send().await.map_err(|_| HubError::Unreachable)?;
+            let resumed = match response.status().as_u16() {
+                200 => false,
+                206 => true,
+                401 | 403 => return Err(HubError::Forbidden),
+                404 => return Err(HubError::NotFound),
+                429 => return Err(HubError::Busy),
+                _ => return Err(HubError::BadResponse),
+            };
+            let remaining = response.content_length();
+            Ok(FileStream {
+                resumed,
+                remaining,
+                body: Box::new(Body(response)),
             })
+        })
+    }
+}
+
+struct Body(reqwest::Response);
+impl ChunkSource for Body {
+    fn next_chunk(&mut self) -> HubFuture<'_, Option<Vec<u8>>> {
+        Box::pin(async move {
+            self.0
+                .chunk()
+                .await
+                .map(|chunk| chunk.map(|bytes| bytes.to_vec()))
+                .map_err(|_| HubError::Unreachable)
+        })
+    }
+}
+
+impl HfClient {
+    /// The detail page of a repository, at a commit or at the current head.
+    async fn detail_of(&self, repo: &str, revision: Option<&str>) -> Result<Detail, HubError> {
+        if !valid_repo(repo) {
+            return Err(HubError::NotFound);
+        }
+        let url = match revision {
+            Some(revision) => format!("{}/api/models/{repo}/revision/{revision}", self.base),
+            None => format!("{}/api/models/{repo}", self.base),
+        };
+        let value = self.get(url, &[("blobs", "true".to_owned())]).await?;
+        let sha = value["sha"].as_str().ok_or(HubError::BadResponse)?;
+        let files = value["siblings"]
+            .as_array()
+            .ok_or(HubError::BadResponse)?
+            .iter()
+            .filter_map(|f| {
+                Some(RepoFile {
+                    name: f["rfilename"].as_str()?.to_owned(),
+                    bytes: f["size"].as_u64().unwrap_or(0),
+                    sha256: f["lfs"]["sha256"].as_str().map(str::to_owned),
+                })
+            })
+            .collect();
+        Ok(Detail {
+            repo: repo.to_owned(),
+            sha: sha.to_owned(),
+            task: value["pipeline_tag"].as_str().map(str::to_owned),
+            license: license_of(&value["tags"]),
+            gated: !matches!(value["gated"], Value::Bool(false) | Value::Null),
+            downloads: value["downloads"].as_u64().unwrap_or(0),
+            architecture: value["gguf"]["architecture"].as_str().map(str::to_owned),
+            files,
         })
     }
 }

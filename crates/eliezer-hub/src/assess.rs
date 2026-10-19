@@ -60,6 +60,8 @@ pub struct Variant {
     pub quantization: Option<&'static str>,
     pub bytes: u64,
     pub parts: usize,
+    /// The names of all parts (one for a file that is not split).
+    pub files: Vec<String>,
     /// File size plus 20 % for the cache and the runtime, plus the projector (a language model) or the
     /// smallest text encoder and VAE (an image model).
     pub estimate_bytes: u64,
@@ -181,7 +183,7 @@ pub fn assess(detail: &Detail, budgets: Budgets) -> Assessment {
         .filter(|f| f.name.starts_with("text_encoders/") || f.name.starts_with("vae/"))
         .cloned()
         .collect();
-    let mut groups: BTreeMap<String, (u64, usize)> = BTreeMap::new();
+    let mut groups: BTreeMap<String, (u64, Vec<String>)> = BTreeMap::new();
     for file in detail
         .files
         .iter()
@@ -189,7 +191,7 @@ pub fn assess(detail: &Detail, budgets: Budgets) -> Assessment {
     {
         let entry = groups.entry(group_name(&file.name)).or_default();
         entry.0 = entry.0.saturating_add(file.bytes);
-        entry.1 += 1;
+        entry.1.push(file.name.clone());
     }
     // An image model needs its text encoder and VAE as well; the smallest of each counts, which
     // is conservative (stable-diffusion.cpp can offload the encoder).
@@ -209,7 +211,8 @@ pub fn assess(detail: &Detail, budgets: Budgets) -> Assessment {
         };
     let variants = groups
         .into_iter()
-        .map(|(name, (bytes, parts))| {
+        .map(|(name, (bytes, mut files))| {
+            files.sort();
             let estimate_bytes = bytes.saturating_add(bytes / 5).saturating_add(extra);
             let fit = if estimate_bytes <= budgets.gpu {
                 Fit::Gpu
@@ -222,7 +225,8 @@ pub fn assess(detail: &Detail, budgets: Budgets) -> Assessment {
                 quantization: quantization(&name),
                 name,
                 bytes,
-                parts,
+                parts: files.len(),
+                files,
                 estimate_bytes,
                 fit,
             }

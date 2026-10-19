@@ -79,6 +79,7 @@ measure = "auto"                    # "auto" | "nvml" | "nvidia-smi" | "sysfs" |
 
 [huggingface]
 search = true                        # allow the search of Hugging Face (public metadata, no token)
+allow = []                           # repositories the service may download from, e.g. ["leejet/*", "Org/Repo"]
 
 [cpu]                                # optional; language models may run in system memory (section 7a)
 ram_budget_gb = 0.0                  # memory for models on the CPU (decimal GB); 0 = CPU placement is off
@@ -565,13 +566,46 @@ Exit code 2 for unusable arguments, configuration or accounts, 1 if a file faile
 
 ### 9.3 Controlled retrieval
 
-- Retrieval only for models on the list. `downloads = "on_request"`: downloading begins only when an
-  administrator calls `POST /api/v1/models/download` with `{"model": "<key>"}` (response 202; progress in
-  `GET /api/v1/status` as `download: {bytes, total}`), never automatically on a chat request.
-- The revision is recorded as a commit hash (`/var/lib/eliezer/pins.json`); a deviation at startup is reported.
-- `cache_limit_gb` is checked before downloading (size from the file list); otherwise 507.
-- License-gated models: if Hugging Face reports 401/403, Eliezer answers 502 with the hint to confirm the
-  license in the token's account; the token never appears in the message.
+Downloading is an administrative act and never happens on a chat request.
+
+- **Allowlist.** `[huggingface] allow = ["Organisation/Repository", "Organisation/*"]` names the repositories
+  the service may fetch from. Empty means nothing can be fetched. `downloads = "never"` switches downloading off
+  altogether. A repository on the list is not yet a model: adding the model to the configuration stays a
+  separate step (`eliezer --suggest FILE` prints the block).
+- `POST /api/v1/models/download`, body `{"repo": "Organisation/Repository", "files": ["a.gguf", "vae/v.safetensors"],
+  "revision": "<40 hex digits>"}` (`revision` is optional; without it the current commit is taken and pinned). Answer
+  202 with the job `{"id", "repo", "revision", "directory", "state", "total_bytes", "done_bytes", "files": [{"file",
+  "total_bytes", "done_bytes", "state", "error"}], "error"}`. `state` is `queued`, `running`, `done` or `failed`; a
+  file is `queued`, `running`, `done`, `present` (it was there and matched) or `failed`. One job runs at a time.
+- `GET /api/v1/models/download` lists the jobs (newest first), `GET /api/v1/models/download/{id}` shows one,
+  and `GET /api/v1/status` carries the latest five as `downloads`.
+- **Checks before anything is written:** the repository name and every file name (relative, at most three levels,
+  letters, digits and `. _ - +`, nothing hidden, no `..`), the allowlist, that every file exists in the listing of
+  that commit, at most 16 files, and that no job of the same repository is waiting (409 `busy`).
+  Files go to `<models_dir>/<Organisation>/<Repository>/<file>`; the path is checked to lie inside the store after
+  resolving symbolic links, and a link as the target is refused.
+- **Integrity.** A file is written as `<file>.part`, continued after an interruption (HTTP range, the hash is
+  taken over the whole file), compared with the SHA-256 Hugging Face lists and the listed size, and only then
+  renamed. A mismatch discards the file (job `failed`, no file under the final name).
+- `cache_limit_gb` counts the pinned files in the store; a download that would exceed it answers 507
+  `insufficient_storage` before it starts.
+- **Gated repositories:** without a token the answer is 403 `license_required` ("accept the license of the
+  repository on huggingface.co and provide a token"); a refusal during the download ends the job the same way.
+- **Pins (M5-01).** Every repository directory holds `.eliezer-pin.json` with the commit, size, SHA-256 and time of
+  each fetched file. `GET /api/v1/models/pins[?verify=true]` reports `ok`, `missing`, `size_mismatch` or (with
+  `verify`, which hashes the files) `modified` for each file and the number of deviations. At start the sizes are
+  checked and each deviation is logged (`pin_deviation`); nothing is repaired automatically.
+- **Token (M5-03).** From `huggingface.token_file` (mode 0600; a file others can read is not used and a warning
+  says so) or else the environment variable `HF_TOKEN`; `eliezer --set-hf-token` writes the file. It is sent only
+  to `huggingface.co`, never forwarded to another host, never an argument of a process (a child process gets it as
+  `HF_TOKEN` in its environment) and never part of a message or log line. `scripts/check-secrets.sh` searches
+  logs, the journal and the process list for tokens and keys without printing them.
+- Command line: `eliezer download ORG/REPO FILE... [--revision COMMIT]` follows the job; `eliezer get ORG/REPO
+  [--quant Q4_K_M] [--with FILE,FILE]` looks at the repository, picks the weight file in the best quantization that
+  fits (or the named one) with its vision projector, and fetches it at the commit it looked at; `eliezer pins
+  [--verify]`.
+- A model store under `/home` must be writable for the service: the systemd drop-in with `ReadWritePaths` (see
+  `packaging/eliezer-models-in-home.conf.example`); otherwise the job fails with a message saying so.
 
 ## 10. Operation
 

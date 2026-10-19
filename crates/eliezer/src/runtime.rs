@@ -201,6 +201,41 @@ pub fn keys(config: &Config) -> Result<Vec<String>, &'static str> {
     }
 }
 
+/// The Hugging Face token for downloads: the file `huggingface.token_file` (mode 0600; a file that others
+/// can read is not used) or else the environment variable `HF_TOKEN`. The token is never logged; the
+/// messages only say where it came from.
+pub fn hf_token(config: &Config) -> Option<eliezer_hub::Token> {
+    use std::os::unix::fs::PermissionsExt;
+    if let Some(path) = &config.huggingface.token_file {
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.permissions().mode() & 0o077 != 0 => {
+                tracing::warn!(
+                    event = "token_permissions",
+                    mode = format!("{:o}", meta.permissions().mode() & 0o777),
+                    "The Hugging Face token file can be read by others and is not used; make it 0600"
+                );
+            }
+            Ok(_) => {
+                if let Some(token) = std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|text| eliezer_hub::Token::new(&text))
+                {
+                    return Some(token);
+                }
+                tracing::warn!(
+                    event = "token_empty",
+                    "The Hugging Face token file is empty or not readable"
+                );
+            }
+            // A missing file is the normal case: no token configured yet.
+            Err(_) => {}
+        }
+    }
+    std::env::var("HF_TOKEN")
+        .ok()
+        .and_then(|text| eliezer_hub::Token::new(&text))
+}
+
 /// The running service: router for the HTTP server plus the handles needed to reload it.
 pub struct Runtime {
     pub router: axum::Router,
@@ -225,6 +260,7 @@ impl Runtime {
             .await
             .map_err(|_| "Supervisor is not running")?;
         self.runtimes.update(&config);
+        self.app.set_hf_token(hf_token(&config));
         self.app.replace(config, keys);
         Ok(())
     }
@@ -261,6 +297,27 @@ pub fn build(config: Arc<Config>, keys: Vec<String>) -> Result<Runtime, &'static
         probe,
         keys,
     );
+    app.set_hf_token(hf_token(&app.config.get()));
+    // Files that were fetched earlier are checked against their pins: a deviation is reported, not fixed.
+    {
+        let root = app.config.get().storage.models_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let report = eliezer_api::pin_report(&root, false);
+            for pin in report["pins"].as_array().into_iter().flatten() {
+                for file in pin["files"].as_array().into_iter().flatten() {
+                    if file["status"] != "ok" {
+                        tracing::warn!(
+                            event = "pin_deviation",
+                            repo = pin["repo"].as_str().unwrap_or_default(),
+                            file = file["file"].as_str().unwrap_or_default(),
+                            problem = file["status"].as_str().unwrap_or_default(),
+                            "A pinned model file differs from its pin"
+                        );
+                    }
+                }
+            }
+        });
+    }
     // The search of Hugging Face reads public metadata only; the configuration can switch it off.
     match eliezer_hub::HfClient::new("https://huggingface.co", std::time::Duration::from_secs(15)) {
         Ok(client) => app = app.with_hub(std::sync::Arc::new(client)),

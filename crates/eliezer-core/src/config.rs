@@ -166,6 +166,20 @@ pub struct HuggingFaceConfig {
     pub downloads: DownloadMode,
     /// Allows the search of Hugging Face (`/api/v1/hub/...`); it only reads public metadata.
     pub search: bool,
+    /// The repositories the service may download from: `Organisation/Repository` or `Organisation/*`.
+    /// Empty means nothing can be downloaded, whatever `downloads` says.
+    pub allow: Vec<String>,
+}
+impl HuggingFaceConfig {
+    /// Whether a download from `repo` is on the allowlist.
+    pub fn allows(&self, repo: &str) -> bool {
+        self.allow
+            .iter()
+            .any(|entry| match entry.strip_suffix("/*") {
+                Some(org) => repo.split_once('/').is_some_and(|(o, _)| o == org),
+                None => entry == repo,
+            })
+    }
 }
 impl Default for HuggingFaceConfig {
     fn default() -> Self {
@@ -175,6 +189,7 @@ impl Default for HuggingFaceConfig {
             cache_limit_gb: 200.0,
             downloads: DownloadMode::OnRequest,
             search: true,
+            allow: Vec::new(),
         }
     }
 }
@@ -323,7 +338,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -341,7 +356,7 @@ const SECTION_FIELDS: &[(&str, &str)] = &[
     ),
     (
         "huggingface",
-        "token_file cache_dir cache_limit_gb downloads search",
+        "token_file cache_dir cache_limit_gb downloads search allow",
     ),
 ];
 
@@ -603,6 +618,27 @@ impl Config {
             "huggingface.cache_limit_gb",
             "Cache limit must be finite and greater than zero",
         )?;
+        for entry in &self.huggingface.allow {
+            let name = entry.strip_suffix("/*").unwrap_or(entry);
+            let part_ok = |p: &str| {
+                !p.is_empty()
+                    && p.len() <= 96
+                    && !p.starts_with('.')
+                    && p.bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+            };
+            let ok = if entry.ends_with("/*") {
+                part_ok(name)
+            } else {
+                name.split_once('/')
+                    .is_some_and(|(org, repo)| part_ok(org) && part_ok(repo))
+            };
+            check(
+                ok,
+                "huggingface.allow",
+                "Entries are `Organisation/Repository` or `Organisation/*`",
+            )?;
+        }
         for (value, field) in [
             (self.scheduler.idle_unload_secs, "idle_unload_secs"),
             (self.scheduler.queue_wait_secs, "queue_wait_secs"),

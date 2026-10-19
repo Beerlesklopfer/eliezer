@@ -25,6 +25,7 @@ fn hub_error(error: HubError) -> Response {
         HubError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
         HubError::BadResponse => (StatusCode::BAD_GATEWAY, "hub_bad_response"),
         HubError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "overloaded"),
+        HubError::Forbidden => (StatusCode::FORBIDDEN, "license_required"),
     };
     failure(status, code, &error.to_string(), false)
 }
@@ -75,6 +76,7 @@ fn detail_json(detail: &Detail, assessment: &Assessment) -> Value {
             "quantization": v.quantization,
             "bytes": v.bytes,
             "parts": v.parts,
+            "files": v.files,
             "estimate_bytes": v.estimate_bytes,
             "fit": v.fit.name(),
         })).collect::<Vec<_>>(),

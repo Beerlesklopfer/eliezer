@@ -9,6 +9,7 @@ fn file(name: &str, bytes: u64) -> RepoFile {
     RepoFile {
         name: name.into(),
         bytes,
+        sha256: None,
     }
 }
 fn detail(architecture: Option<&str>, files: Vec<RepoFile>) -> Detail {

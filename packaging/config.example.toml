@@ -32,6 +32,7 @@ cache_dir = "/var/lib/eliezer/models/hf"
 cache_limit_gb = 200.0
 downloads = "on_request"
 search = true            # allow `eliezer search` (public metadata of Hugging Face, no token)
+# allow = ["leejet/*"]   # repositories `eliezer get` and `eliezer download` may fetch from (empty: none)
 
 [backend.mistralrs]
 enabled = true

@@ -1,5 +1,6 @@
 //! HTTP interfaces of the model supervisor.
 pub mod anthropic;
+mod download;
 mod hub;
 use axum::{
     Json, Router,
@@ -10,6 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+pub use download::report as pin_report;
 use eliezer_backend::{
     Backend, ChatRequest, Chunk,
     supervisor::{Error, Lease, Supervisor},
@@ -56,6 +58,9 @@ pub struct App {
     pub keys: Arc<Shared<Vec<String>>>,
     /// The source for the Hugging Face search; without one the search endpoints are off.
     pub hub: Option<Arc<dyn eliezer_hub::Hub>>,
+    /// The Hugging Face token for downloads; read from a file or the environment, never logged.
+    pub hf_token: Arc<Shared<Option<eliezer_hub::Token>>>,
+    pub downloads: Arc<download::Downloads>,
 }
 impl App {
     pub fn new(
@@ -72,7 +77,12 @@ impl App {
             probe,
             keys: Arc::new(Shared::new(Arc::new(keys))),
             hub: None,
+            hf_token: Arc::new(Shared::new(Arc::new(None))),
+            downloads: Arc::new(download::Downloads::default()),
         }
+    }
+    pub fn set_hf_token(&self, token: Option<eliezer_hub::Token>) {
+        self.hf_token.set(Arc::new(token));
     }
     pub fn with_hub(mut self, hub: Arc<dyn eliezer_hub::Hub>) -> Self {
         self.hub = Some(hub);
@@ -107,6 +117,12 @@ pub fn managed_router(app: App) -> Router {
             .route("/api/v1/models/load", post(load))
             .route("/api/v1/models/unload", post(unload))
             .route("/api/v1/models/estimate", post(estimate_route))
+            .route(
+                "/api/v1/models/download",
+                post(download::start).get(download::list),
+            )
+            .route("/api/v1/models/download/{id}", get(download::job))
+            .route("/api/v1/models/pins", get(download::pins))
             .route("/api/v1/hub/search", get(hub::search))
             .route("/api/v1/hub/models/{org}/{repo}", get(hub::detail))
             .route("/api/v1/status", get(status))
@@ -589,6 +605,7 @@ async fn status(State(app): State<App>) -> Response {
         "gpu": {"probe": probe_name, "total_bytes": total, "used_bytes": used,
                 "free_bytes": total.saturating_sub(used), "budget_bytes": budget},
         "cpu": {"budget_bytes": ram_budget, "used_bytes": info.ram_used},
+        "downloads": app.downloads.list(5),
         "models": models,
         "queue": queue,
     }))

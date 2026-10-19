@@ -20,7 +20,8 @@ const SHORT: Duration = Duration::from_secs(15);
 const LONG: Duration = Duration::from_secs(3600);
 
 const COMMANDS: &[&str] = &[
-    "ls", "ps", "load", "unload", "status", "run", "show", "search", "inspect", "help",
+    "ls", "ps", "load", "unload", "status", "run", "show", "search", "inspect", "download", "pins",
+    "get", "help",
 ];
 
 /// Complete help text of the program: service flags and client commands.
@@ -71,6 +72,15 @@ Commands (they use the HTTP API of the running service):
                                   T: llm, vision, embedding or image; F: gguf (default) or safetensors;
                                   --details also judges support and fit of each hit
   inspect ORG/REPO                Files, quantizations, backend support and fit of one repository
+  get ORG/REPO [--quant Q4_K_M] [--with FILE,FILE]
+                                  Fetch a model: the weight file in the best quantization that fits
+                                  (or the one named), its vision projector and the extra files named
+                                  with --with; like `lms get`
+  download ORG/REPO FILE... [--revision COMMIT]
+                                  Fetch files of an allowed repository into the model store and show the
+                                  progress (the repository must be on [huggingface] allow)
+  pins [--verify]                 Files fetched earlier and whether they still match their pin;
+                                  --verify hashes them (slow for big files)
   help                            This text
 
 Options for all commands:
@@ -252,6 +262,21 @@ fn spec_for(command: &str) -> Spec {
             flags: &[],
             positional: (1, 1),
         },
+        "get" => Spec {
+            values: &["--quant", "--with"],
+            flags: &[],
+            positional: (1, 1),
+        },
+        "download" => Spec {
+            values: &["--revision"],
+            flags: &[],
+            positional: (2, 17),
+        },
+        "pins" => Spec {
+            values: &[],
+            flags: &["--verify"],
+            positional: (0, 0),
+        },
         "run" => Spec {
             values: &["--system", "--temperature", "--max-tokens", "--reasoning"],
             flags: &["--stats"],
@@ -288,6 +313,9 @@ fn run(command: &str, args: &[String], at: usize) -> Res<()> {
         "unload" => cmd_unload(&client, json, &parsed),
         "search" => cmd_search(&client, json, &parsed),
         "inspect" => cmd_inspect(&client, json, &parsed.positional[0]),
+        "download" => cmd_download(&client, json, &parsed),
+        "get" => cmd_get(&client, json, &parsed),
+        "pins" => cmd_pins(&client, json, parsed.flag("--verify")),
         _ => cmd_run(&client, json, &parsed),
     }
 }
@@ -602,6 +630,124 @@ fn cmd_inspect(client: &Client, json: bool, repo: &str) -> Res<()> {
         print_json(&result);
     } else {
         print!("{}", format::inspect_text(&result));
+    }
+    Ok(())
+}
+
+fn cmd_download(client: &Client, json: bool, parsed: &Parsed) -> Res<()> {
+    run_download(
+        client,
+        json,
+        &parsed.positional[0],
+        &parsed.positional[1..],
+        parsed.value("--revision"),
+    )
+}
+
+/// `eliezer get ORG/REPO`: looks at the repository, picks the files and fetches them.
+fn cmd_get(client: &Client, json: bool, parsed: &Parsed) -> Res<()> {
+    let repo = &parsed.positional[0];
+    let path = format!(
+        "/api/v1/hub/models/{}",
+        repo.split('/').map(urlencode).collect::<Vec<_>>().join("/")
+    );
+    let detail = call(client, "GET", &path, None, SHORT)?;
+    let with: Vec<String> = parsed
+        .value("--with")
+        .map(|v| v.split(',').map(str::to_owned).collect())
+        .unwrap_or_default();
+    let files =
+        format::choose_files(&detail, parsed.value("--quant"), &with).map_err(Failure::Request)?;
+    if !json {
+        println!("Fetching {} file(s) of {repo}:", files.len());
+        for name in &files {
+            println!("  {name}");
+        }
+    }
+    // The commit of the listing is pinned, so what was looked at is what is fetched.
+    run_download(client, json, repo, &files, detail["sha"].as_str())
+}
+
+fn run_download(
+    client: &Client,
+    json: bool,
+    repo: &str,
+    files: &[String],
+    revision: Option<&str>,
+) -> Res<()> {
+    let mut body = json!({"repo": repo, "files": files});
+    if let Some(revision) = revision {
+        body["revision"] = json!(revision);
+    }
+    let started = call(
+        client,
+        "POST",
+        "/api/v1/models/download",
+        Some(&body),
+        SHORT,
+    )?;
+    let id = started["id"].as_str().unwrap_or_default().to_owned();
+    if !json {
+        println!(
+            "Download {id}: {} files, {} from {repo} at commit {}",
+            started["files"].as_array().map_or(0, Vec::len),
+            format::bytes(started["total_bytes"].as_u64().unwrap_or(0)),
+            started["revision"]
+                .as_str()
+                .unwrap_or("?")
+                .get(..8)
+                .unwrap_or("?")
+        );
+    }
+    let mut last = String::new();
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let job = call(
+            client,
+            "GET",
+            &format!("/api/v1/models/download/{id}"),
+            None,
+            SHORT,
+        )?;
+        let line = format::download_line(&job);
+        if !json && line != last {
+            println!("{line}");
+            last = line;
+        }
+        match job["state"].as_str() {
+            Some("done") => {
+                if json {
+                    print_json(&job);
+                } else {
+                    print!("{}", format::download_done(&job));
+                }
+                return Ok(());
+            }
+            Some("failed") => {
+                if json {
+                    print_json(&job);
+                }
+                return Err(Failure::Request(format!(
+                    "The download failed: {}",
+                    job["error"].as_str().unwrap_or("unknown reason")
+                )));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn cmd_pins(client: &Client, json: bool, verify: bool) -> Res<()> {
+    let path = if verify {
+        "/api/v1/models/pins?verify=true"
+    } else {
+        "/api/v1/models/pins"
+    };
+    let result = call(client, "GET", path, None, LONG)?;
+    if json {
+        print_json(&result);
+    } else {
+        print!("{}", format::pins_text(&result));
     }
     Ok(())
 }

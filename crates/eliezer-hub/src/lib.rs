@@ -9,7 +9,9 @@ use std::{future::Future, pin::Pin};
 mod assess;
 #[cfg(feature = "http")]
 mod client;
+pub mod download;
 mod fake;
+pub mod store;
 
 pub use assess::{Assessment, Budgets, Fit, Support, Variant, assess, quantization};
 #[cfg(feature = "http")]
@@ -110,6 +112,8 @@ pub struct Summary {
 pub struct RepoFile {
     pub name: String,
     pub bytes: u64,
+    /// The SHA-256 of the content, as Hugging Face lists it for files stored with LFS (all large files).
+    pub sha256: Option<String>,
 }
 
 /// A repository with its files, as the detail page of Hugging Face lists them.
@@ -136,6 +140,8 @@ pub enum HubError {
     BadResponse,
     /// Rate limited by the hub.
     Busy,
+    /// The hub refuses access: the repository is gated (a license must be accepted) or private.
+    Forbidden,
 }
 impl std::fmt::Display for HubError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -144,6 +150,9 @@ impl std::fmt::Display for HubError {
             Self::NotFound => "The repository was not found on Hugging Face",
             Self::BadResponse => "Hugging Face answered in an unexpected form",
             Self::Busy => "Hugging Face is limiting requests; try again later",
+            Self::Forbidden => {
+                "Hugging Face refuses access: accept the license of the repository on huggingface.co and provide a token"
+            }
         })
     }
 }
@@ -151,10 +160,96 @@ impl std::error::Error for HubError {}
 
 pub type HubFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, HubError>> + Send + 'a>>;
 
+/// An access token for Hugging Face. It never prints: `Debug` shows a placeholder, and the only way to
+/// the text is [`Token::expose`], used where the request header is made.
+#[derive(Clone)]
+pub struct Token(String);
+impl Token {
+    /// `None` for an empty text or one with characters a header cannot carry.
+    pub fn new(text: &str) -> Option<Self> {
+        let text = text.trim();
+        (!text.is_empty() && text.bytes().all(|c| c.is_ascii_graphic()))
+            .then(|| Self(text.to_owned()))
+    }
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+impl std::fmt::Debug for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Token(<hidden>)")
+    }
+}
+
+/// The environment a child process gets for Hugging Face: the token only as `HF_TOKEN`, never as an
+/// argument (arguments show up in `ps`).
+pub fn child_environment(token: Option<&Token>) -> Vec<(&'static str, String)> {
+    token
+        .map(|t| vec![("HF_TOKEN", t.expose().to_owned())])
+        .unwrap_or_default()
+}
+
+/// The content of one file, delivered in pieces.
+pub trait ChunkSource: Send {
+    /// The next piece; `None` at the end.
+    fn next_chunk(&mut self) -> HubFuture<'_, Option<Vec<u8>>>;
+}
+
+/// An opened download.
+pub struct FileStream {
+    /// False when the hub ignored the requested start and sends the file from its beginning.
+    pub resumed: bool,
+    /// The bytes still to come, when the hub says.
+    pub remaining: Option<u64>,
+    pub body: Box<dyn ChunkSource>,
+}
+
 /// The source of candidates. The real one talks to huggingface.co, the test bench answers from memory.
 pub trait Hub: Send + Sync {
     fn search<'a>(&'a self, query: &'a Query) -> HubFuture<'a, Vec<Summary>>;
     fn detail<'a>(&'a self, repo: &'a str) -> HubFuture<'a, Detail>;
+    /// The listing of one commit. The default only knows the current one.
+    fn detail_at<'a>(&'a self, repo: &'a str, revision: &'a str) -> HubFuture<'a, Detail> {
+        Box::pin(async move {
+            let detail = self.detail(repo).await?;
+            if detail.sha == revision {
+                Ok(detail)
+            } else {
+                Err(HubError::NotFound)
+            }
+        })
+    }
+    /// Opens one file of one commit from byte `offset` on. Public repositories need no token.
+    fn open<'a>(
+        &'a self,
+        repo: &'a str,
+        revision: &'a str,
+        file: &'a str,
+        offset: u64,
+        token: Option<&'a Token>,
+    ) -> HubFuture<'a, FileStream>;
+}
+
+/// A file name inside a repository: relative, at most three levels, no `..`, nothing hidden, only the
+/// characters Hugging Face file names use in practice. Anything else never reaches a path or a URL.
+pub fn valid_file(name: &str) -> bool {
+    let segments: Vec<&str> = name.split('/').collect();
+    name.len() <= 200
+        && (1..=3).contains(&segments.len())
+        && segments.iter().all(|s| {
+            !s.is_empty()
+                && !s.starts_with('.')
+                && s.bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"._-+".contains(&c))
+        })
+}
+
+/// A full commit hash.
+pub fn valid_revision(text: &str) -> bool {
+    text.len() == 40
+        && text
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 /// `Organisation/Repository` with the characters Hugging Face allows. Anything else never reaches a URL.

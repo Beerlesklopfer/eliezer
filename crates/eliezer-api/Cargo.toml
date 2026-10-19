@@ -16,9 +16,11 @@ eliezer-backend.workspace = true
 eliezer-gpu.workspace = true
 eliezer-hub = { workspace = true, default-features = false }
 tokio.workspace = true
+tracing.workspace = true
 futures-core.workspace = true
 
 [dev-dependencies]
+sha2.workspace = true
 tower = { version = "0.5", features = ["util"] }
 
 [[test]]
@@ -40,3 +42,7 @@ path = "../../tests/m3/behavior.rs"
 [[test]]
 name = "hub_api"
 path = "../../tests/m5/hub_api.rs"
+
+[[test]]
+name = "download_api"
+path = "../../tests/m5/download_api.rs"

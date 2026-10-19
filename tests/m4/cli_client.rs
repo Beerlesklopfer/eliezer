@@ -1042,3 +1042,212 @@ fn search_and_inspect_print_candidates_and_send_encoded_requests() {
         "abc123"
     );
 }
+
+fn variants_detail() -> Value {
+    json!({
+        "repo": "org/Model-GGUF", "sha": "0123456789abcdef0123456789abcdef01234567",
+        "variants": [
+            {"file": "m-Q8_0.gguf", "files": ["m-Q8_0.gguf"], "quantization": "Q8_0", "bytes": 8_000_000_000_u64, "fit": "gpu"},
+            {"file": "m-Q4_K_M.gguf", "files": ["m-Q4_K_M.gguf"], "quantization": "Q4_K_M", "bytes": 4_400_000_000_u64, "fit": "gpu"},
+            {"file": "m-F16.gguf", "files": ["m-F16-00001-of-00002.gguf", "m-F16-00002-of-00002.gguf"],
+             "quantization": "F16", "bytes": 28_000_000_000_u64, "fit": "too_large"}],
+        "projector": {"file": "mmproj-m-F16.gguf", "bytes": 900_000_000}
+    })
+}
+
+#[test]
+fn get_picks_the_files_by_quantization_and_fit() {
+    let detail = variants_detail();
+    // the preferred quantization that fits, and the vision projector
+    assert_eq!(
+        format::choose_files(&detail, None, &[]).unwrap(),
+        ["m-Q4_K_M.gguf", "mmproj-m-F16.gguf"]
+    );
+    // a named one, case does not matter, and a split file brings all its parts
+    assert_eq!(
+        format::choose_files(&detail, Some("q8_0"), &["vae/v.safetensors".to_owned()]).unwrap(),
+        ["m-Q8_0.gguf", "mmproj-m-F16.gguf", "vae/v.safetensors"]
+    );
+    assert_eq!(
+        format::choose_files(&detail, Some("F16"), &[]).unwrap()[..2],
+        ["m-F16-00001-of-00002.gguf", "m-F16-00002-of-00002.gguf"]
+    );
+    let missing = format::choose_files(&detail, Some("Q2_K"), &[]).unwrap_err();
+    assert!(
+        missing.contains("no Q2_K file") && missing.contains("Q4_K_M"),
+        "{missing}"
+    );
+    // nothing fits: say so and list what there is
+    let mut big = variants_detail();
+    for v in big["variants"].as_array_mut().unwrap() {
+        v["fit"] = json!("too_large");
+    }
+    let refused = format::choose_files(&big, None, &[]).unwrap_err();
+    assert!(
+        refused.contains("fits the memory budgets") && refused.contains("Q8_0"),
+        "{refused}"
+    );
+    // a single file is taken whatever it is; none is an error
+    let one = json!({"repo": "o/r", "variants": [{"files": ["only.gguf"], "quantization": null, "fit": "gpu"}]});
+    assert_eq!(
+        format::choose_files(&one, None, &[]).unwrap(),
+        ["only.gguf"]
+    );
+    assert!(format::choose_files(&json!({"repo": "o/r", "variants": []}), None, &[]).is_err());
+}
+
+fn job_json(state: &str, error: Option<&str>) -> Value {
+    json!({"id": "dl-1", "repo": "org/Model-GGUF", "revision": "0123456789abcdef0123456789abcdef01234567",
+           "directory": "/home/eliezer/models/org/Model-GGUF", "state": state, "error": error,
+           "total_bytes": 5_300_000_000_u64, "done_bytes": 5_300_000_000_u64,
+           "files": [{"file": "m-Q4_K_M.gguf", "total_bytes": 4_400_000_000_u64, "done_bytes": 4_400_000_000_u64, "state": "done", "error": null},
+                     {"file": "mmproj-m-F16.gguf", "total_bytes": 900_000_000_u64, "done_bytes": 900_000_000_u64, "state": "done", "error": null}]})
+}
+
+#[test]
+fn get_and_download_follow_the_job_and_report_failures() {
+    let server = serve(Box::new(|r| match (r.method.as_str(), r.path.as_str()) {
+        ("GET", "/api/v1/hub/models/org/Model-GGUF") => json_reply("200 OK", &variants_detail()),
+        ("POST", "/api/v1/models/download") => {
+            let body: Value = serde_json::from_str(&r.body).unwrap();
+            if body["repo"] == "org/Denied" {
+                return json_reply(
+                    "403 Forbidden",
+                    &json!({"error": {"type": "not_allowed", "message": "This repository is not on the allowlist ([huggingface] allow)"}}),
+                );
+            }
+            json_reply("202 Accepted", &job_json("queued", None))
+        }
+        ("GET", "/api/v1/models/download/dl-1") => {
+            // the second kind of request in this test fails
+            json_reply("200 OK", &job_json("done", None))
+        }
+        ("GET", "/api/v1/models/pins") => json_reply(
+            "200 OK",
+            &json!({"pins": [{"repo": "org/Model-GGUF", "files": [
+                {"file": "m-Q4_K_M.gguf", "bytes": 4_400_000_000_u64, "revision": "0123456789abcdef", "sha256": null, "status": "ok", "found_bytes": null},
+                {"file": "x.gguf", "bytes": 10, "revision": "0123456789abcdef", "sha256": null, "status": "size_mismatch", "found_bytes": 5}]}],
+                "verified": false, "deviations": 1}),
+        ),
+        _ => json_reply(
+            "404 Not Found",
+            &json!({"error": {"type": "not_found", "message": "no"}}),
+        ),
+    }));
+    let url = server.url();
+    let run = |args: &[&str]| {
+        let mut all = vec!["--host", url.as_str()];
+        all.extend_from_slice(args);
+        eliezer(&all, &[], None)
+    };
+    let got = run(&["get", "org/Model-GGUF"]);
+    assert_eq!(code(&got), 0, "{}", err(&got));
+    let text = out(&got);
+    for part in [
+        "Fetching 2 file(s)",
+        "m-Q4_K_M.gguf",
+        "mmproj-m-F16.gguf",
+        "commit 01234567",
+        "Done.",
+        "/home/eliezer/models/org/Model-GGUF",
+        "--suggest",
+    ] {
+        assert!(text.contains(part), "{part} missing in\n{text}");
+    }
+    let posted: Value = serde_json::from_str(
+        &server
+            .requests()
+            .iter()
+            .find(|r| r.method == "POST")
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(
+        posted["files"],
+        json!(["m-Q4_K_M.gguf", "mmproj-m-F16.gguf"])
+    );
+    assert_eq!(
+        posted["revision"], "0123456789abcdef0123456789abcdef01234567",
+        "the listing is pinned"
+    );
+
+    let named = run(&[
+        "download",
+        "org/Model-GGUF",
+        "a.gguf",
+        "b/c.gguf",
+        "--revision",
+        &"f".repeat(40),
+    ]);
+    assert_eq!(code(&named), 0, "{}", err(&named));
+    let last: Value = serde_json::from_str(
+        &server
+            .requests()
+            .iter()
+            .rev()
+            .find(|r| r.method == "POST")
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(last["files"], json!(["a.gguf", "b/c.gguf"]));
+    assert_eq!(last["revision"], "f".repeat(40));
+
+    let denied = run(&["download", "org/Denied", "a.gguf"]);
+    assert_eq!(code(&denied), 1);
+    assert!(err(&denied).contains("allowlist"), "{}", err(&denied));
+    assert_eq!(
+        code(&run(&["download", "org/Model-GGUF"])),
+        2,
+        "a file name is required"
+    );
+    assert_eq!(code(&run(&["get"])), 2);
+
+    let pins = run(&["pins"]);
+    assert_eq!(code(&pins), 0, "{}", err(&pins));
+    let text = out(&pins);
+    assert!(
+        text.contains("REPOSITORY")
+            && text.contains("size mismatch")
+            && text.contains("1 file(s) differ"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_failed_download_ends_with_the_reason_and_exit_code_1() {
+    let server = serve(Box::new(|r| match (r.method.as_str(), r.path.as_str()) {
+        ("POST", "/api/v1/models/download") => {
+            json_reply("202 Accepted", &job_json("queued", None))
+        }
+        ("GET", "/api/v1/models/download/dl-1") => json_reply(
+            "200 OK",
+            &job_json(
+                "failed",
+                Some("The checksum of the download does not match; the file was discarded"),
+            ),
+        ),
+        _ => json_reply(
+            "404 Not Found",
+            &json!({"error": {"type": "not_found", "message": "no"}}),
+        ),
+    }));
+    let result = eliezer(
+        &[
+            "--host",
+            &server.url(),
+            "download",
+            "org/Model-GGUF",
+            "a.gguf",
+        ],
+        &[],
+        None,
+    );
+    assert_eq!(code(&result), 1);
+    assert!(
+        err(&result).contains("The download failed: The checksum"),
+        "{}",
+        err(&result)
+    );
+}

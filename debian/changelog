@@ -32,6 +32,14 @@ eliezer (0.5.0) UNRELEASED; urgency=low
     Gemma 4 at 32 768 tokens took 25.4 GB of VRAM instead of 19.7 GB. Prefix reuse and parallel requests still pass
     the live check on Gemma 4 and gpt-oss.
   * Translate the German leftovers in the Anthropic error messages.
+  * Fetch models from Hugging Face (M5-01 to M5-03): `POST /api/v1/models/download`, `eliezer get ORG/REPO` (picks the
+    best quantization that fits, with the vision projector) and `eliezer download ORG/REPO FILE...`. Only repositories
+    on `[huggingface] allow` are fetched; files go to `<models_dir>/<Organisation>/<Repository>/`, are resumed after an
+    interruption, checked against the listed SHA-256 and size and renamed only when they match. Each repository
+    directory records a pin (commit, sizes, hashes); `eliezer pins [--verify]` and `GET /api/v1/models/pins` report
+    deviations, and the service logs them at start. `cache_limit_gb` is enforced (507), gated repositories answer
+    403 with a license notice. The token comes from `huggingface.token_file` (0600, otherwise not used) or `HF_TOKEN`
+    and never appears in arguments, logs or messages; `scripts/check-secrets.sh` checks that. New dependency `sha2`.
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.5.0-1_amd64.deb.
     M5 model acquisition is still pending; the Candle ROCm experiment remains
