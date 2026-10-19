@@ -2,6 +2,8 @@
 
 Usage: python3 -I tests/m5/vision-check.py BASE_URL VISION_MODEL_KEY [TEXT_ONLY_MODEL_KEY]
 
+A service with API keys needs the key in the environment (ELIEZER_API_KEY); it is never an argument.
+
 Draws a page with a few lines of text (needs Pillow), sends it as a base64 data URI and checks that
 the model reads the numbers back. Also checks the refusals: a link instead of data, and (when a
 second model key is given) a model without a projector.
@@ -9,6 +11,7 @@ second model key is given) a model without a projector.
 import base64
 import io
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -35,8 +38,10 @@ def page() -> bytes:
 def chat(base: str, model: str, content, **extra) -> tuple[int, dict]:
     body = {"model": model, "messages": [{"role": "user", "content": content}],
             "max_tokens": 120, "temperature": 0, **extra}
-    request = urllib.request.Request(
-        base + "/v1/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if os.environ.get("ELIEZER_API_KEY"):
+        headers["Authorization"] = "Bearer " + os.environ["ELIEZER_API_KEY"]
+    request = urllib.request.Request(base + "/v1/chat/completions", json.dumps(body).encode(), headers)
     try:
         with urllib.request.urlopen(request, timeout=300) as response:
             return response.status, json.load(response)
