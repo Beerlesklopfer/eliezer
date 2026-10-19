@@ -384,6 +384,62 @@ pub struct GgufInfo {
     pub state_bytes: Option<u64>,
     /// The file carries a tokenizer (language models do, diffusion models do not).
     pub has_tokenizer: bool,
+    /// How the chat template of the model takes a thinking setting.
+    pub thinking: Thinking,
+}
+
+/// What the chat template does with a thinking setting; it decides the `reasoning` line of the model.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Thinking {
+    /// The template switches thinking on or off (`enable_thinking`).
+    pub toggle: bool,
+    /// The template takes an effort level (`reasoning_effort`), with `xhigh` among them.
+    pub effort: bool,
+    pub xhigh: bool,
+    /// Thinking is on when the request says nothing.
+    pub default_on: bool,
+}
+impl Thinking {
+    fn from_template(template: &str) -> Self {
+        let compact: String = template.split_whitespace().collect();
+        let toggle = compact.contains("enable_thinking");
+        Self {
+            toggle,
+            effort: compact.contains("reasoning_effort"),
+            xhigh: compact.contains("'xhigh'") || compact.contains("\"xhigh\""),
+            // Gemma 4 defaults to off, Qwen to on.
+            default_on: toggle && !compact.contains("enable_thinking|default(false)"),
+        }
+    }
+    /// The `reasoning` line for the configuration, if the template takes a setting at all.
+    fn line(self) -> Option<String> {
+        if !self.toggle && !self.effort {
+            return None;
+        }
+        let mut options: Vec<&str> = Vec::new();
+        if self.toggle {
+            options.push("none");
+        }
+        if self.effort {
+            options.push("low");
+            options.push("medium");
+            options.push(if self.xhigh { "xhigh" } else { "high" });
+        } else {
+            options.push("medium");
+        }
+        let default = if self.toggle && !self.default_on {
+            "none"
+        } else if self.effort {
+            if self.xhigh { "xhigh" } else { "medium" }
+        } else {
+            "medium"
+        };
+        let list: Vec<String> = options.iter().map(|o| format!("\"{o}\"")).collect();
+        Some(format!(
+            "reasoning = {{ options = [{}], default = \"{default}\" }}\n",
+            list.join(", ")
+        ))
+    }
 }
 
 /// What a model file is for.
@@ -616,6 +672,9 @@ pub fn read_gguf(path: &Path) -> Result<GgufInfo, GgufError> {
         head_dim: default_dim,
         hybrid,
         has_tokenizer: texts.contains_key("tokenizer.ggml.model"),
+        thinking: texts
+            .get("tokenizer.chat_template")
+            .map_or_else(Thinking::default, |t| Thinking::from_template(t)),
         architecture: architecture.clone(),
         ..GgufInfo::default()
     };
@@ -717,6 +776,11 @@ pub fn block(key: &str, target: &Path, size: u64, info: Option<&GgufInfo>) -> St
     );
     match info {
         Some(info) => {
+            if kind == Kind::Llm
+                && let Some(line) = info.thinking.line()
+            {
+                text += &line;
+            }
             if let Some(context) = info.context_length {
                 text += &format!(
                     "max_context = {context}\ndefault_context = {}\n",

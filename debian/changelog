@@ -14,6 +14,9 @@ eliezer (0.5.0) UNRELEASED; urgency=low
   * Add `POST /api/v1/models/estimate`: the memory Eliezer calculates for a model, context and parallelism,
     with its parts (weights, KV cache, overhead), the fit in the GPU and CPU pools and the largest
     context that fits, so MultiGPT can show Eliezer's figures instead of its own size-based guess.
+  * Suggest the `reasoning` options of a model from its chat template when importing: effort levels for
+    gpt-oss, on/off for Qwen and Gemma 4 (with the template's own default), both for Qwen3.8 (`xhigh` default).
+    Without the line the model list reports no `capabilities.reasoning` and MultiGPT cannot offer thinking levels.
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.5.0-1_amd64.deb.
     M5 model acquisition is still pending; the Candle ROCm experiment remains

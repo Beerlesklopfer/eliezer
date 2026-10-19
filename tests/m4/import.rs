@@ -791,3 +791,71 @@ fn announced_but_unknown_layouts_are_flagged() {
             .contains("announced but not understood")
     );
 }
+
+fn reasoning_line(template: Option<&str>) -> Option<String> {
+    let t = Temp::new();
+    let path = t.file(
+        "r.gguf",
+        &gguf("llama", |out| {
+            kv_u32(out, "llama.attention.head_count_kv", 8);
+            match template {
+                Some(template) => {
+                    kv_text(out, "tokenizer.chat_template", template);
+                    2
+                }
+                None => 1,
+            }
+        }),
+    );
+    let info = read_gguf(&path).unwrap();
+    let block = block(
+        "m",
+        Path::new("/var/lib/eliezer/models/m.gguf"),
+        4_000_000_000,
+        Some(&info),
+    );
+    // The block must stay valid configuration.
+    estimate_bytes(&block, 4.0, 4096);
+    block
+        .lines()
+        .find(|l| l.starts_with("reasoning"))
+        .map(str::to_owned)
+}
+
+#[test]
+fn the_chat_template_decides_the_reasoning_options() {
+    assert_eq!(reasoning_line(None), None);
+    assert_eq!(reasoning_line(Some("{{ messages }}")), None);
+    // gpt-oss: effort levels, no way to switch thinking off
+    assert_eq!(
+        reasoning_line(Some(
+            "Reasoning: {{ reasoning_effort | default('medium') }}"
+        ))
+        .unwrap(),
+        r#"reasoning = { options = ["low", "medium", "high"], default = "medium" }"#
+    );
+    // Qwen: thinking on by default
+    assert_eq!(
+        reasoning_line(Some(
+            "{% if enable_thinking is undefined or enable_thinking is true %}x{% endif %}"
+        ))
+        .unwrap(),
+        r#"reasoning = { options = ["none", "medium"], default = "medium" }"#
+    );
+    // Gemma 4: thinking off by default
+    assert_eq!(
+        reasoning_line(Some(
+            "{%- set enable_thinking = enable_thinking | default(false) -%}"
+        ))
+        .unwrap(),
+        r#"reasoning = { options = ["none", "medium"], default = "none" }"#
+    );
+    // Qwen3.8: both, with the level xhigh as the default
+    assert_eq!(
+        reasoning_line(Some(
+            "{% if enable_thinking is undefined or enable_thinking is true %}{% set reasoning_effort = reasoning_effort|default('xhigh') %}{% if reasoning_effort not in ('xhigh', 'medium', 'low') %}"
+        ))
+        .unwrap(),
+        r#"reasoning = { options = ["none", "low", "medium", "xhigh"], default = "xhigh" }"#
+    );
+}
