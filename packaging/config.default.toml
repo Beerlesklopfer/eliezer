@@ -1,0 +1,33 @@
+# Eliezer default configuration. It lists no models and listens on loopback only.
+# Reference: /usr/share/doc/eliezer/examples/config.example.toml
+# Apply changes with: systemctl reload eliezer
+
+[server]
+listen = "127.0.0.1:1234"
+# Enable authentication by naming a file with one API key per line (mode 0600,
+# owned by the eliezer user):
+# api_keys_file = "/etc/eliezer/keys"
+
+[storage]
+models_dir = "/var/lib/eliezer/models"
+
+[gpu]
+vendor = "auto"
+index = 0
+vram_budget_gb = 8.0
+reserve_gb = 2.0
+
+[huggingface]
+cache_dir = "/var/lib/eliezer/models/hf"
+downloads = "never"
+
+# [backend.mistralrs]
+# enabled = true
+#
+# [[model]]
+# key = "example/model"
+# backend = "mistralrs"
+# source = { hf = "Org/Model" }
+# kind = "llm"
+# size_gb = 4.0
+# arch = { layers = 32, kv_heads = 8, head_dim = 128 }

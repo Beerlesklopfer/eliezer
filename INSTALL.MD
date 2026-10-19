@@ -103,6 +103,23 @@ logs `restart_required`). An invalid configuration or a key file that is readabl
 others is rejected with a log line (`config_rejected`); the service keeps running with
 the previous state.
 
+## Debian package
+
+The package is built with `cargo-deb` (`cargo install cargo-deb`, Rust from rustup):
+
+```bash
+scripts/build-deb.sh
+sudo apt install ./target/debian/eliezer_0.3.0-1_amd64.deb
+```
+
+It installs `/usr/bin/eliezer`, the unit `eliezer.service`, a default
+`/etc/eliezer/config.toml` (no models, loopback only, kept on upgrades) and the example
+configuration under `/usr/share/doc/eliezer/examples/`. The system user `eliezer` is created.
+The service is neither enabled nor started: review the configuration first, then run
+`sudo systemctl enable --now eliezer`. Removing the package keeps the configuration; purging
+removes it. The user and `/var/lib/eliezer` (models) are always kept.
+`tests/deb/check-package.sh` checks this life cycle in a clean Debian container.
+
 ## Running as a systemd service
 
 The following setup steps require administrative privileges. Create the user

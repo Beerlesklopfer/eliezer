@@ -14,6 +14,8 @@ eliezer (0.3.0) UNRELEASED; urgency=low
     report queue, queue length and last use per model in /api/v1/status.
   * Apply a changed configuration and key file on SIGHUP: add and remove models,
     unload removed ones when idle, keep loaded models.
+  * Build a Debian package with cargo-deb (scripts/build-deb.sh): service, systemd unit,
+    default configuration, system user; checked in a clean container (tests/deb).
   * Test the documented cases over HTTP, including chat/image alternation, request
     cancellation, GPU measurement failures and an end-to-end configuration reload.
 

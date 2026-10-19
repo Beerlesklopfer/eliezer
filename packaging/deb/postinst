@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    # System user of the service; GPU access comes from the groups in the unit file.
+    if ! getent passwd eliezer >/dev/null; then
+        adduser --system --group --home /var/lib/eliezer --no-create-home \
+            --gecos "Eliezer model manager" eliezer
+    fi
+fi
+
+#DEBHELPER#
+
+exit 0

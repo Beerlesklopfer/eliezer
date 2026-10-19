@@ -1,0 +1,19 @@
+Eliezer for Debian
+==================
+
+The package installs the service but does not enable or start it, because it
+needs your decision first:
+
+ 1. Review /etc/eliezer/config.toml (listen address, GPU budget, models).
+    Check it with: eliezer --check-config /etc/eliezer/config.toml
+ 2. Enable authentication if the address is reachable from other machines
+    (api_keys_file, see the comment in the file).
+ 3. Start it: systemctl enable --now eliezer
+
+The service runs as the system user "eliezer" with the supplementary groups
+"video" and "render" for GPU access. State and models live in /var/lib/eliezer;
+removing the package keeps that directory and the user.
+Configuration changes are applied with "systemctl reload eliezer".
+
+The model runtimes are not connected yet: loading a model fails with
+"502 backend_error" until the runtime milestones are finished.
