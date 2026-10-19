@@ -52,3 +52,15 @@ The product license is **GPL-3.0-only**, per the user's decision.
 | Crate | Pinned version | Rationale |
 |---|---|---|
 | `nvml-wrapper` | 0.13.0 | Measures VRAM through NVML (specification 6a) without starting `nvidia-smi` for every query: no process spawn, no text parsing, exact byte values. The library `libnvidia-ml` is loaded dynamically at runtime, so the binary builds and runs without the NVIDIA driver (the probe then reports `Unavailable` and the fallback chain continues with `nvidia-smi`). Pulls in `nvml-wrapper-sys`, `libloading`, `bitflags`, `thiserror` and `static_assertions`. Licence: MIT OR Apache-2.0. Declared `rust-version` 1.60, compatible with 1.88. |
+
+## M4 – llama.cpp runtime: chat templates
+
+| Crate | Pinned version | Rationale |
+|---|---|---|
+| `minijinja` | 2.24.0 | Renders the Jinja chat template stored in the GGUF (llama.cpp's Rust binding offers only a basic template without tools). A pure-Rust engine with few dependencies (`serde`, `memo-map`; with `json` also `serde_json`, with `preserve_order` also `indexmap`), no C code and no Python. Features: `json` (the `tojson` filter, replaced by our own variant with Python spacing and no HTML escaping), `loop_controls`, `preserve_order` (keeps the order of tool parameters as in the request, which the models saw in training). Licence: Apache-2.0. Declared `rust-version` 1.70, compatible with 1.88. Version 3.0.x was released less than two weeks before the decision, so the latest older stable release 2.24.0 was chosen. |
+| `minijinja-contrib` | 2.24.0 | Feature `pycompat`: Python string, dict and list methods (`startswith`, `strip`, `split`, `items`, `get`, ...) that Hugging Face templates call. Same author and release train as `minijinja`, no further dependencies. Licence: Apache-2.0. Declared `rust-version` 1.70. |
+
+`serde` (already a workspace dependency) is used for the `tojson` serializer; `serde_json` gets the
+feature `preserve_order` in `eliezer-llamacpp` (pulls in `indexmap`, MIT OR Apache-2.0), so that JSON
+objects keep their insertion order when they are rendered into prompts. `strftime_now` is
+implemented with `std` only (UTC), so no date crate is needed.
