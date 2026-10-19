@@ -11,6 +11,9 @@ eliezer (0.5.0) UNRELEASED; urgency=low
     layers) instead of evicting it, and they fall back to the CPU when the GPU is too small. The planner
     works per memory pool, a 409 on the CPU names `[cpu] ram_budget_gb`, `/api/v1/status` and `eliezer ps`
     show the device and the CPU memory. Without a RAM budget nothing changes.
+  * Add `POST /api/v1/models/estimate`: the memory Eliezer calculates for a model, context and parallelism,
+    with its parts (weights, KV cache, overhead), the fit in the GPU and CPU pools and the largest
+    context that fits, so MultiGPT can show Eliezer's figures instead of its own size-based guess.
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.5.0-1_amd64.deb.
     M5 model acquisition is still pending; the Candle ROCm experiment remains

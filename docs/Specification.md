@@ -235,6 +235,14 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
 - `GET /api/v1/status` → `{"gpu": {"total_bytes", "used_bytes", "free_bytes", "budget_bytes"},
   "models": [{"key", "state": "unloaded|loading|loaded|unloading|failed", "vram_bytes", "last_used_ms_ago",
   "in_flight", "queue_len"}], "queue": [{"model", "waiting_secs"}]}`.
+- `POST /api/v1/models/estimate`, body as for load (`model`, optional `context_length`, `parallel`,
+  `device`) → the memory Eliezer calculates: `{"model", "context_length", "parallel", "device",
+  "estimate": {"total_bytes", "basis": "calculated|configured|measured", "weights_bytes",
+  "kv_cache_bytes", "overhead_bytes", "vision_bytes"}, "pools": {"gpu": {"budget_bytes", "free_bytes",
+  "free_after_eviction_bytes", "fits_budget", "fits_now", "fits_after_eviction", "max_context_length"},
+  "cpu": {…}}}`. The `cpu` pool appears only with a RAM budget. `max_context_length` is the largest
+  context that fits the pool's budget (null when none does). Clients such as MultiGPT use this instead of
+  estimating from the file size; the calculation uses the `arch` of the model (section 6).
 - `GET /healthz` → 200 `ok` (without authentication).
 - `POST /v1/images/generations` (OpenAI form: `prompt`, `n`, `size`, `response_format = "b64_json"`)
   for models with `kind = "image"`; response `{"created": <unix>, "data": [{"b64_json": "…"}]}`.

@@ -94,22 +94,61 @@ pub fn cache_bytes(arch: &Architecture, context: u32, parallel: u32) -> Result<u
     sum(&[full_cache, window_cache, state])
 }
 
+/// Where a memory figure comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Basis {
+    /// Measured in operation.
+    Measured,
+    /// Fixed by `vram_gb` in the configuration.
+    Configured,
+    /// Calculated from weights, architecture, context and parallelism.
+    Calculated,
+}
+impl Basis {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Measured => "measured",
+            Self::Configured => "configured",
+            Self::Calculated => "calculated",
+        }
+    }
+}
+
+/// An estimate with its parts; for measured or configured values only `total` is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Breakdown {
+    pub total: u64,
+    pub weights: u64,
+    pub cache: u64,
+    pub overhead: u64,
+    pub vision: u64,
+    pub basis: Basis,
+}
+
 /// Measured values describe the whole instance; file sizes are supplied by the caller.
-pub fn estimate(
+pub fn estimate_parts(
     model: &ModelConfig,
     context: u32,
     parallel: u32,
     file_size: Option<u64>,
     measured: Option<u64>,
-) -> Result<u64, MemoryError> {
+) -> Result<Breakdown, MemoryError> {
     if context == 0 || context > model.max_context || parallel == 0 || parallel > context {
         return Err(MemoryError::InvalidSize);
     }
+    let whole = |total, basis| Breakdown {
+        total,
+        weights: 0,
+        cache: 0,
+        overhead: 0,
+        vision: 0,
+        basis,
+    };
     if let Some(bytes) = measured {
-        return Ok(bytes);
+        return Ok(whole(bytes, Basis::Measured));
     }
     if let Some(gb) = model.vram_gb {
-        return gb_bytes(gb);
+        return Ok(whole(gb_bytes(gb)?, Basis::Configured));
     }
     if model.kind == ModelKind::Image {
         return Err(MemoryError::MissingWeights);
@@ -139,12 +178,54 @@ pub fn estimate(
     } else {
         500_000_000
     };
-    sum(&[
+    let vision = if model.vision { 300_000_000 } else { 0 };
+    Ok(Breakdown {
+        total: sum(&[weights, cache, overhead, vision])?,
         weights,
         cache,
         overhead,
-        if model.vision { 300_000_000 } else { 0 },
-    ])
+        vision,
+        basis: Basis::Calculated,
+    })
+}
+
+pub fn estimate(
+    model: &ModelConfig,
+    context: u32,
+    parallel: u32,
+    file_size: Option<u64>,
+    measured: Option<u64>,
+) -> Result<u64, MemoryError> {
+    estimate_parts(model, context, parallel, file_size, measured).map(|b| b.total)
+}
+
+/// The largest context (at most the model's maximum) whose estimate fits into `budget`, or `None`
+/// when even the smallest context does not fit. The estimate grows with the context, so this is a
+/// binary search.
+pub fn max_context_within(
+    model: &ModelConfig,
+    parallel: u32,
+    file_size: Option<u64>,
+    measured: Option<u64>,
+    budget: u64,
+) -> Option<u32> {
+    let fits = |context: u32| {
+        estimate(model, context, parallel, file_size, measured).is_ok_and(|bytes| bytes <= budget)
+    };
+    let lowest = parallel.max(1);
+    if !fits(lowest) {
+        return None;
+    }
+    let (mut low, mut high) = (lowest, model.max_context);
+    while low < high {
+        let middle = low + (high - low).div_ceil(2);
+        if fits(middle) {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    Some(low)
 }
 
 /// Foreign usage and own leases are not subtracted twice.

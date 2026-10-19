@@ -234,3 +234,48 @@ async fn first_sse_frame_arrives_before_backend_finishes() {
     }
     s.shutdown().await;
 }
+#[tokio::test]
+async fn estimate_reports_the_calculated_memory_with_its_parts() {
+    let (app, s) = app(Default::default(), vec![]);
+    let (status, body) = call(
+        app.clone(),
+        "/api/v1/models/estimate",
+        Some(json!({"model":"a","context_length":4096})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let e = &body["estimate"];
+    // 2 layers x 2 KV heads x 64 dimensions x 2 (K and V) x 2 bytes x 4096 tokens
+    assert_eq!(e["kv_cache_bytes"], 2 * 2 * 2 * 64 * 2 * 4096);
+    assert_eq!(e["weights_bytes"], 1_000_000_000_u64);
+    assert_eq!(e["overhead_bytes"], 500_000_000_u64);
+    assert_eq!(
+        e["total_bytes"].as_u64().unwrap(),
+        1_000_000_000 + 500_000_000 + 2 * 2 * 2 * 64 * 2 * 4096
+    );
+    assert_eq!(e["basis"], "calculated");
+    assert_eq!(body["context_length"], 4096);
+    // 8 GB budget minus 1 GB reserve: it fits; the CPU pool is off (no RAM budget).
+    let gpu = &body["pools"]["gpu"];
+    assert_eq!(gpu["budget_bytes"], 7_000_000_000_u64);
+    assert_eq!(gpu["fits_budget"], true);
+    assert_eq!(gpu["fits_now"], true);
+    assert!(gpu["max_context_length"].as_u64().unwrap() >= 4096);
+    assert!(body["pools"].get("cpu").is_none());
+    // Unknown models and contexts beyond the model's limit are refused.
+    let (status, _) = call(
+        app.clone(),
+        "/api/v1/models/estimate",
+        Some(json!({"model":"nope"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        app,
+        "/api/v1/models/estimate",
+        Some(json!({"model":"a","context_length":0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    s.shutdown().await;
+}

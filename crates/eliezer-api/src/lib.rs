@@ -98,6 +98,7 @@ pub fn managed_router(app: App) -> Router {
             .route("/api/v1/models", get(models))
             .route("/api/v1/models/load", post(load))
             .route("/api/v1/models/unload", post(unload))
+            .route("/api/v1/models/estimate", post(estimate_route))
             .route("/api/v1/status", get(status))
             .route("/v1/models", get(list))
             .route("/v1/chat/completions", post(chat))
@@ -371,6 +372,119 @@ async fn load(
         Ok(spec) => Json(json!({"type":"llm","instance_id":spec.model,"load_time_seconds":start.elapsed().as_secs_f64(),"status":"loaded","load_config":{"context_length":spec.context,"parallel":spec.parallel}})).into_response(),
         Err(e) => error(e,false),
     }
+}
+/// The memory Eliezer calculates for a load, in the pools it could go to. MultiGPT asks this instead
+/// of guessing from the file size. Body as for load: `model`, optional `context_length`, `parallel`.
+async fn estimate_route(
+    State(app): State<App>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    use eliezer_core::scheduler::State as S;
+    let body = match json_body(body, false) {
+        Ok(v) => v,
+        Err(e) => return *e,
+    };
+    let spec = match spec(&app, &body) {
+        Ok(v) => v,
+        Err(e) => return error(e, false),
+    };
+    let info = match app.supervisor.status().await {
+        Ok(info) => info,
+        Err(e) => return error(e, false),
+    };
+    let config = app.config.get();
+    let Some(model) = config.model.iter().find(|m| m.key == spec.model) else {
+        return error(Error::UnknownModel, false);
+    };
+    let file_size = model
+        .source
+        .file
+        .as_ref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map(|m| m.len());
+    let Ok(parts) =
+        eliezer_core::memory::estimate_parts(model, spec.context, spec.parallel, file_size, None)
+    else {
+        return error(Error::InvalidLoad, false);
+    };
+    let usable = |gb: f64, reserve: f64| {
+        eliezer_core::memory::gb_bytes(gb)
+            .and_then(|b| eliezer_core::memory::gb_bytes(reserve).map(|r| b.saturating_sub(r)))
+            .unwrap_or(0)
+    };
+    let pools = [
+        (
+            Place::Gpu,
+            usable(config.gpu.vram_budget_gb, config.gpu.reserve_gb),
+        ),
+        (
+            Place::Cpu,
+            if config.cpu.ram_budget_gb > 0.0 {
+                usable(config.cpu.ram_budget_gb, config.cpu.reserve_gb)
+            } else {
+                0
+            },
+        ),
+    ];
+    let place_of = |key: &str| {
+        info.places
+            .iter()
+            .find(|(k, _)| k == key)
+            .map_or(Place::Gpu, |(_, p)| *p)
+    };
+    let mut result = serde_json::Map::new();
+    for (place, budget) in pools {
+        if budget == 0 && place == Place::Cpu {
+            continue;
+        }
+        let held = |i: &&eliezer_core::scheduler::Instance| {
+            matches!(i.state, S::Loaded | S::Loading | S::Unloading) && place_of(&i.key) == place
+        };
+        let used = info
+            .instances
+            .iter()
+            .filter(held)
+            .fold(0_u64, |sum, i| sum.saturating_add(i.bytes));
+        // What cannot be evicted: pinned models, running requests and instances in transition.
+        let fixed = info
+            .instances
+            .iter()
+            .filter(held)
+            .filter(|i| i.pinned || i.in_flight > 0 || i.state != S::Loaded)
+            .fold(0_u64, |sum, i| sum.saturating_add(i.bytes));
+        let free = budget.saturating_sub(used);
+        let evictable = budget.saturating_sub(fixed);
+        result.insert(
+            place.name().to_owned(),
+            json!({
+                "budget_bytes": budget,
+                "free_bytes": free,
+                "free_after_eviction_bytes": evictable,
+                "fits_budget": parts.total <= budget,
+                "fits_now": parts.total <= free,
+                "fits_after_eviction": parts.total <= evictable,
+                "max_context_length": eliezer_core::memory::max_context_within(
+                    model, spec.parallel, file_size, None, budget,
+                ),
+            }),
+        );
+    }
+    Json(json!({
+        "model": spec.model,
+        "context_length": spec.context,
+        "parallel": spec.parallel,
+        "device": spec.device.name(),
+        "estimate": {
+            "total_bytes": parts.total,
+            "basis": parts.basis.name(),
+            "weights_bytes": parts.weights,
+            "kv_cache_bytes": parts.cache,
+            "overhead_bytes": parts.overhead,
+            "vision_bytes": parts.vision,
+        },
+        "pools": result,
+    }))
+    .into_response()
 }
 async fn unload(
     State(app): State<App>,

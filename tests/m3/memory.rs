@@ -71,3 +71,33 @@ fn external_usage_and_reserve() {
     assert_eq!(available(24, 2, 8, 0, 0, 0), 6);
     assert_eq!(available(24, 2, 8, 9, 0, 0), 0);
 }
+#[test]
+fn parts_add_up_and_the_largest_fitting_context_is_exact() {
+    let config = Config::parse(include_str!("../../packaging/config.example.toml")).unwrap();
+    let model = &config.model[0];
+    let parts = estimate_parts(model, 32768, 1, None, None).unwrap();
+    assert_eq!(parts.basis, Basis::Calculated);
+    assert_eq!(parts.cache, 3_221_225_472);
+    assert_eq!(
+        parts.total,
+        parts.weights + parts.cache + parts.overhead + parts.vision
+    );
+    assert_eq!(
+        estimate_parts(model, 32768, 1, None, Some(42))
+            .unwrap()
+            .basis,
+        Basis::Measured
+    );
+    // The result fits and the next larger context does not.
+    let budget = 20_000_000_000;
+    let best = max_context_within(model, 1, None, None, budget).unwrap();
+    assert!(estimate(model, best, 1, None, None).unwrap() <= budget);
+    assert!(
+        best == model.max_context || estimate(model, best + 1, 1, None, None).unwrap() > budget
+    );
+    // Weights alone do not fit: no context fits.
+    assert_eq!(
+        max_context_within(model, 1, None, None, 1_000_000_000),
+        None
+    );
+}

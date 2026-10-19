@@ -105,6 +105,15 @@ pub enum DevicePolicy {
     Gpu,
     Cpu,
 }
+impl DevicePolicy {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Gpu => "gpu",
+            Self::Cpu => "cpu",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
