@@ -163,19 +163,19 @@ reasoning={options=["none","low","medium","high"],default="none"}
             retry_ms: 30,
         },
     );
-    let router = managed_router(App {
+    let router = managed_router(App::new(
         config,
-        supervisor: supervisor.clone(),
+        supervisor.clone(),
         backend,
-        probe: Arc::new(eliezer_gpu::sources(
+        Arc::new(eliezer_gpu::sources(
             eliezer_core::config::GpuVendor::None,
             eliezer_core::config::ProbeMethod::None,
             0,
             8_000_000_000,
             "/nonexistent".into(),
         )),
-        keys: Arc::new(vec![]),
-    });
+        vec![],
+    ));
     let get = |router: axum::Router, path: &'static str, body: Option<Value>| async move {
         let request = Request::builder()
             .uri(path)

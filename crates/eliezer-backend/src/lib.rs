@@ -69,6 +69,23 @@ pub struct ChatRequest {
     pub input: String,
     pub reasoning: Option<String>,
 }
+#[derive(Debug, Clone)]
+pub struct EmbedRequest {
+    pub model: String,
+    pub input: Vec<String>,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct Embeddings {
+    pub vectors: Vec<Vec<f32>>,
+    pub input_tokens: u64,
+}
+#[derive(Debug, Clone)]
+pub struct ImageRequest {
+    pub model: String,
+    pub prompt: String,
+    pub count: u32,
+    pub size: Option<String>,
+}
 /// Embedded runtimes use handles; the interface does not require an HTTP endpoint.
 pub trait Backend: Send + Sync {
     fn start<'a>(&'a self, spec: &'a LoadSpec) -> BackendFuture<'a, Running>;
@@ -79,6 +96,14 @@ pub trait Backend: Send + Sync {
         running: &'a Running,
         request: ChatRequest,
     ) -> BackendFuture<'a, mpsc::Receiver<Result<Chunk, BackendError>>>;
+    /// Embeddings; runtimes without support keep this default.
+    fn embed<'a>(&'a self, _: &'a Running, _: EmbedRequest) -> BackendFuture<'a, Embeddings> {
+        Box::pin(async { Err(BackendError::Unavailable) })
+    }
+    /// Generated images as base64-encoded PNG data.
+    fn image<'a>(&'a self, _: &'a Running, _: ImageRequest) -> BackendFuture<'a, Vec<String>> {
+        Box::pin(async { Err(BackendError::Unavailable) })
+    }
 }
 #[derive(Debug, Clone)]
 pub struct FakeConfig {
@@ -183,6 +208,60 @@ impl Backend for FakeBackend {
             Ok(rx)
         })
     }
+    fn embed<'a>(
+        &'a self,
+        running: &'a Running,
+        request: EmbedRequest,
+    ) -> BackendFuture<'a, Embeddings> {
+        Box::pin(async move {
+            if !running.is_alive() {
+                return Err(BackendError::Crashed);
+            }
+            if request.model != running.spec.model {
+                return Err(BackendError::InvalidRequest);
+            }
+            tokio::time::sleep(self.config.chunk_delay).await;
+            let vectors = request
+                .input
+                .iter()
+                .map(|text| {
+                    (1..=8_u32)
+                        .map(|i| {
+                            let sum: u32 = text.bytes().map(|b| u32::from(b) * i).sum();
+                            f32::from((sum % 1000) as u16) / 1000.0
+                        })
+                        .collect()
+                })
+                .collect();
+            let input_tokens = request
+                .input
+                .iter()
+                .map(|t| t.split_whitespace().count() as u64)
+                .sum();
+            Ok(Embeddings {
+                vectors,
+                input_tokens,
+            })
+        })
+    }
+    fn image<'a>(
+        &'a self,
+        running: &'a Running,
+        request: ImageRequest,
+    ) -> BackendFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            if !running.is_alive() {
+                return Err(BackendError::Crashed);
+            }
+            if request.model != running.spec.model || request.count == 0 {
+                return Err(BackendError::InvalidRequest);
+            }
+            tokio::time::sleep(self.config.chunk_delay).await;
+            Ok(vec![FAKE_PNG_BASE64.to_owned(); request.count as usize])
+        })
+    }
 }
+/// A valid 1x1 PNG, so clients that decode the fake image succeed.
+pub const FAKE_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 pub mod supervisor;

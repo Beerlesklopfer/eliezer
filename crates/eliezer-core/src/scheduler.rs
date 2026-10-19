@@ -166,6 +166,15 @@ impl<T> Queue<T> {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+    pub fn set_max(&mut self, max: usize) {
+        self.max = max;
+    }
+    /// Waiting items per model in queue order, for status reports.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Queued<T>)> {
+        self.models
+            .iter()
+            .flat_map(|(model, items)| items.iter().map(move |item| (model.as_str(), item)))
+    }
     pub fn push(&mut self, model: String, item: Queued<T>) -> Result<(), Queued<T>> {
         if self.len >= self.max {
             return Err(item);

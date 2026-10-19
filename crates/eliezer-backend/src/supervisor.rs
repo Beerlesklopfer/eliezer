@@ -1,5 +1,8 @@
 //! A single task manages instances; load and unload work runs outside of it.
-use crate::{Backend, BackendError, ChatRequest, Chunk, LoadSpec, Running};
+use crate::{
+    Backend, BackendError, ChatRequest, Chunk, EmbedRequest, Embeddings, ImageRequest, LoadSpec,
+    Running,
+};
 use eliezer_core::scheduler::{
     Clock, Instance, Plan, Queue, Queued, State, idle_candidates, plan_load,
 };
@@ -35,6 +38,14 @@ pub struct Settings {
     pub queue_max: usize,
     pub retry_ms: u64,
 }
+/// Everything the status endpoint needs, taken at one instant.
+#[derive(Debug, Clone)]
+pub struct StatusInfo {
+    pub now_ms: u64,
+    pub instances: Vec<Instance>,
+    /// Waiting requests as (model, enqueued_ms), in queue order.
+    pub queue: Vec<(String, u64)>,
+}
 #[derive(Clone)]
 pub struct Supervisor {
     tx: mpsc::Sender<Command>,
@@ -66,6 +77,8 @@ enum Command {
     Unload(String, oneshot::Sender<Result<(), Error>>),
     Snapshot(oneshot::Sender<Vec<Instance>>),
     Loaded(oneshot::Sender<Vec<LoadSpec>>),
+    Status(oneshot::Sender<StatusInfo>),
+    Reconfigure(Vec<Model>, Settings, oneshot::Sender<()>),
     Tick(oneshot::Sender<()>),
     Started(String, Result<Running, BackendError>),
     Stopped(String, Result<(), BackendError>),
@@ -76,6 +89,8 @@ struct Entry {
     model: Model,
     running: Option<Running>,
     failed_ms: u64,
+    /// Removed from the configuration: refuses new requests and unloads once idle.
+    retired: bool,
 }
 struct Actor {
     entries: BTreeMap<String, Entry>,
@@ -105,6 +120,7 @@ impl Supervisor {
                             model,
                             running: None,
                             failed_ms: 0,
+                            retired: false,
                         },
                     )
                 })
@@ -164,6 +180,24 @@ impl Supervisor {
             .map_err(|_| Error::Stopped)?;
         rx.await.map_err(|_| Error::Stopped)
     }
+    pub async fn status(&self) -> Result<StatusInfo, Error> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Status(tx))
+            .await
+            .map_err(|_| Error::Stopped)?;
+        rx.await.map_err(|_| Error::Stopped)
+    }
+    /// Applies a reloaded configuration: new models appear, changed settings take effect,
+    /// removed models refuse new requests and are unloaded as soon as they are idle.
+    pub async fn reconfigure(&self, models: Vec<Model>, settings: Settings) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Reconfigure(models, settings, tx))
+            .await
+            .map_err(|_| Error::Stopped)?;
+        rx.await.map_err(|_| Error::Stopped)
+    }
     pub async fn tick(&self) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -189,6 +223,34 @@ impl Supervisor {
             }
         }
     }
+    pub async fn embed(
+        &self,
+        lease: &Lease,
+        request: EmbedRequest,
+        backend: &dyn Backend,
+    ) -> Result<Embeddings, Error> {
+        match backend.embed(&lease.running, request).await {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                self.report_crash(lease.running.spec.model.clone()).await;
+                Err(Error::Backend)
+            }
+        }
+    }
+    pub async fn image(
+        &self,
+        lease: &Lease,
+        request: ImageRequest,
+        backend: &dyn Backend,
+    ) -> Result<Vec<String>, Error> {
+        match backend.image(&lease.running, request).await {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                self.report_crash(lease.running.spec.model.clone()).await;
+                Err(Error::Backend)
+            }
+        }
+    }
     pub async fn report_crash(&self, key: String) {
         let _ = self.tx.send(Command::Crash(key)).await;
     }
@@ -205,6 +267,43 @@ impl Actor {
             .values()
             .map(|e| e.model.instance.clone())
             .collect()
+    }
+    fn reconfigure(&mut self, models: Vec<Model>, settings: Settings) {
+        let wanted: std::collections::BTreeSet<String> =
+            models.iter().map(|m| m.instance.key.clone()).collect();
+        for entry in self.entries.values_mut() {
+            entry.retired = !wanted.contains(&entry.model.instance.key);
+        }
+        for model in models {
+            match self.entries.get_mut(&model.instance.key) {
+                Some(entry) => {
+                    let idle =
+                        matches!(entry.model.instance.state, State::Unloaded | State::Failed);
+                    let instance = &mut entry.model.instance;
+                    instance.priority = model.instance.priority;
+                    instance.pinned = model.instance.pinned;
+                    instance.image = model.instance.image;
+                    if idle {
+                        instance.bytes = model.instance.bytes;
+                    }
+                    entry.model.default_spec = model.default_spec;
+                    entry.model.max_context = model.max_context;
+                }
+                None => {
+                    self.entries.insert(
+                        model.instance.key.clone(),
+                        Entry {
+                            model,
+                            running: None,
+                            failed_ms: 0,
+                            retired: false,
+                        },
+                    );
+                }
+            }
+        }
+        self.queue.set_max(settings.queue_max);
+        self.settings = settings;
     }
     fn stop(&mut self, key: &str) {
         let Some(entry) = self.entries.get_mut(key) else {
@@ -258,6 +357,22 @@ impl Actor {
         for key in idle_candidates(&self.snapshot(), now, self.settings.idle_ms) {
             self.stop(&key);
         }
+        let retired: Vec<String> = self
+            .entries
+            .values()
+            .filter(|e| e.retired)
+            .map(|e| e.model.instance.key.clone())
+            .collect();
+        for key in retired {
+            self.stop(&key);
+            let gone = self.entries.get(&key).is_some_and(|e| {
+                matches!(e.model.instance.state, State::Unloaded | State::Failed)
+                    && e.model.instance.in_flight == 0
+            });
+            if gone {
+                self.entries.remove(&key);
+            }
+        }
     }
     fn drain(&mut self) {
         let preferred = self
@@ -274,7 +389,7 @@ impl Actor {
                 continue;
             }
             let pending = item.value;
-            let Some(entry) = self.entries.get(&key) else {
+            let Some(entry) = self.entries.get(&key).filter(|e| !e.retired) else {
                 let _ = pending.reply.send(Err(Error::UnknownModel));
                 continue;
             };
@@ -363,7 +478,7 @@ impl Actor {
             match command {
                 Command::Load(pending) => {
                     let key = pending.spec.model.clone();
-                    let error = match self.entries.get(&key) {
+                    let error = match self.entries.get(&key).filter(|e| !e.retired) {
                         None => Some(Error::UnknownModel),
                         Some(e)
                             if pending.spec.context == 0
@@ -474,6 +589,21 @@ impl Actor {
                         .filter_map(|e| e.running.as_ref().map(|r| r.spec.clone()))
                         .collect();
                     let _ = reply.send(specs);
+                }
+                Command::Status(reply) => {
+                    let _ = reply.send(StatusInfo {
+                        now_ms: self.clock.now_ms(),
+                        instances: self.snapshot(),
+                        queue: self
+                            .queue
+                            .iter()
+                            .map(|(model, item)| (model.to_owned(), item.enqueued_ms))
+                            .collect(),
+                    });
+                }
+                Command::Reconfigure(models, settings, reply) => {
+                    self.reconfigure(models, settings);
+                    let _ = reply.send(());
                 }
                 Command::Tick(reply) => {
                     self.tick();

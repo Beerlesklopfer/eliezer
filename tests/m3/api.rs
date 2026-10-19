@@ -78,19 +78,19 @@ reasoning={options=["none","low","medium","high"],default="none"}
         },
     );
     (
-        managed_router(App {
+        managed_router(App::new(
             config,
-            supervisor: supervisor.clone(),
+            supervisor.clone(),
             backend,
-            probe: Arc::new(eliezer_gpu::sources(
+            Arc::new(eliezer_gpu::sources(
                 eliezer_core::config::GpuVendor::None,
                 eliezer_core::config::ProbeMethod::None,
                 0,
                 8_000_000_000,
                 "/nonexistent".into(),
             )),
-            keys: Arc::new(keys),
-        }),
+            keys,
+        )),
         supervisor,
     )
 }

@@ -13,23 +13,67 @@ use eliezer_backend::{
     Backend, ChatRequest, Chunk,
     supervisor::{Error, Lease, Supervisor},
 };
-use eliezer_core::{config::Config, memory::estimate};
+use eliezer_core::{
+    config::{Config, ModelKind},
+    memory::estimate,
+};
 use serde_json::{Value, json};
 use std::{
     convert::Infallible,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, RwLock},
     task::{Context, Poll},
 };
 use tokio::sync::mpsc;
 
+/// A value that can be replaced while requests are being served (configuration reload).
+pub struct Shared<T>(RwLock<Arc<T>>);
+impl<T> Shared<T> {
+    pub fn new(value: Arc<T>) -> Self {
+        Self(RwLock::new(value))
+    }
+    pub fn get(&self) -> Arc<T> {
+        match self.0.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+    pub fn set(&self, value: Arc<T>) {
+        match self.0.write() {
+            Ok(mut guard) => *guard = value,
+            Err(poisoned) => *poisoned.into_inner() = value,
+        }
+    }
+}
 #[derive(Clone)]
 pub struct App {
-    pub config: Arc<Config>,
+    pub config: Arc<Shared<Config>>,
     pub supervisor: Supervisor,
     pub backend: Arc<dyn Backend>,
     pub probe: Arc<eliezer_gpu::Fallback>,
-    pub keys: Arc<Vec<String>>,
+    pub keys: Arc<Shared<Vec<String>>>,
+}
+impl App {
+    pub fn new(
+        config: Arc<Config>,
+        supervisor: Supervisor,
+        backend: Arc<dyn Backend>,
+        probe: Arc<eliezer_gpu::Fallback>,
+        keys: Vec<String>,
+    ) -> Self {
+        Self {
+            config: Arc::new(Shared::new(config)),
+            supervisor,
+            backend,
+            probe,
+            keys: Arc::new(Shared::new(Arc::new(keys))),
+        }
+    }
+    /// Swaps in a reloaded configuration and key list; requests in flight keep the old ones.
+    pub fn replace(&self, config: Arc<Config>, keys: Vec<String>) {
+        self.config.set(config);
+        self.keys.set(Arc::new(keys));
+    }
 }
 pub fn router() -> Router {
     Router::new().route("/healthz", get(|| async { "ok" }))
@@ -43,6 +87,9 @@ pub fn managed_router(app: App) -> Router {
             .route("/api/v1/status", get(status))
             .route("/v1/models", get(list))
             .route("/v1/chat/completions", post(chat))
+            .route("/v1/completions", post(completions))
+            .route("/v1/embeddings", post(embeddings))
+            .route("/v1/images/generations", post(images))
             .route("/v1/messages", post(messages))
             .route("/v1/messages/count_tokens", post(count_tokens))
             .fallback(|| async {
@@ -124,9 +171,9 @@ async fn authorize(State(app): State<App>, request: Request, next: Next) -> Resp
         .headers()
         .get("x-api-key")
         .and_then(|h| h.to_str().ok());
-    if !app.keys.is_empty()
-        && !app
-            .keys
+    let keys = app.keys.get();
+    if !keys.is_empty()
+        && !keys
             .iter()
             .any(|key| bearer == Some(key.as_str()) || (anth && api == Some(key.as_str())))
     {
@@ -161,7 +208,8 @@ async fn models(State(app): State<App>) -> Response {
         Ok(v) => v,
         Err(e) => return error(e, false),
     };
-    Json(json!({"models":app.config.model.iter().map(|m| {
+    let config = app.config.get();
+    Json(json!({"models":config.model.iter().map(|m| {
         let loaded = states.iter().find(|i| i.key == m.key && i.state == eliezer_core::scheduler::State::Loaded);
         let mut value = json!({"type":match m.kind { eliezer_core::config::ModelKind::Llm => "llm", eliezer_core::config::ModelKind::Embedding => "embedding", _ => "image" },
             "key":m.key,"display_name":m.key,"max_context_length":m.max_context,"capabilities":{"vision":m.vision},"loaded_instances":[]});
@@ -173,7 +221,8 @@ async fn models(State(app): State<App>) -> Response {
 }
 async fn list(State(app): State<App>, headers: axum::http::HeaderMap) -> Response {
     let anth = headers.contains_key("anthropic-version");
-    let data: Vec<_> = app.config.model.iter().map(|m| if anth { json!({"type":"model","id":m.key,"display_name":m.key,"created_at":"2026-10-19T00:00:00Z"}) }
+    let config = app.config.get();
+    let data: Vec<_> = config.model.iter().map(|m| if anth { json!({"type":"model","id":m.key,"display_name":m.key,"created_at":"2026-10-19T00:00:00Z"}) }
         else { json!({"id":m.key,"object":"model","owned_by":"eliezer","created":0}) }).collect();
     Json(if anth {
         json!({"data":data,"has_more":false})
@@ -184,8 +233,8 @@ async fn list(State(app): State<App>, headers: axum::http::HeaderMap) -> Respons
 }
 fn spec(app: &App, body: &Value) -> Result<eliezer_backend::LoadSpec, Error> {
     let key = body["model"].as_str().ok_or(Error::InvalidLoad)?;
-    let model = app
-        .config
+    let config = app.config.get();
+    let model = config
         .model
         .iter()
         .find(|m| m.key == key)
@@ -246,7 +295,7 @@ async fn unload(
         return error(Error::InvalidLoad, false);
     };
     match tokio::time::timeout(
-        std::time::Duration::from_secs(app.config.server.request_timeout_secs),
+        std::time::Duration::from_secs(app.config.get().server.request_timeout_secs),
         app.supervisor.unload(key.into()),
     )
     .await
@@ -257,37 +306,233 @@ async fn unload(
     }
 }
 async fn status(State(app): State<App>) -> Response {
-    match app.supervisor.snapshot().await {
-        Ok(instances) => {
-            let used = instances
-                .iter()
-                .filter(|i| {
-                    matches!(
-                        i.state,
-                        eliezer_core::scheduler::State::Loaded
-                            | eliezer_core::scheduler::State::Loading
-                            | eliezer_core::scheduler::State::Unloading
-                    )
-                })
-                .fold(0_u64, |s, i| s.saturating_add(i.bytes));
-            let budget = eliezer_core::memory::gb_bytes(app.config.gpu.vram_budget_gb).unwrap_or(0);
-            // The measurement may start processes (nvidia-smi), so do not block in the async context.
-            let probe = app.probe.clone();
-            let measured = tokio::task::spawn_blocking(move || {
-                let memory = eliezer_gpu::GpuProbe::memory(&*probe).ok();
-                (memory, probe.active_name())
+    use eliezer_core::scheduler::State as S;
+    let info = match app.supervisor.status().await {
+        Ok(info) => info,
+        Err(e) => return error(e, false),
+    };
+    let used = info
+        .instances
+        .iter()
+        .filter(|i| matches!(i.state, S::Loaded | S::Loading | S::Unloading))
+        .fold(0_u64, |sum, i| sum.saturating_add(i.bytes));
+    let budget = eliezer_core::memory::gb_bytes(app.config.get().gpu.vram_budget_gb).unwrap_or(0);
+    // The measurement may start processes (nvidia-smi), so do not block in the async context.
+    let probe = app.probe.clone();
+    let (memory, probe_name) = tokio::task::spawn_blocking(move || {
+        let memory = eliezer_gpu::GpuProbe::memory(&*probe).ok();
+        (memory, probe.active_name())
+    })
+    .await
+    .unwrap_or((None, "none".to_owned()));
+    // Without a real measurement (method "none") the supervisor's bookkeeping counts.
+    let (total, used) = match memory {
+        Some(m) if probe_name != "none" => (m.total_bytes, m.used_bytes),
+        _ => (budget, used),
+    };
+    let models: Vec<Value> = info
+        .instances
+        .iter()
+        .map(|i| {
+            let in_use = matches!(i.state, S::Loaded | S::Loading | S::Unloading);
+            json!({
+                "key": i.key,
+                "state": format!("{:?}", i.state).to_lowercase(),
+                "vram_bytes": i.bytes,
+                "last_used_ms_ago": in_use.then(|| info.now_ms.saturating_sub(i.last_used_ms)),
+                "in_flight": i.in_flight,
+                "queue_len": info.queue.iter().filter(|(model, _)| *model == i.key).count(),
             })
-            .await
-            .unwrap_or((None, "none".to_owned()));
-            let (memory, probe_name) = measured;
-            // Without a real measurement (method "none") the supervisor's bookkeeping counts.
-            let (total, used) = match memory {
-                Some(m) if probe_name != "none" => (m.total_bytes, m.used_bytes),
-                _ => (budget, used),
-            };
-            Json(json!({"gpu":{"probe":probe_name,"total_bytes":total,"used_bytes":used,"free_bytes":total.saturating_sub(used),"budget_bytes":budget},
-                "models":instances.iter().map(|i|json!({"key":i.key,"state":format!("{:?}",i.state).to_lowercase(),"vram_bytes":i.bytes,"in_flight":i.in_flight})).collect::<Vec<_>>(),"queue":[]})).into_response()
+        })
+        .collect();
+    let queue: Vec<Value> = info
+        .queue
+        .iter()
+        .map(|(model, enqueued)| {
+            json!({"model": model, "waiting_secs": info.now_ms.saturating_sub(*enqueued) as f64 / 1000.0})
+        })
+        .collect();
+    Json(json!({
+        "gpu": {"probe": probe_name, "total_bytes": total, "used_bytes": used,
+                "free_bytes": total.saturating_sub(used), "budget_bytes": budget},
+        "models": models,
+        "queue": queue,
+    }))
+    .into_response()
+}
+async fn completions(
+    State(app): State<App>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let mut body = match json_body(body, false) {
+        Ok(v) => v,
+        Err(e) => return *e,
+    };
+    let prompt = match &body["prompt"] {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(items) if items.len() == 1 => items[0].as_str().map(str::to_owned),
+        _ => None,
+    };
+    let Some(prompt) = prompt else {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "prompt must be a string or a list with exactly one string",
+            false,
+        );
+    };
+    body["messages"] = json!([{"role": "user", "content": prompt}]);
+    complete(app, body, false, true).await
+}
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+async fn embeddings(
+    State(app): State<App>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let body = match json_body(body, false) {
+        Ok(v) => v,
+        Err(e) => return *e,
+    };
+    let config = app.config.get();
+    let Some(model) = config
+        .model
+        .iter()
+        .find(|m| Some(m.key.as_str()) == body["model"].as_str())
+    else {
+        return error(Error::UnknownModel, false);
+    };
+    if model.kind != ModelKind::Embedding {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Model is not an embedding model",
+            false,
+        );
+    }
+    let input: Option<Vec<String>> = match &body["input"] {
+        Value::String(text) => Some(vec![text.clone()]),
+        Value::Array(items) if !items.is_empty() => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_owned))
+            .collect(),
+        _ => None,
+    };
+    let Some(input) = input else {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "input must be a string or a non-empty list of strings",
+            false,
+        );
+    };
+    let spec = match spec(&app, &json!({"model": model.key})) {
+        Ok(v) => v,
+        Err(e) => return error(e, false),
+    };
+    let lease = match app.supervisor.acquire(spec.clone()).await {
+        Ok(v) => v,
+        Err(e) => return error(e, false),
+    };
+    let request = eliezer_backend::EmbedRequest {
+        model: spec.model.clone(),
+        input,
+    };
+    match app
+        .supervisor
+        .embed(&lease, request, app.backend.as_ref())
+        .await
+    {
+        Ok(result) => Json(json!({
+            "object": "list",
+            "model": spec.model,
+            "data": result.vectors.iter().enumerate()
+                .map(|(index, vector)| json!({"object": "embedding", "index": index, "embedding": vector}))
+                .collect::<Vec<_>>(),
+            "usage": {"prompt_tokens": result.input_tokens, "total_tokens": result.input_tokens},
+        }))
+        .into_response(),
+        Err(e) => error(e, false),
+    }
+}
+fn valid_size(size: &str) -> bool {
+    size.split_once('x').is_some_and(|(w, h)| {
+        [w, h]
+            .iter()
+            .all(|part| (2..=4).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+async fn images(
+    State(app): State<App>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let body = match json_body(body, false) {
+        Ok(v) => v,
+        Err(e) => return *e,
+    };
+    let bad = |message: &str| failure(StatusCode::BAD_REQUEST, "invalid_request", message, false);
+    let config = app.config.get();
+    let model = match body["model"].as_str() {
+        Some(key) => match config.model.iter().find(|m| m.key == key) {
+            Some(model) => model,
+            None => return error(Error::UnknownModel, false),
+        },
+        None => {
+            let mut images = config.model.iter().filter(|m| m.kind == ModelKind::Image);
+            match (images.next(), images.next()) {
+                (Some(only), None) => only,
+                _ => return bad("model is required when there is not exactly one image model"),
+            }
         }
+    };
+    if model.kind != ModelKind::Image {
+        return bad("Model is not an image model");
+    }
+    let Some(prompt) = body["prompt"].as_str().filter(|p| !p.trim().is_empty()) else {
+        return bad("prompt must be a non-empty string");
+    };
+    let count = match body.get("n") {
+        None => 1,
+        Some(n) => match n.as_u64().filter(|n| (1..=4).contains(n)) {
+            Some(n) => n as u32,
+            None => return bad("n must be between 1 and 4"),
+        },
+    };
+    if body.get("response_format").is_some_and(|f| f != "b64_json") {
+        return bad("Only response_format b64_json is supported");
+    }
+    let size = match body.get("size") {
+        None => None,
+        Some(Value::String(size)) if valid_size(size) => Some(size.clone()),
+        Some(_) => return bad("size must look like 512x512"),
+    };
+    let spec = match spec(&app, &json!({"model": model.key})) {
+        Ok(v) => v,
+        Err(e) => return error(e, false),
+    };
+    let lease = match app.supervisor.acquire(spec.clone()).await {
+        Ok(v) => v,
+        Err(e) => return error(e, false),
+    };
+    let request = eliezer_backend::ImageRequest {
+        model: spec.model,
+        prompt: prompt.to_owned(),
+        count,
+        size,
+    };
+    match app
+        .supervisor
+        .image(&lease, request, app.backend.as_ref())
+        .await
+    {
+        Ok(images) => Json(json!({
+            "created": unix_now(),
+            "data": images.iter().map(|b64| json!({"b64_json": b64})).collect::<Vec<_>>(),
+        }))
+        .into_response(),
         Err(e) => error(e, false),
     }
 }
@@ -296,7 +541,7 @@ async fn chat(
     body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     match json_body(body, false) {
-        Ok(v) => complete(app, v, false).await,
+        Ok(v) => complete(app, v, false, false).await,
         Err(e) => *e,
     }
 }
@@ -308,8 +553,8 @@ async fn messages(
         Ok(v) => v,
         Err(e) => return *e,
     };
-    let Some(model) = app
-        .config
+    let config = app.config.get();
+    let Some(model) = config
         .model
         .iter()
         .find(|m| Some(m.key.as_str()) == body["model"].as_str())
@@ -322,7 +567,7 @@ async fn messages(
         .map(|r| r.options.as_slice())
         .unwrap_or(&[]);
     match anthropic::request(&body, options) {
-        Ok(v) => complete(app, v, true).await,
+        Ok(v) => complete(app, v, true, false).await,
         Err(message) => failure(StatusCode::BAD_REQUEST, "invalid_request", message, true),
     }
 }
@@ -334,8 +579,8 @@ async fn count_tokens(
         Ok(v) => v,
         Err(e) => return *e,
     };
-    let Some(model) = app
-        .config
+    let config = app.config.get();
+    let Some(model) = config
         .model
         .iter()
         .find(|m| Some(m.key.as_str()) == body["model"].as_str())
@@ -363,14 +608,23 @@ async fn count_tokens(
     )
         .into_response()
 }
-async fn complete(app: App, mut body: Value, anth: bool) -> Response {
+async fn complete(app: App, mut body: Value, anth: bool, completion: bool) -> Response {
     let spec = match spec(&app, &body) {
         Ok(v) => v,
         Err(e) => return error(e, anth),
     };
-    let Some(model) = app.config.model.iter().find(|m| m.key == spec.model) else {
+    let config = app.config.get();
+    let Some(model) = config.model.iter().find(|m| m.key == spec.model) else {
         return error(Error::UnknownModel, anth);
     };
+    if model.kind != ModelKind::Llm {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Model does not support chat",
+            anth,
+        );
+    }
     if !body["messages"].is_array() {
         return failure(
             StatusCode::BAD_REQUEST,
@@ -425,8 +679,11 @@ async fn complete(app: App, mut body: Value, anth: bool) -> Response {
             chunks,
             tx,
             spec.model,
-            anth,
-            body["stream_options"]["include_usage"] == true,
+            StreamOptions {
+                anth,
+                usage: body["stream_options"]["include_usage"] == true,
+                completion,
+            },
         ));
         return (
             [
@@ -477,9 +734,16 @@ async fn complete(app: App, mut body: Value, anth: bool) -> Response {
             }
         }
     }
-    let Some((finish, input, output)) = done else {
+    let Some(done) = done else {
         return error(Error::Backend, anth);
     };
+    let (finish, input, output) = done.clone();
+    if completion {
+        return Json(json!({"id":"cmpl_eliezer","object":"text_completion","created":unix_now(),"model":spec.model,
+            "choices":[{"index":0,"text":text,"finish_reason":done.0}],
+            "usage":{"prompt_tokens":done.1,"completion_tokens":done.2,"total_tokens":done.1+done.2}}))
+        .into_response();
+    }
     let mut message = json!({"role":"assistant","content":text});
     if !thinking.is_empty() {
         message["reasoning_content"] = json!(thinking);
@@ -508,16 +772,31 @@ async fn send(tx: &mpsc::Sender<String>, event: Option<&str>, data: Value) -> bo
     let prefix = event.map(|e| format!("event: {e}\n")).unwrap_or_default();
     tx.send(format!("{prefix}data: {data}\n\n")).await.is_ok()
 }
+/// Which dialect a stream speaks and whether it ends with a usage block.
+struct StreamOptions {
+    anth: bool,
+    usage: bool,
+    completion: bool,
+}
 async fn stream_response(
     app: App,
     lease: Lease,
     mut chunks: mpsc::Receiver<Result<Chunk, eliezer_backend::BackendError>>,
     tx: mpsc::Sender<String>,
     model: String,
-    anth: bool,
-    usage: bool,
+    options: StreamOptions,
 ) {
+    let StreamOptions {
+        anth,
+        usage,
+        completion,
+    } = options;
     let _lease = lease;
+    let (id, object) = if completion {
+        ("cmpl_eliezer", "text_completion")
+    } else {
+        ("chatcmpl_eliezer", "chat.completion.chunk")
+    };
     let start = std::time::Instant::now();
     let mut first = None;
     let mut block: Option<(usize, String)> = None;
@@ -560,13 +839,21 @@ async fn stream_response(
                 if !send(&tx,Some("message_delta"),json!({"type":"message_delta","delta":{"stop_reason":anthropic::stop_reason(&finish_reason),"stop_sequence":null},"usage":{"output_tokens":output_tokens}})).await{return;}
                 let _ = send(&tx, Some("message_stop"), json!({"type":"message_stop"})).await;
             } else {
-                if !send(&tx,None,json!({"id":"chatcmpl_eliezer","object":"chat.completion.chunk","created":0,"model":model,"choices":[{"index":0,"delta":{},"finish_reason":finish_reason}]})).await{return;}
-                if usage && !send(&tx,None,json!({"id":"chatcmpl_eliezer","object":"chat.completion.chunk","created":0,"model":model,"choices":[],"usage":{"prompt_tokens":input_tokens,"completion_tokens":output_tokens,"total_tokens":input_tokens+output_tokens},"eliezer":{"ttft_ms":first.unwrap_or(0),"gen_ms":start.elapsed().as_millis(),"tokens":output_tokens}})).await{return;}
+                if !send(&tx,None,json!({"id":id,"object":object,"created":0,"model":model,"choices":[if completion {json!({"index":0,"text":"","finish_reason":finish_reason})} else {json!({"index":0,"delta":{},"finish_reason":finish_reason})}]})).await{return;}
+                if usage && !send(&tx,None,json!({"id":id,"object":object,"created":0,"model":model,"choices":[],"usage":{"prompt_tokens":input_tokens,"completion_tokens":output_tokens,"total_tokens":input_tokens+output_tokens},"eliezer":{"ttft_ms":first.unwrap_or(0),"gen_ms":start.elapsed().as_millis(),"tokens":output_tokens}})).await{return;}
                 let _ = tx.send("data: [DONE]\n\n".into()).await;
             }
             return;
         }
         if !anth {
+            if completion {
+                // Plain completions carry text only; reasoning and tool calls have no place in them.
+                let Chunk::Text(text) = chunk else {
+                    continue;
+                };
+                if !send(&tx,None,json!({"id":id,"object":object,"created":0,"model":model,"choices":[{"index":0,"text":text,"finish_reason":null}]})).await{return;}
+                continue;
+            }
             let delta = match chunk {
                 Chunk::Text(s) => json!({"content":s}),
                 Chunk::Thinking(s) => json!({"reasoning_content":s}),
@@ -580,7 +867,7 @@ async fn stream_response(
                 }
                 _ => return,
             };
-            if !send(&tx,None,json!({"id":"chatcmpl_eliezer","object":"chat.completion.chunk","created":0,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]})).await{return;}
+            if !send(&tx,None,json!({"id":id,"object":object,"created":0,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]})).await{return;}
         } else {
             let (kind, initial, delta) = match chunk {
                 Chunk::Text(s) => (
