@@ -1,3 +1,18 @@
+eliezer (0.3.0) UNRELEASED; urgency=low
+
+  * Berechne den VRAM-Bedarf je Architekturtyp und plane Laden, Verdrängen,
+    Anheften, Bündeln und Leerlauf über einen Zustandsautomaten mit Uhr-Trait.
+  * Messe die GPU-Belegung einheitlich über ein Trait (sysfs, nvidia-smi,
+    rocm-smi) mit Herstellererkennung, Zeitlimit und Rückfall auf Buchführung.
+  * Ergänze Backend-Trait, fake-backend und Verwalter-Task ohne echte Laufzeit.
+  * Stelle Verwaltungs-API, OpenAI- und Anthropic-Schnittstelle mit
+    ungepuffertem SSE, Anmeldung und einheitlichem Fehlerformat bereit.
+  * Binde Verwalter, Schlüsseldatei (0600) und GPU-Messung in das
+    Dienstprogramm ein; Laufzeiten folgen mit M4.
+  * Prüfe die Modellliste im Vertragstest gegen eine echte LM-Studio-Antwort.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 19:00:00 +0200
+
 eliezer (0.2.0) UNRELEASED; urgency=low
 
   * Lege den Rust-Workspace mit fünf Crates und GPL-3.0-only-Lizenz an.
