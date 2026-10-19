@@ -65,6 +65,7 @@ assets = [
     ["target/release/eliezer", "usr/bin/", "755"],
     ["../../packaging/config.default.toml", "etc/eliezer/config.toml", "644"],
     ["../../packaging/config.example.toml", "usr/share/doc/eliezer/examples/", "644"],
+    ["../../packaging/eliezer-models-in-home.conf.example", "usr/share/doc/eliezer/examples/", "644"],
     ["../../README.md", "usr/share/doc/eliezer/", "644"],
     ["../../INSTALL.MD", "usr/share/doc/eliezer/", "644"],
     ["../../packaging/deb/README.Debian", "usr/share/doc/eliezer/", "644"],

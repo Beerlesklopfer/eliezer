@@ -103,6 +103,21 @@ logs `restart_required`). An invalid configuration or a key file that is readabl
 others is rejected with a log line (`config_rejected`); the service keeps running with
 the previous state.
 
+## Model store outside `/var/lib/eliezer`
+
+By default the models live in `/var/lib/eliezer/models`, which the unit may write. If they live
+elsewhere, for example under `/home`, two things must change:
+
+1. `storage.models_dir` and `huggingface.cache_dir` in the configuration name the real directory.
+2. The unit hides `/home` from the service (`ProtectHome=true`), so a drop-in has to open that one
+   directory; `packaging/eliezer-models-in-home.conf.example` (installed under
+   `/usr/share/doc/eliezer/examples/`) shows how.
+
+Do **not** make `/var/lib/eliezer` a symbolic link to another directory: systemd refuses to use a
+symbolic link as the state directory and the service fails at start with `Failed at step
+STATE_DIRECTORY ... Too many levels of symbolic links`. Remove the link; systemd creates the real
+directory (it holds the service's state, not the models).
+
 ## Importing existing models (for example from LM Studio)
 
 Set the service account in the configuration so imported files belong to it:
