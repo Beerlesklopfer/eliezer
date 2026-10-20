@@ -176,6 +176,8 @@ pub fn arguments(model: &ImageModel, port: u16) -> Vec<OsString> {
     if let Some(method) = &model.sampling_method {
         args.extend(["--sampling-method".into(), method.clone().into()]);
     }
+    // Without this every request would start from the program's default seed (42) and draw the same picture.
+    args.extend(["--seed".into(), "-1".into()]);
     args.extend(["--log-level".into(), "warn".into()]);
     args
 }
@@ -359,9 +361,15 @@ impl Backend for SdcppBackend {
             if request.size.as_deref().is_some_and(|s| !valid_size(s)) {
                 return Err(BackendError::InvalidRequest);
             }
-            let prompt = clean_prompt(&request.prompt);
+            let mut prompt = clean_prompt(&request.prompt);
             if prompt.trim().is_empty() {
                 return Err(BackendError::InvalidRequest);
+            }
+            // The one native setting a request may carry, written by us and only ever a number.
+            if let Some(seed) = request.seed {
+                prompt.push_str(&format!(
+                    " <sd_cpp_extra_args>{{\"seed\":{seed}}}</sd_cpp_extra_args>"
+                ));
             }
             let mut body = serde_json::json!({
                 "prompt": prompt,

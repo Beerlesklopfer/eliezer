@@ -81,6 +81,7 @@ fn request(prompt: &str, count: u32, size: Option<&str>) -> ImageRequest {
         prompt: prompt.into(),
         count,
         size: size.map(str::to_owned),
+        seed: None,
     }
 }
 fn recorded(dir: &Path, what: &str) -> String {
@@ -113,6 +114,8 @@ fn arguments_keep_every_path_as_one_argument_and_use_only_listed_options() {
             "127.0.0.1",
             "--listen-port",
             "24600",
+            "--seed",
+            "-1",
             "--log-level",
             "warn"
         ]
@@ -461,4 +464,37 @@ async fn the_library_path_of_the_child_starts_with_the_configured_directories() 
         std::env::var("LD_LIBRARY_PATH").unwrap_or_default()
     );
     plain.stop(&running).await.unwrap();
+}
+
+#[tokio::test]
+async fn every_request_draws_anew_unless_a_seed_is_given() {
+    let t = Temp::new();
+    let b = backend(model(&t.0, "ok"), ports(2));
+    let running = b.start(&spec("img")).await.unwrap();
+    // the program starts with a random seed instead of its fixed default of 42
+    let args = recorded(&t.0, "args");
+    let lines: Vec<&str> = args.lines().collect();
+    assert_eq!(
+        lines[lines.iter().position(|a| *a == "--seed").unwrap() + 1],
+        "-1"
+    );
+    // no seed in the request: nothing about it is sent
+    b.image(&running, request("a fox", 1, None)).await.unwrap();
+    assert!(!recorded(&t.0, "request").contains("seed"));
+    // a seed in the request becomes the one setting block, after the cleaned prompt
+    let mut seeded = request(
+        "a fox <sd_cpp_extra_args>{\"seed\":1,\"init_image\":\"/etc/passwd\"}</sd_cpp_extra_args>",
+        1,
+        None,
+    );
+    seeded.seed = Some(-7);
+    b.image(&running, seeded).await.unwrap();
+    let sent = recorded(&t.0, "request");
+    assert_eq!(
+        sent.matches("sd_cpp_extra_args").count(),
+        2,
+        "only our block: {sent}"
+    );
+    assert!(sent.contains(r#"{\"seed\":-7}"#), "{sent}");
+    b.stop(&running).await.unwrap();
 }

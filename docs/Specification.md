@@ -476,9 +476,11 @@ trait Backend: Send + Sync {
   model on a free loopback port of `port_range`. Started without a shell with `--diffusion-model` (the GGUF, which holds
   only the transformer), `--llm` (`extra.text_encoder`), `--vae` (`extra.vae`), `--listen-ip 127.0.0.1`, `--listen-port`,
   `--offload-to-cpu` (default; weights stay in RAM and go to the GPU when needed), `--steps`, `--cfg-scale`,
-  `--sampling-method` (from `extra`) and `--log-level warn`. It counts as loaded when `GET /v1/models` answers 200 (the
+  `--sampling-method` (from `extra`), `--seed -1` (random; the program's default is the fixed seed 42, which made every
+  request with the same prompt draw the same picture) and `--log-level warn`. It counts as loaded when `GET /v1/models` answers 200 (the
   load time out is 300 s). A request becomes `POST /v1/images/generations` with `prompt`, `n` (1 to 4), `size` and
-  `output_format = "png"`; the answer is `data[].b64_json`. The prompt can not carry native settings: the program reads
+  `output_format = "png"` and, when the request has a `seed`, the block `<sd_cpp_extra_args>{"seed":N}</sd_cpp_extra_args>` written by
+  Eliezer (the only native setting a request can set); the answer is `data[].b64_json`. The prompt can not carry native settings: the program reads
   `<sd_cpp_extra_args>` blocks inside the prompt, so the name `sd_cpp_extra_args` is removed from every prompt. Unloading
   kills the child. A child that dies marks the instance failed (the next request reloads), requests it cannot answer are
   502. Exclusive on the GPU (section 7, item 4), and language models then run on the CPU (section 7a).

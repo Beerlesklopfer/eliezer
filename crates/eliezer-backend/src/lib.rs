@@ -115,6 +115,8 @@ pub struct ImageRequest {
     pub prompt: String,
     pub count: u32,
     pub size: Option<String>,
+    /// The start value of the random numbers; without one every request draws a new picture.
+    pub seed: Option<i64>,
 }
 /// Embedded runtimes use handles; the interface does not require an HTTP endpoint.
 pub trait Backend: Send + Sync {

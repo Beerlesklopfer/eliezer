@@ -793,6 +793,13 @@ async fn images(
     if body.get("response_format").is_some_and(|f| f != "b64_json") {
         return bad("Only response_format b64_json is supported");
     }
+    let seed = match body.get("seed") {
+        None | Some(Value::Null) => None,
+        Some(seed) => match seed.as_i64() {
+            Some(seed) => Some(seed),
+            None => return bad("seed must be a whole number"),
+        },
+    };
     let size = match body.get("size") {
         None => None,
         Some(Value::String(size)) if valid_size(size) => Some(size.clone()),
@@ -811,6 +818,7 @@ async fn images(
         prompt: prompt.to_owned(),
         count,
         size,
+        seed,
     };
     match app
         .supervisor
