@@ -756,6 +756,12 @@ fn run_download(
 }
 
 fn cmd_rm(client: &Client, json: bool, repo: &str) -> Res<()> {
+    if repo.split('/').count() != 2 {
+        return Err(Failure::Usage(format!(
+            "'{repo}' is not a repository: write ORG/REPO as `eliezer pins` lists it (a model key from \
+             `eliezer ls` names a configured model, not the files in the store)"
+        )));
+    }
     let result = call(
         client,
         "DELETE",
