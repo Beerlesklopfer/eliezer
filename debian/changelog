@@ -19,7 +19,8 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     `POST /v1/audio/speech` (lyrics as `input`, the description as `instructions`, WAV as the answer) with
     `capabilities.music_generation`. The package directory is `source.file`; `extra` takes `language_model`, `rvq_depth_decoder`,
     `flow_transformer`, `duration_sec`, `steps` and `cfg_scale`. `scripts/build-audiocpp.sh` builds the program (pinned commit,
-    HIP); `scripts/build-deb.sh rocm` bundles it as `/usr/libexec/<triplet>/eliezer/audiocpp_server`.
+    HIP); `scripts/build-deb.sh rocm` bundles it as `/usr/libexec/<triplet>/eliezer/audiocpp_server`. Checked live on the Radeon RX
+    7900 XTX: a 20 s song in 1 min 20 s (including the load), a 30 s song in 2 min 32 s.
   * A picture request that fails no longer takes the model down: a request the program refused is answered with 400,
     and a picture that could not be drawn marks the model as crashed only when its program no longer answers.
     Before, any failure marked the model failed, which dropped it and the jobs other requests had running on it.

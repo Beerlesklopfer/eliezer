@@ -130,3 +130,25 @@ Built with HIP for gfx1100 as in `tests/runtime/sdcpp/README.md` (`-DSD_HIPBLAS=
   passes per step (CFG) and a 9B text encoder.
 - The server also offers an asynchronous native API (`/sdcpp/v1/img_gen`, `/jobs/{id}`, cancel); Eliezer does not use it yet.
 
+## audio.cpp `audiocpp_server` (checked 2026-10-20, commit 18bba55)
+
+Apache-2.0, ggml based, built with HIP for gfx1100 by `scripts/build-audiocpp.sh` (`--backend hip --model-set custom --models
+minimax_music3 --target audiocpp_server`; the server is 223 MB). The model package is `audio-cpp/MiniMax-Music3-GGUF`
+(MiniMax Music 3 community license; Q4_0 language model 6.0 GB, Q4_0 flow transformer 1.4 GB, Q8_0 RVQ depth decoder 0.7 GB,
+condition encoder and vocoder 0.3 GB; 8.4 GB in all).
+
+- Start: `audiocpp_server --config server.json --no-ui --log`. The JSON holds `host`, `port`, `backend` (`hip`), `device`,
+  `lazy_load`, `max_loaded_models`, `ui`, `busy_timeout_ms` and `models` (`id`, `family = minimax_music3`, `path` = the package
+  directory, `task = gen`, `mode = offline`, `session_options` with `minimax_music3.language_model_gguf`,
+  `minimax_music3.rvq_depth_decoder_gguf`, `minimax_music3.flow_transformer_gguf` and `minimax_music3.mem_saver`,
+  `default_request_options` with `num_inference_steps` and `guidance_scale`).
+- Ready: `GET /v1/models` lists the model with `"loaded": true` (with `lazy_load = false`); `GET /health` answers at once.
+- Compose: `POST /v1/audio/speech` with `model` (the entry's `id`), `input` (the music description; the program calls it the
+  text), `response_format = "wav"` and `options` (`lyrics`, `duration_sec`, `seed`, `num_inference_steps`); the answer is the WAV
+  file. `duration_sec` is a frame budget, not a hard length. Errors: `500` with `{"error": {"message", "type"}}` (for example a missing component file).
+- The program runs one request per model at a time; a second request waits (`busy_timeout_ms = 0` switches the 5 minute limit of the program off).
+- Measured on the Radeon RX 7900 XTX through the service: a 20 s song in 1 min 20 s including the load (3 s), the output is 44.1 kHz,
+  16 bit, stereo; a warm 30 s song in 2 min 32 s (about 5 times real time, much slower than the 1.35 times of the CUDA numbers
+  in the package's README); the weights sit in VRAM only while a stage needs them (`mem_saver`). The output is not silent and varies in
+  loudness (checked by the sample values; not listened to). Stopping the service leaves no `audiocpp_server` process and no directory behind.
+

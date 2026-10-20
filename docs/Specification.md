@@ -304,7 +304,7 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
 - `POST /v1/audio/speech` (the shape of the speech API of the model's serving framework: JSON with `model`, `input` = the
   lyrics, `instructions` = the description of the music (genre, mood, vocals, instruments), `duration_sec` (1 to 300),
   `seed`, `response_format = "wav"`) for models with `kind = "music"` (`capabilities.music_generation`); the answer is the WAV
-  file (`audio/wav`, 32 kHz, 16 bit, stereo). Lyrics may carry section tags such as `[verse]` and `[chorus]`. `model` can be
+  file (`audio/wav`, 16 bit, stereo; 44.1 kHz as measured with audio.cpp). Lyrics may carry section tags such as `[verse]` and `[chorus]`. `model` can be
   left out when exactly one music model is configured. The length is a budget: the song can end earlier.
 - Streaming statistics: in the last SSE chunk of the chat response additionally `"eliezer": {"ttft_ms", "gen_ms",
   "tokens"}` (MultiGPT measures on its own and ignores it; Eliezer serves as a cross-check).
