@@ -1260,3 +1260,28 @@ fn a_failed_download_ends_with_the_reason_and_exit_code_1() {
         err(&result)
     );
 }
+
+#[test]
+fn status_and_ps_show_the_downloads_that_run_or_wait() {
+    let mut status = sample_status();
+    status["downloads"] = json!([
+        {"repo": "org/waiting", "state": "queued", "done_bytes": 0, "total_bytes": 336_213_556_u64},
+        {"repo": "org/running", "state": "running", "done_bytes": 3_315_004_800_u64, "total_bytes": 4_280_405_792_u64},
+        {"repo": "org/finished", "state": "done", "done_bytes": 5, "total_bytes": 5},
+    ]);
+    let text = format::status_text("http://127.0.0.1:1234", "ok", &status);
+    assert!(text.contains("Downloads    2 active:"), "{text}");
+    assert!(
+        text.contains("org/running  running  77%  3.3 GB of 4.3 GB"),
+        "{text}"
+    );
+    assert!(text.contains("org/waiting  queued  0%"), "{text}");
+    assert!(!text.contains("org/finished"), "{text}");
+    let ps = format::ps_text(&sample_models(), &status);
+    assert!(
+        ps.contains("Downloads:") && ps.contains("org/running"),
+        "{ps}"
+    );
+    let idle = format::status_text("http://127.0.0.1:1234", "ok", &sample_status());
+    assert!(!idle.contains("Downloads"), "{idle}");
+}

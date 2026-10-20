@@ -10,6 +10,7 @@ eliezer (0.6.0) UNRELEASED; urgency=low
   * Add `DELETE /api/v1/models/pins/{org}/{repo}` and `eliezer rm ORG/REPO`: delete a repository fetched with
     `eliezer get`/`download`; refused while a download runs or a configured model uses its files. Only
     directories with a pin file are touched.
+  * `eliezer status` and `eliezer ps` list downloads that run or wait, with percent and bytes.
   * Show the download progress of `eliezer get`/`download` in one line rewritten in place on a terminal; in a
     pipe the line still changes only in steps of 5 %.
   * Add `POST /api/v1/models/estimate`: the memory Eliezer calculates for a model, context and parallelism,

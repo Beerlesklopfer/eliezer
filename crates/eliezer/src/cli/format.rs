@@ -203,9 +203,16 @@ pub fn ps_text(models: &Value, status: &Value) -> String {
             ]
         })
         .collect();
+    let downloads = active_downloads(status);
+    let downloads = if downloads.is_empty() {
+        String::new()
+    } else {
+        format!("\nDownloads:\n{}", downloads.join("\n") + "\n")
+    };
     if rows.is_empty() {
-        return "No models are currently loaded.\n\nTo load a model, run:\n\n    eliezer load <model>\n"
-            .to_owned();
+        return format!(
+            "No models are currently loaded.\n\nTo load a model, run:\n\n    eliezer load <model>\n{downloads}"
+        );
     }
     table(
         &[
@@ -221,7 +228,30 @@ pub fn ps_text(models: &Value, status: &Value) -> String {
         ],
         &rows,
         &[3, 4, 5, 7, 8],
-    )
+    ) + &downloads
+}
+
+/// One line per download that is running or waiting: `  unsloth/Qwen3-4B-GGUF  running  77%  3.3 GB of 4.3 GB`.
+fn active_downloads(status: &Value) -> Vec<String> {
+    status["downloads"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|j| matches!(j["state"].as_str(), Some("running" | "queued")))
+        .map(|j| {
+            let done = j["done_bytes"].as_u64().unwrap_or(0);
+            let total = j["total_bytes"].as_u64().unwrap_or(0);
+            let percent = (done * 100).checked_div(total).unwrap_or(0);
+            format!(
+                "  {}  {}  {percent}%  {} of {}",
+                j["repo"].as_str().unwrap_or("?"),
+                j["state"].as_str().unwrap_or("?"),
+                bytes(done),
+                bytes(total)
+            )
+        })
+        .collect()
 }
 
 /// `eliezer status`.
@@ -271,6 +301,16 @@ pub fn status_text(base: &str, health: &str, status: &Value) -> String {
         ),
         _ => String::new(),
     };
+    let active = active_downloads(status);
+    let downloads = if active.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Downloads    {} active:\n{}\n",
+            active.len(),
+            active.join("\n")
+        )
+    };
     let cpu = &status["cpu"];
     let cpu_text = match cpu["budget_bytes"].as_u64() {
         Some(budget) if budget > 0 => format!(
@@ -289,7 +329,7 @@ pub fn status_text(base: &str, health: &str, status: &Value) -> String {
          GPU free     {}\n\
          GPU budget   {}\n\
          {cpu_text}Models       {loaded} loaded of {} configured\n\
-         Queue        {queue_text}\n{hint}",
+         Queue        {queue_text}\n{downloads}{hint}",
         env!("CARGO_PKG_VERSION"),
         opt_bytes(&gpu["total_bytes"]),
         opt_bytes(&gpu["used_bytes"]),
