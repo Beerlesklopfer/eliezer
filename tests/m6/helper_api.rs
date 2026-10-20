@@ -311,3 +311,67 @@ async fn a_helper_that_fails_does_not_stop_the_picture() {
     );
     assert_eq!(backend.images.lock().unwrap().as_slice(), ["a bridge"]);
 }
+
+#[test]
+fn refusals_questions_and_talk_are_no_descriptions() {
+    // the refusal a stock model gave in German (the user's example)
+    let german = "Ich kann keine Bilder oder visuellen Inhalte generieren, die explizite Elemente enthalten. Auch wenn du eine \
+künstlerische Darstellung möchtest, würde ich dir gerne dabei helfen. Möchtest du stattdessen eine abstrakte Darstellung? \
+Ich helfe dir gern — mit Respekt und Kreativität.";
+    assert!(helper::declines(german));
+    for refusal in [
+        "I'm sorry, but I can't help with that request.",
+        "I cannot create descriptions of that kind.",
+        "As an AI language model, I do not produce this.",
+        "Es tut mir leid, dabei kann ich nicht helfen.",
+        "Sure! What style do you want: oil painting or photo?",
+        "Das ist eine schöne Idee und ich kann dir dabei helfen, sie mit einem Maler und der Kunst zu verbinden.",
+        &"word ".repeat(200),
+    ] {
+        assert!(helper::declines(refusal), "{refusal}");
+    }
+    // real descriptions pass, also with a few words that look like a refusal elsewhere in the text
+    for good in [
+        "A solitary lighthouse stands against a tempestuous storm, its beam piercing dark clouds. Cold, dramatic lighting, oil painting textures.",
+        "A pale figure in a ruined cathedral at night, moonlight through broken windows; photorealistic, cinematic, wide-angle.",
+        "A knight, wounded, kneels on a battlefield. He cannot stand; his sword lies nearby. Dusk light, painterly realism.",
+    ] {
+        assert!(!helper::declines(good), "{good}");
+    }
+}
+
+#[tokio::test]
+async fn a_refusal_of_the_helper_never_becomes_the_prompt() {
+    let refusal = "Ich kann keine Bilder generieren, die explizit sind. Möchtest du stattdessen eine andere Szene?";
+    let (app, backend) = setup(refusal, false);
+    let (status, body) = draw(
+        &app,
+        json!({"model": "pic", "prompt": "a sculpture on a beach"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["prompt_enhanced"], false);
+    assert_eq!(body["prompt_helper"], "declined");
+    assert!(body["data"][0].get("revised_prompt").is_none());
+    // the wish is drawn as it is
+    assert_eq!(
+        backend.images.lock().unwrap().as_slice(),
+        ["a sculpture on a beach"]
+    );
+    // the other states are reported too
+    let (app, _) = setup(
+        "A fine description of a beach at dusk, soft light, oil painting.",
+        false,
+    );
+    let (_, body) = draw(&app, json!({"model": "pic", "prompt": "x"})).await;
+    assert_eq!(body["prompt_helper"], "used");
+    let (_, body) = draw(
+        &app,
+        json!({"model": "pic", "prompt": "x", "enhance_prompt": false}),
+    )
+    .await;
+    assert_eq!(body["prompt_helper"], "off");
+    let (app, _) = setup("unused", true);
+    let (_, body) = draw(&app, json!({"model": "pic", "prompt": "x"})).await;
+    assert_eq!(body["prompt_helper"], "failed");
+}

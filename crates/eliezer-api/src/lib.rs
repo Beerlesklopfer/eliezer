@@ -796,9 +796,19 @@ async fn images(
         }
         Some(_) => return bad("enhance_prompt must be true or false"),
     };
-    let revised = match (&helper, enhance) {
-        (Some(key), true) => helper::revise(&app, key, prompt).await,
+    let outcome = match (&helper, enhance) {
+        (Some(key), true) => Some(helper::revise(&app, key, prompt).await),
         _ => None,
+    };
+    let revised = match &outcome {
+        Some(helper::Outcome::Revised(text)) => Some(text.clone()),
+        _ => None,
+    };
+    let helper_status = match &outcome {
+        None => "off",
+        Some(helper::Outcome::Revised(_)) => "used",
+        Some(helper::Outcome::Declined) => "declined",
+        Some(helper::Outcome::Failed) => "failed",
     };
     let prompt = revised.as_deref().unwrap_or(prompt);
     let count = match body.get("n") {
@@ -846,6 +856,7 @@ async fn images(
         Ok(images) => Json(json!({
             "created": unix_now(),
             "prompt_enhanced": revised.is_some(),
+            "prompt_helper": helper_status,
             "data": images
                 .iter()
                 .map(|b64| match &revised {

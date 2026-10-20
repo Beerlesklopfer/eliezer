@@ -47,16 +47,77 @@ pub fn clean(text: &str) -> Option<String> {
     Some(text.chars().take(MAX_PROMPT).collect())
 }
 
+/// What the helper made of a wish.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The description the picture is drawn from.
+    Revised(String),
+    /// The model answered, but with a refusal, a question or an answer that is no description. The wish is drawn as it is.
+    Declined,
+    /// The helper could not be started or gave no answer.
+    Failed,
+}
+
+/// Phrases with which language models refuse, in English and German.
+const REFUSALS: &[&str] = &[
+    "i can't",
+    "i cannot",
+    "i can not",
+    "i'm sorry",
+    "i am sorry",
+    "i'm unable",
+    "i am unable",
+    "i'm not able",
+    "i won't",
+    "i will not",
+    "as an ai",
+    "sorry,",
+    "ich kann keine",
+    "ich kann nicht",
+    "ich kann dir",
+    "ich kann leider",
+    "es tut mir leid",
+    "leider kann",
+    "entschuldigung",
+    "ich darf nicht",
+    "ich helfe dir",
+    "möchtest du",
+    "moechtest du",
+    "kann ich dir",
+];
+/// German function words: the helper is told to answer in English, so a German answer is a talk, not a description.
+const GERMAN: &[&str] = &[
+    " der ", " die ", " das ", " und ", " ich ", " nicht ", " ein ", " eine ", " mit ", " ist ",
+    " kann ", " du ", " dir ", " wir ", " oder ", " für ",
+];
+/// A description has at most this many words; a longer answer is a text of another kind.
+const MAX_WORDS: usize = 160;
+
+/// Whether an answer is a refusal, a question or a talk rather than an image description.
+pub fn declines(text: &str) -> bool {
+    let lower = format!(" {} ", text.to_lowercase());
+    let start: String = lower.chars().take(160).collect();
+    REFUSALS.iter().any(|p| start.contains(p))
+        || text.contains('?')
+        || text.split_whitespace().count() > MAX_WORDS
+        || GERMAN.iter().filter(|w| lower.contains(*w)).count() >= 3
+}
+
 /// Asks the helper model `key` for a description of `wish`.
-pub async fn revise(app: &App, key: &str, wish: &str) -> Option<String> {
+pub async fn revise(app: &App, key: &str, wish: &str) -> Outcome {
     let config = app.config.get();
-    let model = config.model.iter().find(|m| m.key == key)?;
+    let Some(model) = config.model.iter().find(|m| m.key == key) else {
+        return Outcome::Failed;
+    };
     let context = model.default_context;
     let mut spec = eliezer_backend::LoadSpec {
         model: key.to_owned(),
         context,
         parallel: model.parallel,
-        bytes: eliezer_core::memory::estimate(model, context, model.parallel, None, None).ok()?,
+        bytes: match eliezer_core::memory::estimate(model, context, model.parallel, None, None) {
+            Ok(bytes) => bytes,
+            Err(_) => return Outcome::Failed,
+        },
         device: model.device,
     };
     // The image model takes the GPU; the helper writes on the CPU when there is room for it.
@@ -97,10 +158,14 @@ pub async fn revise(app: &App, key: &str, wish: &str) -> Option<String> {
         clean(&text)
     };
     match tokio::time::timeout(LIMIT, work).await {
-        Ok(Some(text)) => Some(text),
+        Ok(Some(text)) if declines(&text) => {
+            tracing::warn!(event = "prompt_helper_declined", model = %key, "The prompt helper refused or did not describe an image; the original prompt is used");
+            Outcome::Declined
+        }
+        Ok(Some(text)) => Outcome::Revised(text),
         _ => {
             tracing::warn!(event = "prompt_helper_failed", model = %key, "The prompt helper gave no description; the original prompt is used");
-            None
+            Outcome::Failed
         }
     }
 }

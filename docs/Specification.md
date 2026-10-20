@@ -141,7 +141,9 @@ key of a configured language model, see below); all optional, the program's own 
 **Prompt helper.** Short wishes ("a sunflower") give image models uneven results. With `extra.prompt_helper = "<key>"` the
 service lets that language model write one detailed English description of at most 80 words (subject, setting, lighting,
 mood, style) and draws from it. The helper runs on the CPU when `[cpu] ram_budget_gb` is set, so the image model keeps the
-GPU; it is an aid only: if it fails or answers nothing, the original prompt is used. A request can switch it off with
+GPU; it is an aid only: if it fails, answers nothing, or answers with a refusal, a question or a talk instead of a description
+(the stock models refuse some motives, in the language of the wish), the original prompt is used. `prompt_helper` in the answer
+is `used`, `off`, `failed` or `declined`. Which model is the helper is the administrator's choice. A request can switch it off with
 `"enhance_prompt": false` (`true` without a configured helper is 400). The answer carries `prompt_enhanced` and, per image,
 `revised_prompt`. A language model such as Qwen3-VL-8B-Instruct (the family of the Qwen Image text encoder) works well.
 
