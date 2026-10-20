@@ -111,5 +111,10 @@ Built with HIP for gfx1100 as in `tests/runtime/sdcpp/README.md` (`-DSD_HIPBLAS=
 - Measured with Qwen Image 2.1 Q4_K_M, the int8 encoder and the bf16 VAE, 20 steps, cfg 4: 512x512 in 13 s,
   768x512 twice in 50 s, 1024x1024 in 80 s. The weights stay in RAM (idle VRAM +0.6 GB); the VRAM rose by 6.4 GB at most
   during 1024x1024. A child exits when it is killed and leaves no process behind after unloading or a stop of the service.
+- FLUX.2 klein 4B (checked 2026-10-20, as `docs/flux2.md` of the commit describes): `--diffusion-model` the Q8_0 file of
+  `leejet/FLUX.2-klein-4B-GGUF`, `--llm` `Qwen3-4B-Q8_0.gguf` of `unsloth/Qwen3-4B-GGUF`, `--vae`
+  `split_files/vae/flux2-vae.safetensors` of `Comfy-Org/flux2-dev` (same size as the VAE of the gated
+  `black-forest-labs/FLUX.2-dev`, but not gated), `--steps 4 --cfg-scale 1.0`. A fox at 1024x1024 took 12 s (2.4 s per step)
+  on the RX 7900 XTX; the picture is sharp and matches the prompt. Fetched with `eliezer download` (hash verified).
 - The server also offers an asynchronous native API (`/sdcpp/v1/img_gen`, `/jobs/{id}`, cancel); Eliezer does not use it yet.
 
