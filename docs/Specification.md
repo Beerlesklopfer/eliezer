@@ -109,11 +109,17 @@ program = "/usr/libexec/x86_64-linux-gnu/eliezer/sd-server"
 port_range = [24600, 24609]
 library_path = ["/usr/lib/x86_64-linux-gnu/eliezer", "/opt/rocm/lib/llvm/lib"]   # optional: libraries of the program (it has no run path)
 
+[backend.audiocpp]                     # optional: music models through audio.cpp (a child process per loaded model)
+program = "/usr/libexec/x86_64-linux-gnu/eliezer/audiocpp_server"
+port_range = [24700, 24709]            # must not overlap port_range of sdcpp or the service port
+compute = "hip"                        # "hip" (default) | "cuda" | "vulkan" | "cpu": the compute backend of the program
+# library_path = [...]                 # as for sdcpp
+
 [[model]]
 key = "qwen/qwen3-coder-30b"           # name used by MultiGPT
 backend = "mistralrs"
 source = { hf = "Qwen/Qwen3-Coder-30B-A3B-Instruct", revision = "main" }  # or { file = "/path/model.gguf" }
-kind = "llm"                           # "llm" | "embedding" | "image"
+kind = "llm"                           # "llm" | "embedding" | "image" | "music"
 priority = 10
 max_context = 131072
 default_context = 32768
@@ -133,6 +139,24 @@ priority = 5
 vram_gb = 14.0                         # a measured value always takes precedence over the calculation
 extra = { text_encoder = "/var/lib/eliezer/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/var/lib/eliezer/models/qwen_image_2.1_vae_bf16.safetensors", steps = 20, cfg_scale = 4.0, sampling_method = "euler", offload_to_cpu = true }
 ```
+
+A music model (`kind = "music"`, `backend = "audiocpp"`) names the package directory of audio.cpp in `source.file`
+(the component files, their configs and the tokenizer; `config.json` must be there) and needs `vram_gb` and the GPU:
+
+```toml
+[[model]]
+key = "music3"
+backend = "audiocpp"
+kind = "music"
+source = { file = "/var/lib/eliezer/models/audio-cpp/MiniMax-Music3-GGUF" }
+vram_gb = 10.0
+extra = { duration_sec = 30, steps = 30, cfg_scale = 1.7 }
+```
+
+`extra` of a music model: `language_model`, `rvq_depth_decoder` and `flow_transformer` (file names of `.gguf` files inside the
+package; default `language_model_q4_0.gguf`, `rvq_depth_decoder_q8_0.gguf`, `transformer_q4_0.gguf`), `duration_sec` (1 to 300,
+the length drawn when a request names none; default 30), `steps` (flow matching steps) and `cfg_scale` (flow guidance scale).
+`size_bytes` of the model list is the sum of the five component files that are in use.
 
 `extra` of an image model: `text_encoder`, `vae` and `tokenizer` (paths; `tokenizer` is the external `tokenizer.json` that MOSS-Image needs, passed as `--tokenizer`), `steps` (1 to 150), `cfg_scale` (0 to 30),
 `sampling_method` (one of the methods of stable-diffusion.cpp), `offload_to_cpu` (default true) and `prompt_helper` (the
@@ -277,6 +301,11 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
   (`capabilities.image_edit` in the model list); same response. The files are checked by their first bytes and size and
   passed to `sd-server` as `POST /v1/images/edits` (reference pictures). `quality`, `background` and `output_format` are
   ignored, a `mask` is refused (400), a picture over 20 MB gives 413.
+- `POST /v1/audio/speech` (the shape of the speech API of the model's serving framework: JSON with `model`, `input` = the
+  lyrics, `instructions` = the description of the music (genre, mood, vocals, instruments), `duration_sec` (1 to 300),
+  `seed`, `response_format = "wav"`) for models with `kind = "music"` (`capabilities.music_generation`); the answer is the WAV
+  file (`audio/wav`, 32 kHz, 16 bit, stereo). Lyrics may carry section tags such as `[verse]` and `[chorus]`. `model` can be
+  left out when exactly one music model is configured. The length is a budget: the song can end earlier.
 - Streaming statistics: in the last SSE chunk of the chat response additionally `"eliezer": {"ttft_ms", "gen_ms",
   "tokens"}` (MultiGPT measures on its own and ignores it; Eliezer serves as a cross-check).
 
@@ -498,6 +527,18 @@ trait Backend: Send + Sync {
   `<sd_cpp_extra_args>` blocks inside the prompt, so the name `sd_cpp_extra_args` is removed from every prompt. Unloading
   kills the child. A child that dies marks the instance failed (the next request reloads), requests it cannot answer are
   502. Exclusive on the GPU (section 7, item 4), and language models then run on the CPU (section 7a).
+- **audiocpp (M7):** Child process `audiocpp_server` (audio.cpp, `[backend.audiocpp] program`) for each loaded music model on a free
+  loopback port of `port_range`. The service writes the program's configuration file into a private directory (mode 0700, file
+  0600, removed when the model is unloaded) and starts it without a shell with `--config FILE --no-ui --log`. The file holds the
+  loopback address, the port, the compute backend (`compute`), `lazy_load = false` (the weights go to the GPU at start),
+  `busy_timeout_ms = 0` (waiting is the service's job) and one model: family `minimax_music3`, task `gen`, the package
+  directory, the three component files as session options and `mem_saver = true` (large stages are loaded only while needed).
+  The model counts as loaded when `GET /v1/models` lists it with `loaded = true` (load time out 600 s). A request becomes
+  `POST /v1/audio/speech` with the description as `input` and the lyrics, `duration_sec`, `seed` and `num_inference_steps` as
+  `options`; the answer must be a WAV file. Request text is only ever a JSON string. Exclusive on the GPU like an image model
+  (section 7, item 4; language models then run on the CPU, section 7a). A request that fails does not take the model down while
+  its program still answers (the same holds for image models): `400` for what the program refuses, `502` for a song it could not
+  compose; only a program that no longer answers marks the model failed.
 - **fake:** Test bench: configurable load time, VRAM demand, responses, crashes; basis of all tests.
 - Environment of child processes: only `HF_HOME`, `HF_TOKEN` (read from the file, not passed through from the
   parent environment), `PATH` and the vendor's device selection (`CUDA_VISIBLE_DEVICES` or `HIP_VISIBLE_DEVICES`/`ROCR_VISIBLE_DEVICES`). Never tokens in arguments.

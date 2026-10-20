@@ -49,6 +49,23 @@ port_range = [24600, 24609]
 # An image model that edits pictures (POST /v1/images/edits) has `extra = { ..., image_edit = true }`, for example
 # FLUX.2 klein 4B (text_encoder: Qwen3-4B, steps = 4, cfg_scale = 1.0).
 
+# Music models (MiniMax Music 3) through audio.cpp: POST /v1/audio/speech with lyrics (`input`) and a description of the
+# music (`instructions`). Uncomment both blocks and download the package with
+# `eliezer download audio-cpp/MiniMax-Music3-GGUF config.json config/*.json tokenizer/tokenizer.json tokenizer/tokenizer_config.json
+#  condition_encoder.gguf rvq_depth_decoder_q8_0.gguf transformer_q4_0.gguf vocoder.gguf language_model_q4_0.gguf` (about 8.4 GB).
+# [backend.audiocpp]
+# program = "/usr/libexec/x86_64-linux-gnu/eliezer/audiocpp_server"
+# port_range = [24700, 24709]
+# compute = "hip"                      # "hip" (AMD), "cuda", "vulkan" or "cpu"
+#
+# [[model]]
+# key = "music3"
+# backend = "audiocpp"
+# kind = "music"
+# source = { file = "/var/lib/eliezer/models/audio-cpp/MiniMax-Music3-GGUF" }   # the package directory
+# vram_gb = 10.0
+# extra = { duration_sec = 30, steps = 30, cfg_scale = 1.7 }
+
 [[model]]
 key = "qwen/qwen3-coder-30b"
 backend = "mistralrs"

@@ -32,6 +32,12 @@ if [ -e /usr/libexec/x86_64-linux-gnu/eliezer/sd-server ]; then
     ! grep -q "not found" /tmp/sd-dependencies || fail "unresolved dependency of sd-server"
     /usr/libexec/x86_64-linux-gnu/eliezer/sd-server --help 2>&1 | grep -q "stable-diffusion.cpp" || fail "sd-server does not start"
 fi
+if [ -e /usr/libexec/x86_64-linux-gnu/eliezer/audiocpp_server ]; then
+    [ -x /usr/libexec/x86_64-linux-gnu/eliezer/audiocpp_server ] || fail "audiocpp_server is not executable"
+    ldd /usr/libexec/x86_64-linux-gnu/eliezer/audiocpp_server > /tmp/audio-dependencies
+    ! grep -q "not found" /tmp/audio-dependencies || fail "unresolved dependency of audiocpp_server"
+    /usr/libexec/x86_64-linux-gnu/eliezer/audiocpp_server --help 2>&1 | grep -q "audiocpp_server" || fail "audiocpp_server does not start"
+fi
 ldd /usr/bin/eliezer > /tmp/dependencies
 ! grep -q "not found" /tmp/dependencies || fail "unresolved runtime dependency"
 ! grep -q /opt/ /tmp/dependencies || fail "runtime still depends on /opt"

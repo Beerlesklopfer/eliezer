@@ -14,6 +14,12 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     `extra.image_edit = true`, and `capabilities.image_edit` in the model list. The pictures are checked (type by first
     bytes, 20 MB each, at most four) and handed to `sd-server` as reference pictures. Checked live with FLUX.2 klein 4B:
     a fox edited blue in 27 s at 1024x1024. New dependency: axum feature `multipart` (crate `multer`).
+  * Add music models (MiniMax Music 3): `kind = "music"` with `backend = "audiocpp"` (new `[backend.audiocpp]` with `program`,
+    `port_range`, `compute`, `library_path`), served by `audiocpp_server` of audio.cpp as a child process per loaded model, and
+    `POST /v1/audio/speech` (lyrics as `input`, the description as `instructions`, WAV as the answer) with
+    `capabilities.music_generation`. The package directory is `source.file`; `extra` takes `language_model`, `rvq_depth_decoder`,
+    `flow_transformer`, `duration_sec`, `steps` and `cfg_scale`. `scripts/build-audiocpp.sh` builds the program (pinned commit,
+    HIP); `scripts/build-deb.sh rocm` bundles it as `/usr/libexec/<triplet>/eliezer/audiocpp_server`.
   * A picture request that fails no longer takes the model down: a request the program refused is answered with 400,
     and a picture that could not be drawn marks the model as crashed only when its program no longer answers.
     Before, any failure marked the model failed, which dropped it and the jobs other requests had running on it.
