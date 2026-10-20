@@ -49,6 +49,8 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     libraries the program needs (it has no run path). The ROCm package contains `sd-server` (built by `scripts/build-sdcpp.sh`) in
     its private multiarch directory `/usr/lib/<triplet>/eliezer/` with the libraries it needs (also `libomp`), so
     `[backend.sdcpp] program` is `/usr/lib/x86_64-linux-gnu/eliezer/sd-server` and no library path is needed.
+  * Show a size for models without `size_gb` (the size of their files; an image model counts its text encoder and VAE too) and no
+    context window for image models in the model list and `eliezer ls`.
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.6.0-1_amd64.deb.
 
