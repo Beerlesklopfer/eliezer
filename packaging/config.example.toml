@@ -45,6 +45,7 @@ max_loaded = 4
 [backend.sdcpp]
 program = "/usr/local/bin/sd-server"
 port_range = [24600, 24609]
+# library_path = ["/usr/lib/x86_64-linux-gnu/eliezer", "/opt/rocm/lib/llvm/lib"]   # ROCm libraries and libomp of sd-server
 
 [[model]]
 key = "qwen/qwen3-coder-30b"
@@ -67,4 +68,4 @@ source = { file = "/var/lib/eliezer/models/qwen-image-2.1-UC-Q4_K_M.gguf" }
 kind = "image"
 priority = 5
 vram_gb = 14.0
-extra = { text_encoder = "/var/lib/eliezer/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/var/lib/eliezer/models/qwen_image_2.1_vae_bf16.safetensors" }
+extra = { text_encoder = "/var/lib/eliezer/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/var/lib/eliezer/models/qwen_image_2.1_vae_bf16.safetensors", steps = 20, cfg_scale = 4.0 }

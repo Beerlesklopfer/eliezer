@@ -107,6 +107,7 @@ max_loaded = 4
 [backend.sdcpp]
 program = "/usr/local/bin/sd-server"
 port_range = [24600, 24609]
+library_path = ["/usr/lib/x86_64-linux-gnu/eliezer", "/opt/rocm/lib/llvm/lib"]   # optional: libraries of the program (it has no run path)
 
 [[model]]
 key = "qwen/qwen3-coder-30b"           # name used by MultiGPT
@@ -129,8 +130,12 @@ source = { file = "/var/lib/eliezer/models/qwen-image-2.1-UC-Q4_K_M.gguf" }
 kind = "image"
 priority = 5
 vram_gb = 14.0                         # a measured value always takes precedence over the calculation
-extra = { text_encoder = "/var/lib/eliezer/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/var/lib/eliezer/models/qwen_image_2.1_vae_bf16.safetensors" }
+extra = { text_encoder = "/var/lib/eliezer/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/var/lib/eliezer/models/qwen_image_2.1_vae_bf16.safetensors", steps = 20, cfg_scale = 4.0, sampling_method = "euler", offload_to_cpu = true }
 ```
+
+`extra` of an image model: `text_encoder` and `vae` (paths), `steps` (1 to 150), `cfg_scale` (0 to 30),
+`sampling_method` (one of the methods of stable-diffusion.cpp) and `offload_to_cpu` (default true); all optional, the
+program's own defaults apply to what is left out.
 
 Rules: unknown fields are an error (`#[serde(deny_unknown_fields)]`). `key` is unique.
 Errors at startup are reported with line and field (in English) and terminate the service with code 2.
@@ -466,9 +471,16 @@ trait Backend: Send + Sync {
     the linked llama.cpp.
   - **Loading/unloading, isolation, errors:** as with `mistralrs` (drop the handle, "VRAM free" measurement, `unload_leak`,
     panic catching, dedicated threads). A hard crash in C++ code terminates the process (systemd restarts it).
-- **sdcpp:** Child process for an image model; requests to `/v1/images/generations` are translated into its
-  interface (determined from the program in M1). The GGUF contains only the transformer: text encoder and VAE
-  come from `extra`. Exclusive (section 7, item 4).
+- **sdcpp (M6):** Child process `sd-server` (stable-diffusion.cpp, `[backend.sdcpp] program`) for each loaded image
+  model on a free loopback port of `port_range`. Started without a shell with `--diffusion-model` (the GGUF, which holds
+  only the transformer), `--llm` (`extra.text_encoder`), `--vae` (`extra.vae`), `--listen-ip 127.0.0.1`, `--listen-port`,
+  `--offload-to-cpu` (default; weights stay in RAM and go to the GPU when needed), `--steps`, `--cfg-scale`,
+  `--sampling-method` (from `extra`) and `--log-level warn`. It counts as loaded when `GET /v1/models` answers 200 (the
+  load time out is 300 s). A request becomes `POST /v1/images/generations` with `prompt`, `n` (1 to 4), `size` and
+  `output_format = "png"`; the answer is `data[].b64_json`. The prompt can not carry native settings: the program reads
+  `<sd_cpp_extra_args>` blocks inside the prompt, so the name `sd_cpp_extra_args` is removed from every prompt. Unloading
+  kills the child. A child that dies marks the instance failed (the next request reloads), requests it cannot answer are
+  502. Exclusive on the GPU (section 7, item 4), and language models then run on the CPU (section 7a).
 - **fake:** Test bench: configurable load time, VRAM demand, responses, crashes; basis of all tests.
 - Environment of child processes: only `HF_HOME`, `HF_TOKEN` (read from the file, not passed through from the
   parent environment), `PATH` and the vendor's device selection (`CUDA_VISIBLE_DEVICES` or `HIP_VISIBLE_DEVICES`/`ROCR_VISIBLE_DEVICES`). Never tokens in arguments.

@@ -95,3 +95,21 @@ Checked against the live service with `curl`, without a token; used by the searc
   `abenzerps/Qwen-Image-2.1-Uncensored-Quantized` (sha `7959e658915f52274897fb573ffeda49de8dc16b`,
   `gguf.architecture` = `qwen_image21`, files `text_encoders/…` and `vae/…`).
 - Status codes handled: 401, 403 and 404 as not found, 429 as busy, others as an unexpected answer.
+
+## stable-diffusion.cpp `sd-server` (checked 2026-10-20, commit b13a482)
+
+Built with HIP for gfx1100 as in `tests/runtime/sdcpp/README.md` (`-DSD_HIPBLAS=ON`), run through Eliezer's own adapter.
+
+- Start: `--diffusion-model FILE`, `--llm FILE` (text encoder; for Qwen Image the Qwen3-VL file), `--vae FILE`,
+  `--listen-ip`, `--listen-port`, `--offload-to-cpu`, `--steps N`, `--cfg-scale F`, `--sampling-method NAME`,
+  `--log-level warn`. The methods are those of `sd-server --help`.
+- Ready: `GET /v1/models` answers 200 (3 s after the start with Qwen Image 2.1 and the weights in RAM).
+- Draw: `POST /v1/images/generations` with `prompt`, `n`, `size` (`WIDTHxHEIGHT`) and `output_format` (`png`), answer
+  `created`, `output_format` and `data[].b64_json`.
+- Settings inside a prompt: `<sd_cpp_extra_args>{...}</sd_cpp_extra_args>` (documented in `examples/server/api.md`)
+  sets native options per request; Eliezer removes the name from user prompts.
+- Measured with Qwen Image 2.1 Q4_K_M, the int8 encoder and the bf16 VAE, 20 steps, cfg 4: 512x512 in 13 s,
+  768x512 twice in 50 s, 1024x1024 in 80 s. The weights stay in RAM (idle VRAM +0.6 GB); the VRAM rose by 6.4 GB at most
+  during 1024x1024. A child exits when it is killed and leaves no process behind after unloading or a stop of the service.
+- The server also offers an asynchronous native API (`/sdcpp/v1/img_gen`, `/jobs/{id}`, cancel); Eliezer does not use it yet.
+

@@ -40,6 +40,13 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     not fit the context window" to a system plus user message): the text goes in front of the first user message,
     checked live on Mistral in both dialects. Name a missing configuration section or field in the error message.
     A file download is no longer cut off by the 15 s limit of metadata requests (found with the first real download).
+  * Serve image models with stable-diffusion.cpp (M6): each loaded model is an `sd-server` child process on a loopback
+    port (`[backend.sdcpp]`), started without a shell, with a cleared environment and arguments from the configuration;
+    `/v1/images/generations` returns PNG images. New model settings `extra.steps`, `extra.cfg_scale`,
+    `extra.sampling_method` and `extra.offload_to_cpu`. A router sends models to llama.cpp or stable-diffusion.cpp. Checked
+    live with Qwen Image 2.1 (a photographic fox in 13 s at 512x512, 80 s at 1024x1024) and the GPU priority: Mistral
+    ran on the CPU while the image model held the GPU. `[backend.sdcpp] library_path` names the directories with the
+    libraries the program needs (it has no run path). The `sd-server` program is not part of the package yet.
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.6.0-1_amd64.deb.
 

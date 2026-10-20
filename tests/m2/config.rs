@@ -281,3 +281,36 @@ fn a_missing_section_is_named() {
         "{error}"
     );
 }
+
+#[test]
+fn the_library_path_of_the_image_program_is_checked() {
+    let base = "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\n[backend.sdcpp]\nprogram=\"/usr/local/bin/sd-server\"\nport_range=[24600,24609]\n";
+    let ok = format!(
+        "{base}library_path=[\"/usr/lib/x86_64-linux-gnu/eliezer\",\"/opt/rocm/lib/llvm/lib\"]\n"
+    );
+    assert_eq!(
+        Config::parse(&ok)
+            .unwrap()
+            .backend
+            .sdcpp
+            .unwrap()
+            .library_path
+            .len(),
+        2
+    );
+    assert!(
+        Config::parse(base)
+            .unwrap()
+            .backend
+            .sdcpp
+            .unwrap()
+            .library_path
+            .is_empty()
+    );
+    for bad in ["[\"relative\"]", "[\"/a/../b\"]", "[\"/a:/b\"]"] {
+        let error = Config::parse(&format!("{base}library_path={bad}\n"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("library_path"), "{bad}: {error}");
+    }
+}

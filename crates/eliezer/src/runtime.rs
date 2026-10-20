@@ -2,6 +2,7 @@
 use eliezer_api::{App, managed_router};
 use eliezer_backend::{
     Backend, LoadSpec,
+    routing::RoutingBackend,
     supervisor::{Model, Settings, Supervisor},
 };
 use eliezer_core::{
@@ -19,7 +20,6 @@ impl Clock for SystemClock {
     }
 }
 
-#[cfg(not(feature = "llamacpp"))]
 mod none {
     use eliezer_backend::{
         Backend, BackendError, BackendFuture, ChatRequest, Chunk, LoadSpec, Running,
@@ -47,7 +47,6 @@ mod none {
         }
     }
 }
-#[cfg(not(feature = "llamacpp"))]
 use none::NoBackend;
 
 /// Reads API keys (one line per key, `#` for comments); the file must be 0600.
@@ -103,43 +102,101 @@ fn models(config: &Config) -> Vec<Model> {
     out
 }
 
-/// The runtime that serves models: embedded llama.cpp when compiled in.
+/// The runtimes that serve models: embedded llama.cpp (when compiled in) for language and embedding models and
+/// stable-diffusion.cpp as a child process for image models (when `[backend.sdcpp]` is configured).
 struct Runtimes {
     backend: Arc<dyn Backend>,
+    router: Arc<RoutingBackend>,
     #[cfg(feature = "llamacpp")]
     llamacpp: Arc<eliezer_llamacpp::LlamaCppBackend>,
+    sdcpp: Option<Arc<eliezer_sdcpp::SdcppBackend>>,
 }
 impl Runtimes {
     fn new(config: &Config) -> Self {
         #[cfg(feature = "llamacpp")]
-        {
+        let (text, llamacpp): (Arc<dyn Backend>, _) = {
             // 999 offloads every layer to the GPU.
             let llamacpp = Arc::new(eliezer_llamacpp::LlamaCppBackend::new(999));
             llamacpp.set_models(llamacpp_models(config));
             tracing::info!(event = "runtime", "Embedded llama.cpp runtime is available");
-            Self {
-                backend: llamacpp.clone(),
-                llamacpp,
-            }
-        }
+            (llamacpp.clone(), llamacpp)
+        };
         #[cfg(not(feature = "llamacpp"))]
-        {
-            let _ = config;
+        let text: Arc<dyn Backend> = {
             tracing::warn!(
                 event = "no_runtime",
                 "This build contains no model runtime; loading models will fail"
             );
-            Self {
-                backend: Arc::new(NoBackend),
-            }
-        }
+            Arc::new(NoBackend)
+        };
+        let sdcpp = config.backend.sdcpp.as_ref().map(|sd| {
+            tracing::info!(
+                event = "runtime",
+                "Image models are served by stable-diffusion.cpp"
+            );
+            Arc::new(
+                eliezer_sdcpp::SdcppBackend::new(
+                    sd.program.clone(),
+                    (sd.port_range[0], sd.port_range[1]),
+                )
+                .with_library_path(sd.library_path.clone()),
+            )
+        });
+        let image: Arc<dyn Backend> = match &sdcpp {
+            Some(backend) => backend.clone(),
+            None => Arc::new(NoBackend),
+        };
+        let router = Arc::new(RoutingBackend::new(
+            text,
+            image,
+            eliezer_sdcpp::GENERATION_BASE,
+        ));
+        let runtimes = Self {
+            backend: router.clone(),
+            router,
+            #[cfg(feature = "llamacpp")]
+            llamacpp,
+            sdcpp,
+        };
+        runtimes.update(config);
+        runtimes
     }
     fn update(&self, config: &Config) {
         #[cfg(feature = "llamacpp")]
         self.llamacpp.set_models(llamacpp_models(config));
-        #[cfg(not(feature = "llamacpp"))]
-        let _ = config;
+        let images = sdcpp_models(config);
+        self.router
+            .set_image_models(images.keys().cloned().collect());
+        if let Some(sdcpp) = &self.sdcpp {
+            sdcpp.set_models(images);
+        }
     }
+}
+
+/// The image models of the configuration with the files and settings the child process needs, by key.
+fn sdcpp_models(config: &Config) -> std::collections::HashMap<String, eliezer_sdcpp::ImageModel> {
+    config
+        .model
+        .iter()
+        .filter(|m| {
+            m.backend == eliezer_core::config::BackendKind::Sdcpp && m.kind == ModelKind::Image
+        })
+        .filter_map(|m| {
+            let extra = m.extra.as_ref();
+            Some((
+                m.key.clone(),
+                eliezer_sdcpp::ImageModel {
+                    diffusion: m.source.file.clone()?,
+                    text_encoder: extra.and_then(|e| e.text_encoder.clone()),
+                    vae: extra.and_then(|e| e.vae.clone()),
+                    steps: extra.and_then(|e| e.steps),
+                    cfg_scale: extra.and_then(|e| e.cfg_scale),
+                    sampling_method: extra.and_then(|e| e.sampling_method.clone()),
+                    offload_to_cpu: extra.and_then(|e| e.offload_to_cpu).unwrap_or(true),
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Model files the llama.cpp runtime may load: only configured models of that backend, by key.

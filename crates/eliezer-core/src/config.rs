@@ -227,6 +227,10 @@ impl Default for EmbeddedBackendConfig {
 pub struct SdcppConfig {
     pub program: PathBuf,
     pub port_range: [u16; 2],
+    /// Directories with the shared libraries the program needs (the bundled ROCm libraries, `libomp`); they
+    /// are put in front of the library path of the child process.
+    #[serde(default)]
+    pub library_path: Vec<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -307,11 +311,43 @@ pub struct Architecture {
     pub linear_layers: Option<u32>,
     pub state_bytes: Option<u64>,
 }
+/// The sampling methods stable-diffusion.cpp offers (checked against `sd-server --help`).
+pub const SAMPLING_METHODS: &[&str] = &[
+    "euler",
+    "euler_a",
+    "heun",
+    "dpm2",
+    "dpm++2s_a",
+    "dpm++2m",
+    "dpm++2mv2",
+    "ipndm",
+    "ipndm_v",
+    "lcm",
+    "ddim_trailing",
+    "tcd",
+    "res_multistep",
+    "res_2s",
+    "er_sde",
+    "euler_cfg_pp",
+    "euler_a_cfg_pp",
+    "euler_ge",
+    "dpm++2m_sde",
+    "dpm++2m_sde_bt",
+    "lms",
+];
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExtraConfig {
     pub text_encoder: Option<PathBuf>,
     pub vae: Option<PathBuf>,
+    /// Sampling steps of an image model (default of the program: 20).
+    pub steps: Option<u32>,
+    /// Guidance scale (default of the program: 7.0).
+    pub cfg_scale: Option<f64>,
+    /// One of [`SAMPLING_METHODS`] (default: the program's choice for the model).
+    pub sampling_method: Option<String>,
+    /// Keep the weights in RAM and move them to the GPU when needed (default: yes, which saves VRAM).
+    pub offload_to_cpu: Option<bool>,
 }
 
 /// The caller also resolves existing symbolic links within paths that do not exist yet.
@@ -338,7 +374,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae steps cfg_scale sampling_method offload_to_cpu";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -692,6 +728,13 @@ impl Config {
                 "backend.sdcpp.program",
                 "Absolute program path without parent components required",
             )?;
+            for dir in &sd.library_path {
+                check(
+                    clean_absolute(dir) && !dir.as_os_str().as_encoded_bytes().contains(&b':'),
+                    "backend.sdcpp.library_path",
+                    "Absolute directories without parent components and without ':' required",
+                )?;
+            }
             check(
                 sd.port_range[0] > 0 && sd.port_range[0] <= sd.port_range[1],
                 "backend.sdcpp.port_range",
@@ -735,6 +778,28 @@ impl Config {
                 "source",
                 "Exactly one source (file or hf) is required",
             )?;
+            if let Some(extra) = &model.extra {
+                check_model(
+                    extra.steps.is_none_or(|s| (1..=150).contains(&s)),
+                    "extra.steps",
+                    "Steps are a number from 1 to 150",
+                )?;
+                check_model(
+                    extra
+                        .cfg_scale
+                        .is_none_or(|c| c.is_finite() && (0.0..=30.0).contains(&c)),
+                    "extra.cfg_scale",
+                    "The guidance scale is a number from 0 to 30",
+                )?;
+                check_model(
+                    extra
+                        .sampling_method
+                        .as_ref()
+                        .is_none_or(|m| SAMPLING_METHODS.contains(&m.as_str())),
+                    "extra.sampling_method",
+                    "Unknown sampling method",
+                )?;
+            }
             if let Some(hf) = &model.source.hf {
                 check_model(
                     identifier(hf),

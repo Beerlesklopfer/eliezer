@@ -291,6 +291,7 @@ dependencies = [
  "eliezer-gpu",
  "eliezer-hub",
  "eliezer-llamacpp",
+ "eliezer-sdcpp",
  "serde_json",
  "tokio",
  "tracing",
@@ -363,6 +364,17 @@ dependencies = [
  "minijinja",
  "minijinja-contrib",
  "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "eliezer-sdcpp"
+version = "0.6.0"
+dependencies = [
+ "eliezer-backend",
+ "reqwest",
  "serde_json",
  "tokio",
  "tracing",

@@ -300,4 +300,5 @@ impl Backend for FakeBackend {
 /// A valid 1x1 PNG, so clients that decode the fake image succeed.
 pub const FAKE_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
+pub mod routing;
 pub mod supervisor;
