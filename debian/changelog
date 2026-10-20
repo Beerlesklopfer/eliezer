@@ -16,6 +16,8 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     a fox edited blue in 27 s at 1024x1024. New dependency: axum feature `multipart` (crate `multer`).
   * Add `extra.tokenizer` (path of an external `tokenizer.json`, passed to `sd-server` as `--tokenizer`) for MOSS-Image, which
     needs the Qwen3.5 vocabulary. Checked live with MOSS-Image-SFT Q8_0.
+  * A command without its required arguments prints its usage (the template of the help text) with exit code 2, for
+    example `eliezer download`.
   * `eliezer status` and `eliezer ps` list downloads that run or wait, with percent and bytes.
   * Show the download progress of `eliezer get`/`download` in one line rewritten in place on a terminal; in a
     pipe the line still changes only in steps of 5 %.

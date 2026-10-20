@@ -106,6 +106,25 @@ enum Failure {
 }
 type Res<T> = Result<T, Failure>;
 
+/// The lines of the help text that describe one command: its line and the indented lines that follow.
+fn command_usage(command: &str) -> String {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let text = usage();
+    let mut lines = text
+        .lines()
+        .skip_while(|line| indent(line) != 2 || line.split_whitespace().next() != Some(command));
+    let mut out = String::new();
+    if let Some(first) = lines.next() {
+        out.push_str(first);
+        out.push('\n');
+        for line in lines.take_while(|l| indent(l) > 2) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 fn usage_err<T>(message: impl Into<String>) -> Res<T> {
     Err(Failure::Usage(message.into()))
 }
@@ -304,7 +323,14 @@ fn run(command: &str, args: &[String], at: usize) -> Res<()> {
     // Global options before the command word and everything after it are parsed alike.
     let mut words: Vec<String> = args[..at].to_vec();
     words.extend(args[at + 1..].iter().cloned());
-    let parsed = parse(&words, &spec_for(command))?;
+    let parsed = parse(&words, &spec_for(command)).map_err(|failure| match failure {
+        // A missing argument is answered with the usage of the command, the template to fill in.
+        Failure::Usage(m) if m.starts_with("An argument is missing") => Failure::Usage(format!(
+            "An argument is missing.\n\nUsage:\n{}",
+            command_usage(command)
+        )),
+        other => other,
+    })?;
     if command == "help" || parsed.flag("--help") {
         println!("{}", usage());
         return Ok(());

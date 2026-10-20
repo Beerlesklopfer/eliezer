@@ -1285,3 +1285,28 @@ fn status_and_ps_show_the_downloads_that_run_or_wait() {
     let idle = format::status_text("http://127.0.0.1:1234", "ok", &sample_status());
     assert!(!idle.contains("Downloads"), "{idle}");
 }
+
+#[test]
+fn a_command_without_its_arguments_prints_its_usage() {
+    for (command, template) in [
+        ("download", "download ORG/REPO FILE... [--revision COMMIT]"),
+        ("get", "get ORG/REPO [--quant Q4_K_M] [--with FILE,FILE]"),
+        ("rm", "rm ORG/REPO"),
+    ] {
+        let result = std::process::Command::new(env!("CARGO_BIN_EXE_eliezer"))
+            .env_remove("ELIEZER_CONFIG")
+            .env("XDG_CONFIG_HOME", "/nonexistent/config")
+            .arg(command)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&result.stderr);
+        assert_eq!(result.status.code(), Some(2), "{text}");
+        assert!(text.contains("An argument is missing."), "{text}");
+        assert!(text.contains(template), "{command}: {text}");
+        // only the lines of this command, not the next one
+        assert!(
+            !text.contains("pins [--verify]") || command != "download",
+            "{text}"
+        );
+    }
+}
