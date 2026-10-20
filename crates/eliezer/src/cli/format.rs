@@ -638,10 +638,23 @@ pub fn download_done(job: &Value) -> String {
             file["state"].as_str().unwrap_or("-")
         ));
     }
-    out.push_str(
-        "\nNothing is on the allowlist of models yet. Print a [[model]] block for a file with\n\
-         `eliezer --suggest FILE.gguf` and add it to the configuration.\n",
-    );
+    // Only a weight file can become a model; the other files (tokenizer, VAE, ...) are named in `extra`.
+    let weights: Vec<String> = job["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f["file"].as_str())
+        .filter(|f| f.ends_with(".gguf") && !f.contains("mmproj"))
+        .map(|f| format!("{dir}/{f}"))
+        .collect();
+    if !weights.is_empty() {
+        out.push_str(
+            "\nTo use it as a model, print its [[model]] block and add it to the configuration:\n",
+        );
+        for path in weights {
+            out.push_str(&format!("  eliezer --suggest {path}\n"));
+        }
+    }
     out
 }
 
