@@ -100,7 +100,7 @@ def main():
         if music is not None:
             subprocess.run(["patchelf", "--set-rpath", f"$ORIGIN/../../../lib/{triplet}/eliezer", str(music)], check=True)
             # audio.cpp is Apache licensed; its license text goes with the program.
-            licence = audiocpp_server.parents[4] / "LICENSE"
+            licence = audiocpp_server.parents[3] / "LICENSE"
             if licence.is_file():
                 target = root / "usr/share/doc/eliezer/audio.cpp-LICENSE"
                 target.parent.mkdir(parents=True, exist_ok=True)
