@@ -51,6 +51,10 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     `[backend.sdcpp] program` is `/usr/lib/x86_64-linux-gnu/eliezer/sd-server` and no library path is needed.
   * Show a size for models without `size_gb` (the size of their files; an image model counts its text encoder and VAE too) and no
     context window for image models in the model list and `eliezer ls`.
+  * Accept the histories chat programs send to models with a strict chat template (Mistral): the same role twice in a row, an
+    assistant turn first, a system message in the middle, tool calls and results. They are reshaped (joined turns, tool turns as
+    plain text, the system text in front of the first user turn) when the template refuses them; before, they answered 400. Checked
+    live on Mistral with seven shapes that failed.
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.6.0-1_amd64.deb.
 

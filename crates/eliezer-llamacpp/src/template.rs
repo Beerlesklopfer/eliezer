@@ -116,6 +116,75 @@ pub fn merge_system_into_user(messages: &[Json]) -> Option<Vec<Json>> {
     Some(out)
 }
 
+/// The conversation reshaped for a template that wants user and assistant turns in strict alternation:
+/// system text goes in front of the first user message, a tool call and its result become plain assistant
+/// and user text, turns of the same role are joined by a blank line, and a conversation that starts with an
+/// assistant turn gets an empty user turn in front.
+pub fn strict_alternation(messages: &[Json]) -> Vec<Json> {
+    let is_system = |m: &Json| matches!(m["role"].as_str(), Some("system" | "developer"));
+    let prefix = messages
+        .iter()
+        .filter(|m| is_system(m))
+        .map(|m| content_text(&m["content"]))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut turns: Vec<(String, String)> = Vec::new();
+    for message in messages.iter().filter(|m| !is_system(m)) {
+        let role = message["role"].as_str().unwrap_or("user");
+        let mut text = content_text(&message["content"]);
+        let (role, text) = match role {
+            "assistant" => {
+                for call in message["tool_calls"].as_array().into_iter().flatten() {
+                    let function = &call["function"];
+                    let line = format!(
+                        "[tool call] {}({})",
+                        function["name"].as_str().unwrap_or("?"),
+                        function["arguments"].as_str().unwrap_or("{}")
+                    );
+                    text = if text.is_empty() {
+                        line
+                    } else {
+                        format!("{text}\n{line}")
+                    };
+                }
+                ("assistant", text)
+            }
+            "tool" | "function" => ("user", format!("[tool result] {text}")),
+            _ => ("user", text),
+        };
+        match turns.last_mut() {
+            Some((last, joined)) if last == role => {
+                if !text.is_empty() {
+                    if !joined.is_empty() {
+                        joined.push_str("\n\n");
+                    }
+                    joined.push_str(&text);
+                }
+            }
+            _ => turns.push((role.to_owned(), text)),
+        }
+    }
+    // The system text opens the conversation: in the first user turn, or in a user turn of its own when the
+    // conversation starts with an assistant turn.
+    match turns.first_mut() {
+        Some((role, text)) if role == "user" => {
+            if !prefix.is_empty() {
+                *text = if text.is_empty() {
+                    prefix
+                } else {
+                    format!("{prefix}\n\n{text}")
+                };
+            }
+        }
+        _ => turns.insert(0, ("user".to_owned(), prefix)),
+    }
+    turns
+        .into_iter()
+        .map(|(role, text)| serde_json::json!({"role": role, "content": text}))
+        .collect()
+}
+
 /// A compiled chat template.
 pub struct ChatTemplate {
     env: Environment<'static>,
@@ -168,20 +237,31 @@ impl ChatTemplate {
     /// message instead, which is what such models were trained on. Other rejections stay errors.
     pub fn render_lenient(&self, options: &RenderOptions<'_>) -> Result<String, TemplateError> {
         let first = self.render(options);
-        if !matches!(first, Err(TemplateError::Raised(_))) {
+        // A template that refuses the conversation (`raise_exception`) or chokes on it (a tool call without
+        // text where it expects text) gets a second try; a template that does not compile does not.
+        if !matches!(
+            first,
+            Err(TemplateError::Raised(_) | TemplateError::Render(_))
+        ) {
             return first;
         }
-        let Some(merged) = merge_system_into_user(options.messages) else {
-            return first;
+        let with = |messages: &[Json]| {
+            self.render(&RenderOptions {
+                messages,
+                tools: options.tools,
+                add_generation_prompt: options.add_generation_prompt,
+                enable_thinking: options.enable_thinking,
+                reasoning_effort: options.reasoning_effort,
+            })
         };
-        self.render(&RenderOptions {
-            messages: &merged,
-            tools: options.tools,
-            add_generation_prompt: options.add_generation_prompt,
-            enable_thinking: options.enable_thinking,
-            reasoning_effort: options.reasoning_effort,
-        })
-        .or(first)
+        // First only the system prompt, then the turns as well (tool results, repeated roles, an assistant
+        // turn first): chat programs send histories that strict templates refuse, and LM Studio accepts them.
+        if let Some(merged) = merge_system_into_user(options.messages)
+            && let Ok(text) = with(&merged)
+        {
+            return Ok(text);
+        }
+        with(&strict_alternation(options.messages)).or(first)
     }
 
     /// Renders the conversation into the prompt text.

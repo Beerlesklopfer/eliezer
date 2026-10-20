@@ -389,11 +389,59 @@ fn a_template_without_a_system_role_gets_the_system_prompt_in_the_first_user_mes
         qwen.render(&options(&messages)).unwrap()
     );
     assert!(eliezer_llamacpp::template::merge_system_into_user(&messages[1..]).is_none());
-    // other rejections stay errors: two user messages in a row
-    let bad = vec![
-        json!({"role": "system", "content": "x"}),
-        json!({"role": "user", "content": "a"}),
-        json!({"role": "user", "content": "b"}),
+}
+
+#[test]
+fn histories_that_strict_templates_refuse_are_reshaped() {
+    let mistral = compile(MISTRAL);
+    let u = |t: &str| json!({"role": "user", "content": t});
+    let a = |t: &str| json!({"role": "assistant", "content": t});
+    let s = |t: &str| json!({"role": "system", "content": t});
+    let render = |messages: Vec<Value>| mistral.render_lenient(&options(&messages)).unwrap();
+    // the same role twice in a row: joined by a blank line
+    assert_eq!(render(vec![u("a"), u("b")]), "<bos>[INST] a\n\nb [/INST]");
+    assert_eq!(
+        render(vec![s("x"), u("a"), u("b")]),
+        "<bos>[INST] x\n\na\n\nb [/INST]"
+    );
+    assert_eq!(
+        render(vec![u("a"), a("b"), a("c"), u("d")]),
+        "<bos>[INST] a [/INST]b\n\nc<eos>[INST] d [/INST]"
+    );
+    // an assistant turn first gets an empty user turn in front
+    assert_eq!(
+        render(vec![a("hello"), u("hi")]),
+        "<bos>[INST]  [/INST]hello<eos>[INST] hi [/INST]"
+    );
+    assert_eq!(
+        render(vec![s("x"), a("hello"), u("hi")]),
+        "<bos>[INST] x [/INST]hello<eos>[INST] hi [/INST]"
+    );
+    // a system message after a user turn joins the first user turn
+    assert_eq!(
+        render(vec![u("hi"), s("x"), u("again")]),
+        "<bos>[INST] x\n\nhi\n\nagain [/INST]"
+    );
+    // only system text and an assistant turn: the text opens the conversation as a user turn
+    assert_eq!(
+        render(vec![s("x"), a("hello")]),
+        "<bos>[INST] x [/INST]hello<eos>"
+    );
+    // a tool turn becomes plain text
+    let tool = vec![
+        u("hi"),
+        json!({"role": "assistant", "content": null, "tool_calls": [
+            {"id": "1", "type": "function", "function": {"name": "f", "arguments": "{\"x\":1}"}}]}),
+        json!({"role": "tool", "tool_call_id": "1", "content": "42"}),
+        u("and?"),
     ];
-    assert!(mistral.render_lenient(&options(&bad)).is_err());
+    assert_eq!(
+        render(tool),
+        "<bos>[INST] hi [/INST][tool call] f({\"x\":1})<eos>[INST] [tool result] 42\n\nand? [/INST]"
+    );
+    // what already works is not touched
+    assert_eq!(
+        render(vec![u("a"), a("b"), u("c")]),
+        "<bos>[INST] a [/INST]b<eos>[INST] c [/INST]"
+    );
 }
