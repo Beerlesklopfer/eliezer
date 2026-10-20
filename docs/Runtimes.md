@@ -116,5 +116,9 @@ Built with HIP for gfx1100 as in `tests/runtime/sdcpp/README.md` (`-DSD_HIPBLAS=
   `split_files/vae/flux2-vae.safetensors` of `Comfy-Org/flux2-dev` (same size as the VAE of the gated
   `black-forest-labs/FLUX.2-dev`, but not gated), `--steps 4 --cfg-scale 1.0`. A fox at 1024x1024 took 12 s (2.4 s per step)
   on the RX 7900 XTX; the picture is sharp and matches the prompt. Fetched with `eliezer download` (hash verified).
+- Editing (`POST /v1/images/edits`, multipart: `prompt`, `n`, `size`, `output_format`, `image[]`; checked 2026-10-20): both models
+  edit with their normal start arguments, no extra option needed. FLUX.2 klein 4B (4 steps): a 1024x1024 fox made blue in
+  27 s including the load. Qwen Image 2.1 UC Q4_K_M with the int8 encoder (20 steps, cfg 4): a 512x512 fox made blue in 35 s
+  including the load; the safetensors encoder works for editing (the docs ask for `--llm_vision` only with a GGUF encoder).
 - The server also offers an asynchronous native API (`/sdcpp/v1/img_gen`, `/jobs/{id}`, cancel); Eliezer does not use it yet.
 
