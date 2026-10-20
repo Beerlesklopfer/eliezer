@@ -546,14 +546,33 @@ impl Config {
             field: "<configuration>".into(),
             message: "Invalid TOML syntax",
         })?;
-        let config: Self = serde_path_to_error::deserialize(de).map_err(|e| ConfigError {
-            line: input.as_bytes()[..e.inner().span().map_or(0, |s| s.start).min(input.len())]
-                .iter()
-                .filter(|b| **b == b'\n')
-                .count()
-                + 1,
-            field: with_section_hint(safe_path(e.path())),
-            message: "Unknown field, missing value or invalid data type",
+        let config: Self = serde_path_to_error::deserialize(de).map_err(|e| {
+            // A missing field is named (the name is a field of the schema, never a value of the file).
+            let missing = e
+                .inner()
+                .message()
+                .strip_prefix("missing field `")
+                .and_then(|rest| rest.strip_suffix('`'))
+                .filter(|name| FIELDS.split_whitespace().any(|f| f == *name))
+                .map(str::to_owned);
+            let path = safe_path(e.path());
+            ConfigError {
+                line: input.as_bytes()[..e.inner().span().map_or(0, |s| s.start).min(input.len())]
+                    .iter()
+                    .filter(|b| **b == b'\n')
+                    .count()
+                    + 1,
+                field: match &missing {
+                    Some(name) if path.is_empty() || path == "<configuration>" => name.clone(),
+                    Some(name) => format!("{path}.{name}"),
+                    None => with_section_hint(path),
+                },
+                message: if missing.is_some() {
+                    "A required section or field is missing"
+                } else {
+                    "Unknown field, missing value or invalid data type"
+                },
+            }
         })?;
         config.validate(input)?;
         Ok(config)

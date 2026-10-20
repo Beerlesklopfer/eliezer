@@ -262,3 +262,22 @@ fn moved_files_and_directories_are_reported_as_problems_not_errors() {
     assert!(config.file_problems().is_empty());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_missing_section_is_named() {
+    let error = Config::parse("[server]\nlisten=\"127.0.0.1:1234\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("gpu") && error.contains("required section or field is missing"),
+        "{error}"
+    );
+    // a missing field inside a model entry names the entry and the field
+    let error = Config::parse("[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\n[[model]]\nbackend=\"llamacpp\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("model[0].key") && error.contains("missing"),
+        "{error}"
+    );
+}

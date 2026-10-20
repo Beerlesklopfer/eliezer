@@ -691,7 +691,7 @@ fn admit(
         enable_thinking: effort.map(|e| e != "none"),
         reasoning_effort: effort.filter(|e| *e != "none"),
     };
-    let text = match prompting.template.render(&options) {
+    let text = match prompting.template.render_lenient(&options) {
         Ok(text) => text,
         Err(error) => {
             tracing::warn!(%error, "The chat template rejected the request");

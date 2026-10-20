@@ -337,3 +337,63 @@ fn undefined_variables_stay_undefined() {
     opts.enable_thinking = Some(false);
     assert_eq!(template.render(&opts).unwrap(), "defined/undefined");
 }
+
+#[test]
+fn a_template_without_a_system_role_gets_the_system_prompt_in_the_first_user_message() {
+    let mistral = compile(MISTRAL);
+    let messages = vec![
+        json!({"role": "system", "content": "Be brief."}),
+        json!({"role": "user", "content": "Hello there"}),
+    ];
+    // the template itself refuses the system role ...
+    assert!(matches!(
+        mistral.render(&options(&messages)),
+        Err(TemplateError::Raised(_))
+    ));
+    // ... the lenient rendering moves the text into the user message
+    assert_eq!(
+        mistral.render_lenient(&options(&messages)).unwrap(),
+        "<bos>[INST] Be brief.\n\nHello there [/INST]"
+    );
+    // a longer conversation keeps its turns, several system messages are joined
+    let longer = vec![
+        json!({"role": "system", "content": "Be brief."}),
+        json!({"role": "system", "content": "Answer in German."}),
+        json!({"role": "user", "content": "Hi"}),
+        json!({"role": "assistant", "content": "Hallo!"}),
+        json!({"role": "user", "content": "Wie geht's?"}),
+    ];
+    assert_eq!(
+        mistral.render_lenient(&options(&longer)).unwrap(),
+        "<bos>[INST] Be brief.\n\nAnswer in German.\n\nHi [/INST]Hallo!<eos>[INST] Wie geht's? [/INST]"
+    );
+    // only a system message: it becomes the user message
+    let only = vec![json!({"role": "system", "content": "Say hi."})];
+    assert_eq!(
+        mistral.render_lenient(&options(&only)).unwrap(),
+        "<bos>[INST] Say hi. [/INST]"
+    );
+    // a content list keeps its parts
+    let parts = vec![
+        json!({"role": "system", "content": "Be brief."}),
+        json!({"role": "user", "content": [{"type": "text", "text": "Hello"}]}),
+    ];
+    let merged = eliezer_llamacpp::template::merge_system_into_user(&parts).unwrap();
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0]["content"][0]["text"], "Be brief.\n\n");
+    assert_eq!(merged[0]["content"][1]["text"], "Hello");
+    // templates with a system role are not touched, and without a system message nothing is merged
+    let qwen = compile(QWEN_CODER);
+    assert_eq!(
+        qwen.render_lenient(&options(&messages)).unwrap(),
+        qwen.render(&options(&messages)).unwrap()
+    );
+    assert!(eliezer_llamacpp::template::merge_system_into_user(&messages[1..]).is_none());
+    // other rejections stay errors: two user messages in a row
+    let bad = vec![
+        json!({"role": "system", "content": "x"}),
+        json!({"role": "user", "content": "a"}),
+        json!({"role": "user", "content": "b"}),
+    ];
+    assert!(mistral.render_lenient(&options(&bad)).is_err());
+}

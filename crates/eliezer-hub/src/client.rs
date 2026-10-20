@@ -19,13 +19,26 @@ const MAX_BODY: usize = 8 * 1024 * 1024;
 pub struct HfClient {
     http: reqwest::Client,
     base: String,
+    /// The time a metadata request may take in all. A file download has no such limit (it takes as long
+    /// as the file is big); it only fails when no data arrives for `read_timeout`.
+    request_timeout: Duration,
 }
 
 impl HfClient {
     /// `base` is `https://huggingface.co`; tests point it at a local server.
     pub fn new(base: &str, timeout: Duration) -> Result<Self, HubError> {
+        Self::with_read_timeout(base, timeout, Duration::from_secs(60))
+    }
+
+    /// Like [`HfClient::new`]; `read_timeout` is how long a download may wait for the next piece of data.
+    pub fn with_read_timeout(
+        base: &str,
+        timeout: Duration,
+        read_timeout: Duration,
+    ) -> Result<Self, HubError> {
         let http = reqwest::Client::builder()
-            .timeout(timeout)
+            .connect_timeout(timeout)
+            .read_timeout(read_timeout)
             // The file download goes through a few redirects to the storage host; the token is
             // not forwarded to another host (reqwest drops the Authorization header then).
             .redirect(reqwest::redirect::Policy::limited(5))
@@ -35,6 +48,7 @@ impl HfClient {
         Ok(Self {
             http,
             base: base.trim_end_matches('/').to_owned(),
+            request_timeout: timeout,
         })
     }
 
@@ -42,6 +56,7 @@ impl HfClient {
         let mut response = self
             .http
             .get(url)
+            .timeout(self.request_timeout)
             .query(params)
             .send()
             .await

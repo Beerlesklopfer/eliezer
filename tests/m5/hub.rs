@@ -358,3 +358,72 @@ async fn the_real_client_reads_details_and_maps_errors() {
     // an invalid repository name never becomes a URL
     assert_eq!(client.detail("a/b/../c").await, Err(HubError::NotFound));
 }
+
+/// A server that sends `pieces` of 100 bytes with `pause` between them.
+async fn drip(pieces: usize, pause: Duration) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buffer = vec![0_u8; 4096];
+        let _ = stream.read(&mut buffer).await.unwrap();
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            pieces * 100
+        );
+        stream.write_all(head.as_bytes()).await.unwrap();
+        for _ in 0..pieces {
+            if stream.write_all(&[7_u8; 100]).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(pause).await;
+        }
+    });
+    base
+}
+
+#[tokio::test]
+async fn a_download_may_take_longer_than_the_request_timeout_but_not_stall() {
+    let revision = "0123456789abcdef0123456789abcdef01234567";
+    // 6 pieces, 300 ms apart: 1.8 s in all, far above the 500 ms of a metadata request
+    let base = drip(6, Duration::from_millis(300)).await;
+    let client = HfClient::with_read_timeout(
+        &base,
+        Duration::from_millis(500),
+        Duration::from_millis(1500),
+    )
+    .unwrap();
+    let mut stream = client
+        .open("org/model", revision, "m.gguf", 0, None)
+        .await
+        .unwrap();
+    let mut total = 0;
+    while let Some(chunk) = stream.body.next_chunk().await.unwrap() {
+        total += chunk.len();
+    }
+    assert_eq!(total, 600);
+    // no data for longer than the read timeout: the download fails instead of hanging
+    let base = drip(2, Duration::from_secs(5)).await;
+    let client = HfClient::with_read_timeout(
+        &base,
+        Duration::from_millis(500),
+        Duration::from_millis(400),
+    )
+    .unwrap();
+    let mut stream = client
+        .open("org/model", revision, "m.gguf", 0, None)
+        .await
+        .unwrap();
+    let mut failed = false;
+    for _ in 0..3 {
+        match stream.body.next_chunk().await {
+            Err(HubError::Unreachable) => {
+                failed = true;
+                break;
+            }
+            Ok(None) => break,
+            _ => {}
+        }
+    }
+    assert!(failed, "a stalled download must end with an error");
+}

@@ -62,6 +62,60 @@ pub struct RenderOptions<'a> {
     pub reasoning_effort: Option<&'a str>,
 }
 
+/// The text of a message content: a string, or the text parts of a list.
+fn content_text(content: &Json) -> String {
+    match content {
+        Json::String(text) => text.clone(),
+        Json::Array(parts) => parts
+            .iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// The conversation without system messages: their text goes, separated by a blank line, in front of
+/// the first user message (which becomes a user message of its own when there is none). `None` when
+/// there is no system message to merge.
+pub fn merge_system_into_user(messages: &[Json]) -> Option<Vec<Json>> {
+    let is_system = |m: &Json| matches!(m["role"].as_str(), Some("system" | "developer"));
+    let system: Vec<String> = messages
+        .iter()
+        .filter(|m| is_system(m))
+        .map(|m| content_text(&m["content"]))
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !messages.iter().any(is_system) {
+        return None;
+    }
+    let prefix = system.join("\n\n");
+    let mut out: Vec<Json> = Vec::with_capacity(messages.len());
+    let mut placed = prefix.is_empty();
+    for message in messages.iter().filter(|m| !is_system(m)) {
+        let mut message = message.clone();
+        if !placed && message["role"] == "user" {
+            message["content"] = match &message["content"] {
+                Json::Array(parts) => {
+                    let mut parts = parts.clone();
+                    parts.insert(
+                        0,
+                        serde_json::json!({"type": "text", "text": format!("{prefix}\n\n")}),
+                    );
+                    Json::Array(parts)
+                }
+                other => Json::String(format!("{prefix}\n\n{}", content_text(other))),
+            };
+            placed = true;
+        }
+        out.push(message);
+    }
+    if !placed {
+        out.insert(0, serde_json::json!({"role": "user", "content": prefix}));
+    }
+    Some(out)
+}
+
 /// A compiled chat template.
 pub struct ChatTemplate {
     env: Environment<'static>,
@@ -107,6 +161,27 @@ impl ChatTemplate {
     /// Whether the template source refers to `tools` and can therefore render tool definitions.
     pub fn supports_tools(&self) -> bool {
         self.uses_tools
+    }
+
+    /// Like [`ChatTemplate::render`], but a template that rejects the system role (Mistral 7B v0.3 raises
+    /// "Only user and assistant roles are supported!") gets the system prompt in front of the first user
+    /// message instead, which is what such models were trained on. Other rejections stay errors.
+    pub fn render_lenient(&self, options: &RenderOptions<'_>) -> Result<String, TemplateError> {
+        let first = self.render(options);
+        if !matches!(first, Err(TemplateError::Raised(_))) {
+            return first;
+        }
+        let Some(merged) = merge_system_into_user(options.messages) else {
+            return first;
+        };
+        self.render(&RenderOptions {
+            messages: &merged,
+            tools: options.tools,
+            add_generation_prompt: options.add_generation_prompt,
+            enable_thinking: options.enable_thinking,
+            reasoning_effort: options.reasoning_effort,
+        })
+        .or(first)
     }
 
     /// Renders the conversation into the prompt text.
