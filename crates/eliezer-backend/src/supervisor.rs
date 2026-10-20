@@ -252,6 +252,7 @@ impl Supervisor {
     ) -> Result<Embeddings, Error> {
         match backend.embed(&lease.running, request).await {
             Ok(result) => Ok(result),
+            Err(BackendError::InvalidRequest) => Err(Error::InvalidRequest),
             Err(_) => {
                 self.report_crash(lease.running.spec.model.clone()).await;
                 Err(Error::Backend)
@@ -266,11 +267,26 @@ impl Supervisor {
     ) -> Result<Vec<String>, Error> {
         match backend.image(&lease.running, request).await {
             Ok(result) => Ok(result),
-            Err(_) => {
-                self.report_crash(lease.running.spec.model.clone()).await;
-                Err(Error::Backend)
-            }
+            Err(error) => Err(self.generation_failed(lease, error, backend).await),
         }
+    }
+    /// What a failed request of a generation model (a program of its own) means. A request that the program
+    /// refused or could not draw is that request's failure: the program still answers, other requests are being
+    /// served by it, and marking the model as crashed would kill their jobs. Only a program that no longer
+    /// answers is a crash.
+    async fn generation_failed(
+        &self,
+        lease: &Lease,
+        error: BackendError,
+        backend: &dyn Backend,
+    ) -> Error {
+        if error == BackendError::InvalidRequest {
+            return Error::InvalidRequest;
+        }
+        if !matches!(backend.health(&lease.running).await, Ok(true)) {
+            self.report_crash(lease.running.spec.model.clone()).await;
+        }
+        Error::Backend
     }
     pub async fn report_crash(&self, key: String) {
         let _ = self.tx.send(Command::Crash(key)).await;

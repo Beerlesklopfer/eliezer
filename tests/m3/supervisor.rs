@@ -228,3 +228,92 @@ async fn too_little_ram_is_reported_for_the_cpu() {
     );
     s.shutdown().await;
 }
+
+/// A backend whose pictures fail; whether the program still answers is set by the test.
+struct Failing {
+    inner: FakeBackend,
+    error: BackendError,
+    alive: bool,
+}
+impl Backend for Failing {
+    fn start<'a>(&'a self, spec: &'a LoadSpec) -> BackendFuture<'a, Running> {
+        self.inner.start(spec)
+    }
+    fn stop<'a>(&'a self, running: &'a Running) -> BackendFuture<'a, ()> {
+        self.inner.stop(running)
+    }
+    fn health<'a>(&'a self, _: &'a Running) -> BackendFuture<'a, bool> {
+        let alive = self.alive;
+        Box::pin(async move { Ok(alive) })
+    }
+    fn chat<'a>(
+        &'a self,
+        running: &'a Running,
+        request: ChatRequest,
+    ) -> BackendFuture<'a, tokio::sync::mpsc::Receiver<Result<Chunk, BackendError>>> {
+        self.inner.chat(running, request)
+    }
+    fn image<'a>(&'a self, _: &'a Running, _: ImageRequest) -> BackendFuture<'a, Vec<String>> {
+        let error = self.error;
+        Box::pin(async move { Err(error) })
+    }
+}
+fn picture(key: &str) -> ImageRequest {
+    ImageRequest {
+        model: key.into(),
+        prompt: "x".into(),
+        count: 1,
+        size: None,
+        seed: None,
+        references: Vec::new(),
+    }
+}
+async fn failing_picture(error: BackendError, alive: bool) -> (Result<Vec<String>, Error>, State) {
+    let backend = Arc::new(Failing {
+        inner: FakeBackend::new(FakeConfig::default()),
+        error,
+        alive,
+    });
+    let s = Supervisor::spawn(
+        vec![model("a")],
+        backend.clone(),
+        Arc::new(TestClock::default()),
+        Settings {
+            budget: 10,
+            ram_budget: 0,
+            idle_ms: 1000,
+            wait_ms: 100,
+            queue_max: 4,
+            retry_ms: 30,
+        },
+    );
+    let lease = s.acquire(model("a").default_spec).await.unwrap();
+    let result = s.image(&lease, picture("a"), backend.as_ref()).await;
+    // let the supervisor handle a crash report, if there is one
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let state = s
+        .snapshot()
+        .await
+        .unwrap()
+        .iter()
+        .find(|i| i.key == "a")
+        .unwrap()
+        .state;
+    s.shutdown().await;
+    (result, state)
+}
+#[tokio::test]
+async fn a_failed_picture_does_not_take_the_model_down_while_its_program_answers() {
+    // a request the program refused: that request's error only
+    let (result, state) = failing_picture(BackendError::InvalidRequest, true).await;
+    assert_eq!(result, Err(Error::InvalidRequest));
+    assert_eq!(state, State::Loaded);
+    // a picture that could not be drawn, the program still answers: the model stays loaded for the other jobs
+    let (result, state) = failing_picture(BackendError::Crashed, true).await;
+    assert_eq!(result, Err(Error::Backend));
+    assert_eq!(state, State::Loaded);
+    // the program is gone: now it is a crash
+    let (result, state) = failing_picture(BackendError::Crashed, false).await;
+    assert_eq!(result, Err(Error::Backend));
+    assert_eq!(state, State::Failed);
+}

@@ -14,6 +14,9 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     `extra.image_edit = true`, and `capabilities.image_edit` in the model list. The pictures are checked (type by first
     bytes, 20 MB each, at most four) and handed to `sd-server` as reference pictures. Checked live with FLUX.2 klein 4B:
     a fox edited blue in 27 s at 1024x1024. New dependency: axum feature `multipart` (crate `multer`).
+  * A picture request that fails no longer takes the model down: a request the program refused is answered with 400,
+    and a picture that could not be drawn marks the model as crashed only when its program no longer answers.
+    Before, any failure marked the model failed, which dropped it and the jobs other requests had running on it.
   * Add `extra.tokenizer` (path of an external `tokenizer.json`, passed to `sd-server` as `--tokenizer`) for MOSS-Image, which
     needs the Qwen3.5 vocabulary. Checked live with MOSS-Image-SFT Q8_0.
   * A command without its required arguments prints its usage (the template of the help text) with exit code 2, for
