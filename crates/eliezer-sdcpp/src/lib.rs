@@ -148,6 +148,49 @@ impl SdcppBackend {
     }
 }
 
+/// A `multipart/form-data` body of text fields and picture files (`image[]`). The boundary is chosen so that it
+/// occurs nowhere in the data.
+fn multipart_body(fields: &[(&str, String)], images: &[Vec<u8>]) -> (String, Vec<u8>) {
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let mut attempt = 0_u64;
+    let boundary = loop {
+        let candidate = format!("eliezer-{seed:x}-{attempt:x}");
+        let needle = candidate.as_bytes();
+        let clash = images
+            .iter()
+            .any(|data| data.windows(needle.len()).any(|w| w == needle))
+            || fields.iter().any(|(_, text)| text.contains(&candidate));
+        if !clash {
+            break candidate;
+        }
+        attempt += 1;
+    };
+    let mut body = Vec::new();
+    for (name, text) in fields {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{text}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    for (index, data) in images.iter().enumerate() {
+        let kind = eliezer_backend::image_type(data).unwrap_or("application/octet-stream");
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"image[]\"; filename=\"image-{index}\"\r\nContent-Type: {kind}\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(data);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (boundary, body)
+}
+
 /// The arguments of `sd-server` for one model. Paths are passed as they are (no shell is involved);
 /// everything else comes from numbers and names the configuration validated.
 pub fn arguments(model: &ImageModel, port: u16) -> Vec<OsString> {
@@ -371,23 +414,43 @@ impl Backend for SdcppBackend {
                     " <sd_cpp_extra_args>{{\"seed\":{seed}}}</sd_cpp_extra_args>"
                 ));
             }
-            let mut body = serde_json::json!({
-                "prompt": prompt,
-                "n": request.count.clamp(1, 4),
-                "output_format": "png",
-            });
-            if let Some(size) = &request.size {
-                body["size"] = serde_json::json!(size);
-            }
+            let count = request.count.clamp(1, 4);
+            let (path, content_type, body) = if request.references.is_empty() {
+                let mut body = serde_json::json!({
+                    "prompt": prompt,
+                    "n": count,
+                    "output_format": "png",
+                });
+                if let Some(size) = &request.size {
+                    body["size"] = serde_json::json!(size);
+                }
+                (
+                    "/v1/images/generations",
+                    "application/json".to_owned(),
+                    body.to_string().into_bytes(),
+                )
+            } else {
+                let mut fields = vec![
+                    ("prompt", prompt),
+                    ("n", count.to_string()),
+                    ("output_format", "png".to_owned()),
+                ];
+                if let Some(size) = &request.size {
+                    fields.push(("size", size.clone()));
+                }
+                let (boundary, body) = multipart_body(&fields, &request.references);
+                (
+                    "/v1/images/edits",
+                    format!("multipart/form-data; boundary={boundary}"),
+                    body,
+                )
+            };
             let response = self
                 .http
-                .post(format!(
-                    "http://127.0.0.1:{}/v1/images/generations",
-                    instance.port
-                ))
+                .post(format!("http://127.0.0.1:{}{path}", instance.port))
                 .timeout(self.request_timeout)
-                .header("Content-Type", "application/json")
-                .body(body.to_string())
+                .header("Content-Type", content_type)
+                .body(body)
                 .send()
                 .await
                 .map_err(|_| {

@@ -381,6 +381,8 @@ pub struct ExtraConfig {
     pub offload_to_cpu: Option<bool>,
     /// The key of a language model that writes a detailed description from a short wish before the picture is drawn.
     pub prompt_helper: Option<String>,
+    /// The model edits pictures: `POST /v1/images/edits` accepts it and `capabilities.image_edit` is reported.
+    pub image_edit: Option<bool>,
 }
 
 /// The caller also resolves existing symbolic links within paths that do not exist yet.
@@ -407,7 +409,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae steps cfg_scale sampling_method offload_to_cpu prompt_helper";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -796,6 +798,13 @@ impl Config {
             }
         }
         for (index, model) in self.model.iter().enumerate() {
+            if model.extra.as_ref().and_then(|e| e.image_edit) == Some(true) {
+                check(
+                    model.kind == ModelKind::Image,
+                    &format!("model[{index}].extra.image_edit"),
+                    "Only an image model can edit pictures",
+                )?;
+            }
             if let Some(helper) = model.extra.as_ref().and_then(|e| e.prompt_helper.as_ref()) {
                 let named = self.model.iter().find(|m| m.key == *helper);
                 check(

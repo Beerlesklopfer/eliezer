@@ -272,6 +272,11 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
 - `GET /healthz` → 200 `ok` (without authentication).
 - `POST /v1/images/generations` (OpenAI form: `prompt`, `n`, `size`, `response_format = "b64_json"`)
   for models with `kind = "image"`; response `{"created": <unix>, "data": [{"b64_json": "…"}]}`.
+- `POST /v1/images/edits` (OpenAI form, `multipart/form-data`: `model`, `prompt`, `image[]` or `image` with one to four
+  PNG, JPEG or WebP files of at most 20 MB, `n`, `size`, `seed`) for image models with `extra.image_edit = true`
+  (`capabilities.image_edit` in the model list); same response. The files are checked by their first bytes and size and
+  passed to `sd-server` as `POST /v1/images/edits` (reference pictures). `quality`, `background` and `output_format` are
+  ignored, a `mask` is refused (400), a picture over 20 MB gives 413.
 - Streaming statistics: in the last SSE chunk of the chat response additionally `"eliezer": {"ttft_ms", "gen_ms",
   "tokens"}` (MultiGPT measures on its own and ignores it; Eliezer serves as a cross-check).
 

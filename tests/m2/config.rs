@@ -418,3 +418,13 @@ fn the_download_allowlist_takes_wildcards_in_the_parts_but_never_everything() {
             .is_empty()
     );
 }
+
+#[test]
+fn only_an_image_model_can_edit_pictures() {
+    let base = "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\n[backend.llamacpp]\nenabled=true\n[backend.sdcpp]\nprogram=\"/usr/bin/sd-server\"\nport_range=[24600,24609]\n[[model]]\nkey=\"w\"\nbackend=\"llamacpp\"\nkind=\"llm\"\nsource={file=\"/var/lib/eliezer/models/w.gguf\"}\nsize_gb=1.0\narch={layers=2,kv_heads=2,head_dim=64}\n[[model]]\nkey=\"p\"\nbackend=\"sdcpp\"\nkind=\"image\"\nsource={file=\"/var/lib/eliezer/models/p.gguf\"}\nvram_gb=9.0\n";
+    assert!(Config::parse(&format!("{base}extra={{image_edit=true}}\n")).is_ok());
+    assert!(Config::parse(&format!("{base}extra={{image_edit=false}}\n")).is_ok());
+    let text = base.replace("size_gb=1.0\n", "size_gb=1.0\nextra={image_edit=true}\n");
+    let error = Config::parse(&text).unwrap_err().to_string();
+    assert!(error.contains("extra.image_edit"), "{error}");
+}

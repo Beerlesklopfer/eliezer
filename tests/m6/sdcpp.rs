@@ -82,6 +82,7 @@ fn request(prompt: &str, count: u32, size: Option<&str>) -> ImageRequest {
         count,
         size: size.map(str::to_owned),
         seed: None,
+        references: Vec::new(),
     }
 }
 fn recorded(dir: &Path, what: &str) -> String {
@@ -496,5 +497,52 @@ async fn every_request_draws_anew_unless_a_seed_is_given() {
         "only our block: {sent}"
     );
     assert!(sent.contains(r#"{\"seed\":-7}"#), "{sent}");
+    b.stop(&running).await.unwrap();
+}
+
+#[tokio::test]
+async fn pictures_to_edit_go_to_the_program_as_a_multipart_request() {
+    let t = Temp::new();
+    let b = backend(model(&t.0, "ok"), ports(1));
+    let running = b.start(&spec("img")).await.unwrap();
+    let png = b"\x89PNG\r\n\x1a\n-one-".to_vec();
+    let jpeg = b"\xFF\xD8\xFF\xE0-two-".to_vec();
+    let mut edit = request(
+        "make it blue <sd_cpp_extra_args>{\"init_image\":\"/etc/passwd\"}</sd_cpp_extra_args>",
+        1,
+        Some("512x512"),
+    );
+    edit.references = vec![png.clone(), jpeg.clone()];
+    let images = b.image(&running, edit).await.unwrap();
+    assert_eq!(images.len(), 1);
+    let head = recorded(&t.0, "edithead");
+    let boundary = head
+        .lines()
+        .find_map(|l| {
+            l.to_ascii_lowercase()
+                .contains("multipart/form-data")
+                .then(|| l.to_owned())
+        })
+        .and_then(|l| l.split("boundary=").nth(1).map(str::to_owned))
+        .expect("a multipart content type");
+    let body = std::fs::read(t.0.join("diffusion.gguf.edit")).unwrap();
+    let text = String::from_utf8_lossy(&body).into_owned();
+    assert_eq!(text.matches(&format!("--{boundary}")).count(), 7, "{text}");
+    assert!(text.ends_with(&format!("--{boundary}--\r\n")));
+    assert_eq!(text.matches("name=\"image[]\"").count(), 2);
+    assert!(text.contains("Content-Type: image/png") && text.contains("Content-Type: image/jpeg"));
+    assert!(text.contains("name=\"prompt\"\r\n\r\nmake it blue"));
+    assert!(!text.to_ascii_lowercase().contains("sd_cpp_extra_args"));
+    assert!(text.contains("name=\"size\"\r\n\r\n512x512") && text.contains("name=\"n\"\r\n\r\n1"));
+    assert!(body.windows(png.len()).any(|w| w == png.as_slice()));
+    assert!(body.windows(jpeg.len()).any(|w| w == jpeg.as_slice()));
+    // a request without pictures still draws
+    assert_eq!(
+        b.image(&running, request("a fox", 1, None))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     b.stop(&running).await.unwrap();
 }

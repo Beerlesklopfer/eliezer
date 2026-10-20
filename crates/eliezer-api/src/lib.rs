@@ -1,6 +1,7 @@
 //! HTTP interfaces of the model supervisor.
 pub mod anthropic;
 mod download;
+mod edits;
 pub mod helper;
 mod hub;
 use axum::{
@@ -133,6 +134,10 @@ pub fn managed_router(app: App) -> Router {
             .route("/v1/completions", post(completions))
             .route("/v1/embeddings", post(embeddings))
             .route("/v1/images/generations", post(images))
+            .route(
+                "/v1/images/edits",
+                post(edits::edits).layer(axum::extract::DefaultBodyLimit::max(edits::MAX_BODY)),
+            )
             .route("/v1/messages", post(messages))
             .route("/v1/messages/count_tokens", post(count_tokens))
             .fallback(|| async {
@@ -353,6 +358,9 @@ async fn models(State(app): State<App>) -> Response {
         if m.ocr { value["capabilities"]["ocr"] = json!(true); }
         if m.kind == eliezer_core::config::ModelKind::Image {
             value["capabilities"]["image_generation"] = json!(true);
+            if m.extra.as_ref().and_then(|e| e.image_edit) == Some(true) {
+                value["capabilities"]["image_edit"] = json!(true);
+            }
         } else {
             value["max_context_length"] = json!(m.max_context);
         }
@@ -848,6 +856,7 @@ async fn images(
         count,
         size,
         seed,
+        references: Vec::new(),
     };
     match app
         .supervisor

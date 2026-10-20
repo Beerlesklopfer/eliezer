@@ -10,6 +10,10 @@ eliezer (0.6.0) UNRELEASED; urgency=low
   * Add `DELETE /api/v1/models/pins/{org}/{repo}` and `eliezer rm ORG/REPO`: delete a repository fetched with
     `eliezer get`/`download`; refused while a download runs or a configured model uses its files. Only
     directories with a pin file are touched.
+  * Add `POST /v1/images/edits` (multipart, one to four pictures, as in the OpenAI API) for image models with the new
+    `extra.image_edit = true`, and `capabilities.image_edit` in the model list. The pictures are checked (type by first
+    bytes, 20 MB each, at most four) and handed to `sd-server` as reference pictures. Checked live with FLUX.2 klein 4B:
+    a fox edited blue in 27 s at 1024x1024. New dependency: axum feature `multipart` (crate `multer`).
   * `eliezer status` and `eliezer ps` list downloads that run or wait, with percent and bytes.
   * Show the download progress of `eliezer get`/`download` in one line rewritten in place on a terminal; in a
     pipe the line still changes only in steps of 5 %.

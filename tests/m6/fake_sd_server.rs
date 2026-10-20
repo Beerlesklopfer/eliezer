@@ -11,7 +11,8 @@
 //!
 //! Beside the model file it writes `<model>.args` (one argument per line), `<model>.ldpath` (its library path),
 //! `<model>.env` (the names of the
-//! environment variables it got) and `<model>.request` (the last generation request body).
+//! environment variables it got), `<model>.request` (the last generation request body) and `<model>.edit` with
+//! `<model>.edithead` (the last edit request, body and head).
 
 use std::{
     fs,
@@ -66,7 +67,8 @@ fn handle(mut stream: TcpStream, model: &std::path::Path, mode: &str) -> bool {
         data.extend_from_slice(&buffer[..n]);
     }
     let head = String::from_utf8_lossy(&data[..head_end]).into_owned();
-    let body = String::from_utf8_lossy(&data[head_end..]).into_owned();
+    let raw = data[head_end..].to_vec();
+    let body = String::from_utf8_lossy(&raw).into_owned();
     let first = head.lines().next().unwrap_or_default().to_owned();
     if first.starts_with("GET /v1/models") {
         respond(&mut stream, "200 OK", r#"{"data":[{"id":"fake"}]}"#);
@@ -98,6 +100,17 @@ fn handle(mut stream: TcpStream, model: &std::path::Path, mode: &str) -> bool {
             }
         }
         return mode == "die-after-first";
+    }
+    if first.starts_with("POST /v1/images/edits") {
+        // The multipart body as it came, to look at the parts.
+        let _ = fs::write(format!("{}.edit", model.display()), &raw);
+        let _ = fs::write(format!("{}.edithead", model.display()), &head);
+        respond(
+            &mut stream,
+            "200 OK",
+            &format!(r#"{{"created":1,"output_format":"png","data":[{{"b64_json":"{PNG}"}}]}}"#),
+        );
+        return false;
     }
     respond(&mut stream, "404 Not Found", "{}");
     false

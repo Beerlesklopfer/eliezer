@@ -117,6 +117,20 @@ pub struct ImageRequest {
     pub size: Option<String>,
     /// The start value of the random numbers; without one every request draws a new picture.
     pub seed: Option<i64>,
+    /// Pictures to edit (the bytes of PNG, JPEG or WebP files, at most four); empty draws a new picture.
+    pub references: Vec<Vec<u8>>,
+}
+/// The kind of a picture file by its first bytes: `image/png`, `image/jpeg` or `image/webp`.
+pub fn image_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 /// Embedded runtimes use handles; the interface does not require an HTTP endpoint.
 pub trait Backend: Send + Sync {
