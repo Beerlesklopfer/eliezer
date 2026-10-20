@@ -105,7 +105,7 @@ enabled = false                        # not available without the Cargo feature
 max_loaded = 4
 
 [backend.sdcpp]
-program = "/usr/lib/x86_64-linux-gnu/eliezer/sd-server"
+program = "/usr/libexec/x86_64-linux-gnu/eliezer/sd-server"
 port_range = [24600, 24609]
 library_path = ["/usr/lib/x86_64-linux-gnu/eliezer", "/opt/rocm/lib/llvm/lib"]   # optional: libraries of the program (it has no run path)
 

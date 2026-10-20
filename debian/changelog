@@ -52,8 +52,9 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     live with Qwen Image 2.1 (a photographic fox in 13 s at 512x512, 80 s at 1024x1024) and the GPU priority: Mistral
     ran on the CPU while the image model held the GPU. `[backend.sdcpp] library_path` names the directories with the
     libraries the program needs (it has no run path). The ROCm package contains `sd-server` (built by `scripts/build-sdcpp.sh`) in
-    its private multiarch directory `/usr/lib/<triplet>/eliezer/` with the libraries it needs (also `libomp`), so
-    `[backend.sdcpp] program` is `/usr/lib/x86_64-linux-gnu/eliezer/sd-server` and no library path is needed.
+    the multiarch libexec directory `/usr/libexec/<triplet>/eliezer/` (run path `$ORIGIN/../../../lib/<triplet>/eliezer`
+    to the libraries in the private directory, also `libomp`), so `[backend.sdcpp] program` is
+    `/usr/libexec/x86_64-linux-gnu/eliezer/sd-server` and no library path is needed.
   * The estimate of a model with a fixed figure (`vram_gb` or a measurement, as for image models) puts the figure in
     `weights_bytes`, so the parts add up to the total (MultiGPT showed 0.0 GB for Qwen Image from the empty parts).
   * Add a prompt helper for image models: `extra.prompt_helper` names a language model that writes a detailed English description

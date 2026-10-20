@@ -38,8 +38,8 @@ def main():
         # The image runtime is a second program in the package; its libraries join the same private directory.
         drawing = None
         if sd_server is not None:
-            # Beside the libraries, in the multiarch directory of the package.
-            drawing = private / "sd-server"
+            # A program run by Eliezer, not by users: the multiarch libexec directory of the package.
+            drawing = root / "usr/libexec" / triplet / "eliezer" / "sd-server"
             drawing.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(sd_server, drawing)
             drawing.chmod(0o755)
@@ -85,7 +85,7 @@ def main():
                 subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(library)], check=True)
         subprocess.run(["patchelf", "--set-rpath", f"$ORIGIN/../lib/{triplet}/eliezer", str(executable)], check=True)
         if drawing is not None:
-            subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(drawing)], check=True)
+            subprocess.run(["patchelf", "--set-rpath", f"$ORIGIN/../../../lib/{triplet}/eliezer", str(drawing)], check=True)
             # stable-diffusion.cpp and ggml are MIT licensed; their license text goes with the program.
             licence = sd_server.parents[2] / "src/LICENSE"
             if licence.is_file():
