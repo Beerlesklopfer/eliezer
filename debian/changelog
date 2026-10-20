@@ -49,6 +49,8 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     libraries the program needs (it has no run path). The ROCm package contains `sd-server` (built by `scripts/build-sdcpp.sh`) in
     its private multiarch directory `/usr/lib/<triplet>/eliezer/` with the libraries it needs (also `libomp`), so
     `[backend.sdcpp] program` is `/usr/lib/x86_64-linux-gnu/eliezer/sd-server` and no library path is needed.
+  * The estimate of a model with a fixed figure (`vram_gb` or a measurement, as for image models) puts the figure in
+    `weights_bytes`, so the parts add up to the total (MultiGPT showed 0.0 GB for Qwen Image from the empty parts).
   * Report `capabilities.image_generation: true` for image models and `capabilities.ocr: true` for models marked `ocr = true`
     in the configuration (a text recognition model needs `vision`; `--import` and `--suggest` set it for vision models whose
     name says OCR) in the model list, so MultiGPT can map the capability instead of guessing; `eliezer ls` shows `image`

@@ -101,3 +101,39 @@ fn parts_add_up_and_the_largest_fitting_context_is_exact() {
         None
     );
 }
+
+#[test]
+fn a_fixed_figure_is_shown_as_the_weights_so_that_the_parts_add_up() {
+    let config = Config::parse(
+        r#"
+[server]
+listen="127.0.0.1:1234"
+[gpu]
+vendor="none"
+[backend.sdcpp]
+program="/usr/bin/sd-server"
+port_range=[24600,24609]
+[[model]]
+key="pic"
+backend="sdcpp"
+kind="image"
+source={file="/var/lib/eliezer/models/pic.gguf"}
+vram_gb=9.0
+"#,
+    )
+    .unwrap();
+    let parts = estimate_parts(&config.model[0], 1024, 1, None, None).unwrap();
+    assert_eq!(parts.basis, Basis::Configured);
+    assert_eq!(parts.total, 9_000_000_000);
+    assert_eq!(parts.weights, 9_000_000_000);
+    assert_eq!(
+        parts.weights + parts.cache + parts.overhead + parts.vision,
+        parts.total
+    );
+    // a measured value too
+    let measured = estimate_parts(&config.model[0], 1024, 1, None, Some(7_000_000_000)).unwrap();
+    assert_eq!(
+        (measured.basis, measured.weights, measured.total),
+        (Basis::Measured, 7_000_000_000, 7_000_000_000)
+    );
+}

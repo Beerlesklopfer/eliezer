@@ -253,7 +253,7 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
   "in_flight", "queue_len"}], "queue": [{"model", "waiting_secs"}]}`.
 - `POST /api/v1/models/estimate`, body as for load (`model`, optional `context_length`, `parallel`,
   `device`) → the memory Eliezer calculates: `{"model", "context_length", "parallel", "device",
-  "estimate": {"total_bytes", "basis": "calculated|configured|measured", "weights_bytes",
+  "estimate": {"total_bytes", "basis": "calculated|configured|measured", "weights_bytes",  // the whole figure for configured|measured
   "kv_cache_bytes", "overhead_bytes", "vision_bytes"}, "pools": {"gpu": {"budget_bytes", "free_bytes",
   "free_after_eviction_bytes", "fits_budget", "fits_now", "fits_after_eviction", "max_context_length"},
   "cpu": {…}}}`. The `cpu` pool appears only with a RAM budget. `max_context_length` is the largest

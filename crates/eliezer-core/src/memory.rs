@@ -114,7 +114,7 @@ impl Basis {
     }
 }
 
-/// An estimate with its parts; for measured or configured values only `total` is known.
+/// An estimate with its parts; for a measured or configured value the weights carry the whole figure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Breakdown {
     pub total: u64,
@@ -136,9 +136,10 @@ pub fn estimate_parts(
     if context == 0 || context > model.max_context || parallel == 0 || parallel > context {
         return Err(MemoryError::InvalidSize);
     }
+    // A fixed figure has no parts; it is shown as the weights, so that the parts always add up to the total.
     let whole = |total, basis| Breakdown {
         total,
-        weights: 0,
+        weights: total,
         cache: 0,
         overhead: 0,
         vision: 0,
