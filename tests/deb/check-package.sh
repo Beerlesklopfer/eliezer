@@ -26,6 +26,12 @@ getent passwd eliezer >/dev/null || fail "system user missing"
 [ -d /usr/lib/x86_64-linux-gnu/eliezer/rocblas/library ] || fail "rocBLAS kernels missing"
 [ -d /usr/lib/x86_64-linux-gnu/eliezer/hipblaslt/library ] || fail "hipBLASLt kernels missing"
 [ ! -d /opt/rocm ] || fail "host ROCm unexpectedly exposed"
+if [ -e /usr/lib/x86_64-linux-gnu/eliezer/sd-server ]; then
+    [ -x /usr/lib/x86_64-linux-gnu/eliezer/sd-server ] || fail "sd-server is not executable"
+    ldd /usr/lib/x86_64-linux-gnu/eliezer/sd-server > /tmp/sd-dependencies
+    ! grep -q "not found" /tmp/sd-dependencies || fail "unresolved dependency of sd-server"
+    /usr/lib/x86_64-linux-gnu/eliezer/sd-server --help 2>&1 | grep -q "stable-diffusion.cpp" || fail "sd-server does not start"
+fi
 ldd /usr/bin/eliezer > /tmp/dependencies
 ! grep -q "not found" /tmp/dependencies || fail "unresolved runtime dependency"
 ! grep -q /opt/ /tmp/dependencies || fail "runtime still depends on /opt"

@@ -16,10 +16,18 @@ def output(*args, **kwargs):
 
 
 def main():
-    package = Path(sys.argv[1]).resolve()
+    # Usage: bundle-rocm.py PACKAGE.deb [--sd-server PATH]
+    arguments = sys.argv[1:]
+    sd_server = None
+    if "--sd-server" in arguments:
+        at = arguments.index("--sd-server")
+        sd_server = Path(arguments[at + 1]).resolve()
+        del arguments[at : at + 2]
+    package = Path(arguments[0]).resolve()
     rocm = Path(os.environ.get("ROCM_PATH", "/opt/rocm")).resolve()
     triplet = output("dpkg-architecture", "-qDEB_HOST_MULTIARCH").strip()
-    environment = dict(os.environ, LD_LIBRARY_PATH=str(rocm / "lib"))
+    # libomp, which sd-server needs, lives beside the ROCm compiler.
+    environment = dict(os.environ, LD_LIBRARY_PATH=f"{rocm / 'lib'}:{rocm / 'lib/llvm/lib'}")
     with tempfile.TemporaryDirectory(prefix="eliezer-bundle-", dir=package.parent) as temporary:
         root = Path(temporary) / "root"
         subprocess.run(["dpkg-deb", "--raw-extract", str(package), str(root)], check=True)
@@ -27,6 +35,15 @@ def main():
         private.mkdir(parents=True, exist_ok=True)
         executable = root / "usr/bin/eliezer"
         pending = [executable, rocm / "lib/libhiprtc.so", rocm / "lib/libhiprtc-builtins.so"]
+        # The image runtime is a second program in the package; its libraries join the same private directory.
+        drawing = None
+        if sd_server is not None:
+            # Beside the libraries, in the multiarch directory of the package.
+            drawing = private / "sd-server"
+            drawing.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(sd_server, drawing)
+            drawing.chmod(0o755)
+            pending.append(drawing)
         copied = {}
         system = set()
         inspected = set()
@@ -35,7 +52,7 @@ def main():
             if path in inspected:
                 continue
             inspected.add(path)
-            if path != executable:
+            if path not in (executable, drawing):
                 destination = private / path.name
                 shutil.copy2(path, destination)
                 soname = output("patchelf", "--print-soname", str(path)).strip()
@@ -67,6 +84,14 @@ def main():
             if not library.is_symlink():
                 subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(library)], check=True)
         subprocess.run(["patchelf", "--set-rpath", f"$ORIGIN/../lib/{triplet}/eliezer", str(executable)], check=True)
+        if drawing is not None:
+            subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(drawing)], check=True)
+            # stable-diffusion.cpp and ggml are MIT licensed; their license text goes with the program.
+            licence = sd_server.parents[2] / "src/LICENSE"
+            if licence.is_file():
+                target = root / "usr/share/doc/eliezer/stable-diffusion.cpp-LICENSE"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(licence, target)
         licenses = root / "usr/share/doc/eliezer/rocm-licenses"
         for source in (rocm / "share/doc").rglob("*"):
             if source.is_file() and ("license" in source.name.lower() or "copyright" in source.name.lower()):

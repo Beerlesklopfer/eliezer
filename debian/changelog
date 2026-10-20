@@ -46,7 +46,9 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     `extra.sampling_method` and `extra.offload_to_cpu`. A router sends models to llama.cpp or stable-diffusion.cpp. Checked
     live with Qwen Image 2.1 (a photographic fox in 13 s at 512x512, 80 s at 1024x1024) and the GPU priority: Mistral
     ran on the CPU while the image model held the GPU. `[backend.sdcpp] library_path` names the directories with the
-    libraries the program needs (it has no run path). The `sd-server` program is not part of the package yet.
+    libraries the program needs (it has no run path). The ROCm package contains `sd-server` (built by `scripts/build-sdcpp.sh`) in
+    its private multiarch directory `/usr/lib/<triplet>/eliezer/` with the libraries it needs (also `libomp`), so
+    `[backend.sdcpp] program` is `/usr/lib/x86_64-linux-gnu/eliezer/sd-server` and no library path is needed.
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
   * Update the installation example to eliezer_0.6.0-1_amd64.deb.
 

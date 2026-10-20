@@ -47,7 +47,13 @@ cargo deb -p eliezer --locked --variant "$variant" --output "$stage/" "$@"
 deb=$(find "$stage" -maxdepth 1 -name 'eliezer_*.deb' -print -quit)
 [ -n "$deb" ] || { echo "No package produced in the staging directory" >&2; exit 1; }
 if [ "$variant" = rocm ]; then
-    python3 scripts/bundle-rocm.py "$deb"
+    # The image runtime (sd-server) is part of the ROCm package; SKIP_SDCPP=1 leaves it out.
+    if [ "${SKIP_SDCPP:-0}" = 1 ]; then
+        python3 scripts/bundle-rocm.py "$deb"
+    else
+        sd_server=$(scripts/build-sdcpp.sh)
+        python3 scripts/bundle-rocm.py "$deb" --sd-server "$sd_server"
+    fi
 fi
 mkdir -p target/debian
 final="target/debian/$(basename "$deb")"
