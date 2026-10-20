@@ -250,6 +250,9 @@ pub struct ModelConfig {
     pub parallel: u32,
     #[serde(default)]
     pub vision: bool,
+    /// The model is for text recognition in images (`capabilities.ocr` in the model list); needs `vision`.
+    #[serde(default)]
+    pub ocr: bool,
     #[serde(default)]
     pub pinned: bool,
     /// `auto` (default), `gpu` or `cpu`; image models always use the GPU.
@@ -374,7 +377,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae steps cfg_scale sampling_method offload_to_cpu";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae steps cfg_scale sampling_method offload_to_cpu";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -777,6 +780,11 @@ impl Config {
                 model.source.file.is_some() != model.source.hf.is_some(),
                 "source",
                 "Exactly one source (file or hf) is required",
+            )?;
+            check_model(
+                !model.ocr || model.vision,
+                "ocr",
+                "A text recognition model reads images: it needs vision = true (and a projector)",
             )?;
             if let Some(extra) = &model.extra {
                 check_model(

@@ -119,6 +119,7 @@ max_context = 131072
 default_context = 32768
 parallel = 1                           # default; can be overridden per load request
 vision = false
+ocr = false                            # a vision model for text recognition: capabilities.ocr = true in the model list
 reasoning = { options = ["none", "low", "medium", "high"], default = "medium" }
 arch = { layers = 48, kv_heads = 4, head_dim = 128 }   # for the VRAM calculation, section 6
 size_gb = 17.3                         # weights on the GPU (file size); otherwise read from the file

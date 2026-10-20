@@ -890,3 +890,38 @@ fn a_vision_projector_next_to_the_model_is_attached_and_valid() {
     t.file("v/mmproj-other-F16.gguf", &gguf("clip", |_| 0));
     assert!(!self::block("m", &model, 4_000_000_000, Some(&info)).contains("projector"));
 }
+
+#[test]
+fn a_vision_model_named_ocr_is_suggested_with_the_ocr_flag() {
+    let t = Temp::new();
+    let model = t.file(
+        "o/olmOCR-2-7B-Q4_K_M.gguf",
+        &gguf("qwen2vl", |out| {
+            kv_u32(out, "qwen2vl.attention.head_count_kv", 4);
+            1
+        }),
+    );
+    t.file("o/mmproj-olmOCR-2-7B-F16.gguf", &gguf("clip", |_| 0));
+    let info = read_gguf(&model).unwrap();
+    let block = block("olmocr-2-7b", &model, 4_700_000_000, Some(&info));
+    assert!(
+        block.contains("vision = true") && block.contains("ocr = true"),
+        "{block}"
+    );
+    estimate_bytes(&block, 4.7, 4096);
+    // a vision model with another name is not marked
+    let other = t.file(
+        "v/gemma-vl.gguf",
+        &gguf("qwen2vl", |out| {
+            kv_u32(out, "qwen2vl.attention.head_count_kv", 4);
+            1
+        }),
+    );
+    t.file("v/mmproj-gemma-vl-F16.gguf", &gguf("clip", |_| 0));
+    let info = read_gguf(&other).unwrap();
+    let block = self::block("gemma-vl", &other, 4_000_000_000, Some(&info));
+    assert!(
+        block.contains("vision = true") && !block.contains("ocr"),
+        "{block}"
+    );
+}

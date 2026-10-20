@@ -819,6 +819,11 @@ pub fn block_with(
             "vision = true\nprojector_gb = {:.1}\n",
             (*bytes as f64 / 1e9).max(0.1)
         );
+        // A vision model whose name says OCR (olmOCR, ...) is for text recognition.
+        let named = |text: &str| text.to_ascii_lowercase().contains("ocr");
+        if named(key) || info.and_then(|i| i.name.as_deref()).is_some_and(named) {
+            text += "ocr = true\n";
+        }
     }
     match info {
         Some(info) => {

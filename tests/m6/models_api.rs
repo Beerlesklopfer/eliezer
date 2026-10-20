@@ -58,6 +58,7 @@ key="chat"
 backend="llamacpp"
 kind="llm"
 vision=true
+ocr=true
 source={{file="{models}/chat.gguf",projector="{models}/mmproj-chat.gguf"}}
 vram_gb=2.0
 arch={{layers=2,kv_heads=2,head_dim=64}}
@@ -126,8 +127,15 @@ arch={{layers=2,kv_heads=2,head_dim=64}}
         pic.get("max_context_length").is_none(),
         "an image model has no context window"
     );
+    assert_eq!(pic["capabilities"]["image_generation"], true);
+    assert_eq!(pic["capabilities"]["vision"], false);
+    assert!(pic["capabilities"].get("ocr").is_none());
+    assert!(by("chat")["capabilities"].get("image_generation").is_none());
     // a language model without size_gb: weights and vision projector
     assert_eq!(by("chat")["size_bytes"], 1_300);
+    // the text recognition flag the configuration sets
+    assert_eq!(by("chat")["capabilities"]["ocr"], true);
+    assert!(by("sized")["capabilities"].get("ocr").is_none());
     assert!(by("chat")["max_context_length"].is_number());
     // size_gb wins when it is given
     assert_eq!(by("sized")["size_bytes"], 4_400_000_000_u64);

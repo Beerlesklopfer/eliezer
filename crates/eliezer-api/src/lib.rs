@@ -348,7 +348,12 @@ async fn models(State(app): State<App>) -> Response {
         let mut value = json!({"type":match m.kind { eliezer_core::config::ModelKind::Llm => "llm", eliezer_core::config::ModelKind::Embedding => "embedding", _ => "image" },
             "key":m.key,"display_name":m.key,"capabilities":{"vision":m.vision},"loaded_instances":[]});
         // An image model has no context window.
-        if m.kind != eliezer_core::config::ModelKind::Image { value["max_context_length"] = json!(m.max_context); }
+        if m.ocr { value["capabilities"]["ocr"] = json!(true); }
+        if m.kind == eliezer_core::config::ModelKind::Image {
+            value["capabilities"]["image_generation"] = json!(true);
+        } else {
+            value["max_context_length"] = json!(m.max_context);
+        }
         if let Some(reasoning) = &m.reasoning { value["capabilities"]["reasoning"] = json!({"allowed_options":reasoning.options,"default":reasoning.default}); }
         if let Some(size) = size_bytes(m) { value["size_bytes"] = json!(size); }
         if let (Some(_), Some(spec)) = (loaded, specs.iter().find(|s| s.model == m.key)) {

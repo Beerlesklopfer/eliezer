@@ -140,13 +140,19 @@ pub fn ls_text(models: &Value, status: Option<&Value>) -> String {
     )
 }
 
-/// What a model can do beyond text in and text out: `vision` (reads images) and `reasoning`
-/// (has thinking options). `-` when it has none.
+/// What a model can do beyond text in and text out: `image` (draws images), `vision` (reads images), `ocr`
+/// (text recognition) and `reasoning` (has thinking options). `-` when it has none.
 fn capabilities(model: &Value) -> String {
     let caps = &model["capabilities"];
     let mut found = Vec::new();
+    if caps["image_generation"].as_bool() == Some(true) {
+        found.push("image");
+    }
     if caps["vision"].as_bool() == Some(true) {
         found.push("vision");
+    }
+    if caps["ocr"].as_bool() == Some(true) {
+        found.push("ocr");
     }
     if caps["reasoning"]["allowed_options"]
         .as_array()

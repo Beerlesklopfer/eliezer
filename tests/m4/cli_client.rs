@@ -77,7 +77,11 @@ fn ls_lists_the_capabilities_of_each_model() {
          "capabilities": {"vision": false, "reasoning": {"allowed_options": [], "default": "none"}},
          "loaded_instances": []},
         {"type": "embedding", "key": "embed", "size_bytes": 270_000_000_u64, "max_context_length": 2048,
-         "loaded_instances": []}]});
+         "loaded_instances": []},
+        {"type": "llm", "key": "reader", "size_bytes": 4_700_000_000_u64, "max_context_length": 128000,
+         "capabilities": {"vision": true, "ocr": true}, "loaded_instances": []},
+        {"type": "image", "key": "pic", "size_bytes": 14_600_000_000_u64,
+         "capabilities": {"vision": false, "image_generation": true}, "loaded_instances": []}]});
     let ls = format::ls_text(&models, None);
     assert!(ls.contains("CAPABILITIES"), "{ls}");
     let row = |key: &str| ls.lines().find(|l| l.starts_with(key)).unwrap().to_owned();
@@ -86,6 +90,11 @@ fn ls_lists_the_capabilities_of_each_model() {
         "{ls}"
     );
     assert!(row("thinker").contains("vision, reasoning"), "{ls}");
+    assert!(row("reader").contains("vision, ocr"), "{ls}");
+    assert!(
+        row("pic").contains("image") && !row("pic").contains("vision"),
+        "{ls}"
+    );
     for key in ["chat", "embed"] {
         let row = row(key);
         assert!(

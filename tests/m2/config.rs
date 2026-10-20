@@ -314,3 +314,25 @@ fn the_library_path_of_the_image_program_is_checked() {
         assert!(error.contains("library_path"), "{bad}: {error}");
     }
 }
+
+#[test]
+fn the_ocr_flag_needs_vision() {
+    let base = "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\n[backend.llamacpp]\nenabled=true\n[[model]]\nkey=\"r\"\nbackend=\"llamacpp\"\nkind=\"llm\"\nsource={file=\"/var/lib/eliezer/models/r.gguf\",projector=\"/var/lib/eliezer/models/p.gguf\"}\nsize_gb=1.0\narch={layers=2,kv_heads=2,head_dim=64}\n";
+    assert!(
+        Config::parse(&format!("{base}vision=true\nocr=true\n"))
+            .unwrap()
+            .model[0]
+            .ocr
+    );
+    assert!(
+        !Config::parse(&format!("{base}vision=true\n"))
+            .unwrap()
+            .model[0]
+            .ocr
+    );
+    let plain = base.replace(",projector=\"/var/lib/eliezer/models/p.gguf\"", "");
+    let error = Config::parse(&format!("{plain}ocr=true\n"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("model[0].ocr"), "{error}");
+}

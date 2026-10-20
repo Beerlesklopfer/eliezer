@@ -49,6 +49,10 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     libraries the program needs (it has no run path). The ROCm package contains `sd-server` (built by `scripts/build-sdcpp.sh`) in
     its private multiarch directory `/usr/lib/<triplet>/eliezer/` with the libraries it needs (also `libomp`), so
     `[backend.sdcpp] program` is `/usr/lib/x86_64-linux-gnu/eliezer/sd-server` and no library path is needed.
+  * Report `capabilities.image_generation: true` for image models and `capabilities.ocr: true` for models marked `ocr = true`
+    in the configuration (a text recognition model needs `vision`; `--import` and `--suggest` set it for vision models whose
+    name says OCR) in the model list, so MultiGPT can map the capability instead of guessing; `eliezer ls` shows `image`
+    and `ocr`.
   * Show a size for models without `size_gb` (the size of their files; an image model counts its text encoder and VAE too) and no
     context window for image models in the model list and `eliezer ls`.
   * Accept the histories chat programs send to models with a strict chat template (Mistral): the same role twice in a row, an
