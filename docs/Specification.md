@@ -621,6 +621,8 @@ Downloading is an administrative act and never happens on a chat request.
   each fetched file. `GET /api/v1/models/pins[?verify=true]` reports `ok`, `missing`, `size_mismatch` or (with
   `verify`, which hashes the files) `modified` for each file and the number of deviations. At start the sizes are
   checked and each deviation is logged (`pin_deviation`); nothing is repaired automatically.
+  `DELETE /api/v1/models/pins/{org}/{repo}` (`eliezer rm ORG/REPO`) removes a fetched repository; it refuses
+  while a download is active (`409 download_active`) or a configured model uses its files (`409 in_use`).
 - **Token (M5-03).** From `huggingface.token_file` (mode 0600; a file others can read is not used and a warning
   says so) or else the environment variable `HF_TOKEN`; `eliezer --set-hf-token` writes the file. It is sent only
   to `huggingface.co`, never forwarded to another host, never an argument of a process (a child process gets it as

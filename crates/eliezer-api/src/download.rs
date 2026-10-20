@@ -503,3 +503,77 @@ pub fn report(root: &std::path::Path, verify: bool) -> Value {
         .collect();
     json!({"pins": pins, "verified": verify, "deviations": deviations})
 }
+
+/// `DELETE /api/v1/models/pins/{org}/{repo}`: removes a repository fetched earlier from the model store.
+/// Refused while a download of it is active or a configured model still uses one of its files.
+pub async fn remove(State(app): State<App>, Path((org, name)): Path<(String, String)>) -> Response {
+    let repo = format!("{org}/{name}");
+    if !valid_repo(&repo) {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "The repository must be written ORG/REPO",
+        );
+    }
+    if app.downloads.active(&repo) {
+        return refuse(
+            StatusCode::CONFLICT,
+            "download_active",
+            "A download of this repository is running or queued",
+        );
+    }
+    let config = app.config.get();
+    let root = config.storage.models_dir.clone();
+    let Ok(dir) = store::repo_dir(&root, &repo) else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Invalid repository",
+        );
+    };
+    let dir = dir.canonicalize().unwrap_or(dir);
+    let uses = |path: &Option<std::path::PathBuf>| {
+        path.as_ref().is_some_and(|p| {
+            p.canonicalize()
+                .unwrap_or_else(|_| p.clone())
+                .starts_with(&dir)
+        })
+    };
+    let users: Vec<&str> = config
+        .model
+        .iter()
+        .filter(|m| {
+            let extra = m.extra.as_ref();
+            uses(&m.source.file)
+                || uses(&m.source.projector)
+                || uses(&extra.and_then(|e| e.text_encoder.clone()))
+                || uses(&extra.and_then(|e| e.vae.clone()))
+        })
+        .map(|m| m.key.as_str())
+        .collect();
+    if !users.is_empty() {
+        return refuse(
+            StatusCode::CONFLICT,
+            "in_use",
+            &format!(
+                "The models {} use files of this repository; remove them from the configuration first",
+                users.join(", ")
+            ),
+        );
+    }
+    let removed =
+        tokio::task::spawn_blocking(move || store::remove(&root, &repo).map(|b| (repo, b))).await;
+    match removed {
+        Ok(Ok((repo, bytes))) => Json(json!({"repo": repo, "freed_bytes": bytes})).into_response(),
+        Ok(Err(store::StoreError::Invalid)) => refuse(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "No repository fetched with `eliezer download` has this name",
+        ),
+        _ => refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "backend_error",
+            "Deleting the files failed",
+        ),
+    }
+}

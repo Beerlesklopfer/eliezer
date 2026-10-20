@@ -191,6 +191,41 @@ pub fn scan(root: &Path) -> Vec<Pin> {
     pins
 }
 
+/// Deletes a repository fetched with `eliezer download`: its directory with all files, including
+/// unfinished `.part` files. Only a directory with a pin file is touched, a symbolic link is refused, and
+/// the result is the number of bytes freed.
+pub fn remove(root: &Path, repo: &str) -> Result<u64, StoreError> {
+    let dir = repo_dir(root, repo)?;
+    let meta = fs::symlink_metadata(&dir).map_err(|_| StoreError::Invalid)?;
+    if !meta.is_dir() || read_pin(&dir, repo).is_none() {
+        return Err(StoreError::Invalid);
+    }
+    if !dir.canonicalize()?.starts_with(root.canonicalize()?) {
+        return Err(StoreError::Invalid);
+    }
+    let freed = dir_bytes(&dir);
+    fs::remove_dir_all(&dir)?;
+    // The organisation directory goes too when it is now empty; failing here is harmless.
+    if let Some(parent) = dir.parent() {
+        let _ = fs::remove_dir(parent);
+    }
+    Ok(freed)
+}
+
+fn dir_bytes(dir: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries.flatten().fold(0_u64, |sum, entry| {
+        let size = match entry.metadata() {
+            Ok(m) if m.is_dir() => dir_bytes(&entry.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        };
+        sum.saturating_add(size)
+    })
+}
+
 /// The bytes of all pinned files; what counts against `cache_limit_gb`.
 pub fn pinned_bytes(root: &Path) -> u64 {
     scan(root)

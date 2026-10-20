@@ -7,6 +7,11 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     layers) instead of evicting it, and they fall back to the CPU when the GPU is too small. The planner
     works per memory pool, a 409 on the CPU names `[cpu] ram_budget_gb`, `/api/v1/status` and `eliezer ps`
     show the device and the CPU memory. Without a RAM budget nothing changes.
+  * Add `DELETE /api/v1/models/pins/{org}/{repo}` and `eliezer rm ORG/REPO`: delete a repository fetched with
+    `eliezer get`/`download`; refused while a download runs or a configured model uses its files. Only
+    directories with a pin file are touched.
+  * Show the download progress of `eliezer get`/`download` in one line rewritten in place on a terminal; in a
+    pipe the line still changes only in steps of 5 %.
   * Add `POST /api/v1/models/estimate`: the memory Eliezer calculates for a model, context and parallelism,
     with its parts (weights, KV cache, overhead), the fit in the GPU and CPU pools and the largest
     context that fits, so MultiGPT can show Eliezer's figures instead of its own size-based guess.

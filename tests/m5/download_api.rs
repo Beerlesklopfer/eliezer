@@ -541,3 +541,48 @@ async fn the_pin_report_finds_deviations_and_verify_finds_changed_content() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn a_fetched_repository_can_be_deleted_and_nothing_else() {
+    let e = env(fake(false));
+    let (_, job) = send(
+        &e.app,
+        "POST",
+        "/api/v1/models/download",
+        Some(download(&["m-Q4_K_M.gguf", "vae/v.safetensors"])),
+    )
+    .await;
+    finish(&e.app, job["id"].as_str().unwrap()).await;
+    let dir = e.dir.0.join(REPO);
+    assert!(dir.is_dir());
+    // a directory without a pin is not ours to delete
+    std::fs::create_dir_all(e.dir.0.join("other/handmade")).unwrap();
+    let (status, body) = send(&e.app, "DELETE", "/api/v1/models/pins/other/handmade", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(e.dir.0.join("other/handmade").is_dir());
+    // a bad name never reaches the file system
+    let (status, _) = send(&e.app, "DELETE", "/api/v1/models/pins/org/..", None).await;
+    assert!(status == StatusCode::BAD_REQUEST || status == StatusCode::NOT_FOUND);
+    assert!(e.dir.0.is_dir());
+    // the real one
+    let (status, body) = send(
+        &e.app,
+        "DELETE",
+        &format!("/api/v1/models/pins/{REPO}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["freed_bytes"].as_u64().unwrap() >= 37_000);
+    assert!(!dir.exists());
+    let (_, pins) = send(&e.app, "GET", "/api/v1/models/pins", None).await;
+    assert_eq!(pins["pins"].as_array().unwrap().len(), 0);
+    let (status, _) = send(
+        &e.app,
+        "DELETE",
+        &format!("/api/v1/models/pins/{REPO}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

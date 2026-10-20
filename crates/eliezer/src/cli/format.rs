@@ -558,7 +558,7 @@ pub fn inspect_text(detail: &Value) -> String {
 }
 
 /// One progress line of a download job: the file in progress and the total.
-pub fn download_line(job: &Value) -> String {
+pub fn download_line(job: &Value, live: bool) -> String {
     let done = job["done_bytes"].as_u64().unwrap_or(0);
     let total = job["total_bytes"].as_u64().unwrap_or(0);
     let percent = (done * 100).checked_div(total).unwrap_or(0);
@@ -567,12 +567,20 @@ pub fn download_line(job: &Value) -> String {
         .and_then(|files| files.iter().find(|f| f["state"] == "running"))
         .and_then(|f| f["file"].as_str())
         .unwrap_or("-");
-    // The line only changes in steps of 5 %, so a terminal log stays short.
+    // Without a terminal the line only changes in steps of 5 %, so a log stays short.
+    let shown = if live { percent } else { percent / 5 * 5 };
+    let (done_text, total_text) = (bytes(done), bytes(total));
+    if !live {
+        return format!(
+            "{shown:>3}%  {total_text}  {current}  ({})",
+            job["state"].as_str().unwrap_or("?")
+        );
+    }
     format!(
         "{:>3}%  {} of {}  {}  ({})",
-        percent / 5 * 5,
-        bytes(done),
-        bytes(total),
+        shown,
+        done_text,
+        total_text,
         current,
         job["state"].as_str().unwrap_or("?")
     )

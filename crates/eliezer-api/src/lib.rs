@@ -10,7 +10,7 @@ use axum::{
     http::{StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 pub use download::report as pin_report;
 use eliezer_backend::{
@@ -124,6 +124,7 @@ pub fn managed_router(app: App) -> Router {
             )
             .route("/api/v1/models/download/{id}", get(download::job))
             .route("/api/v1/models/pins", get(download::pins))
+            .route("/api/v1/models/pins/{org}/{repo}", delete(download::remove))
             .route("/api/v1/hub/search", get(hub::search))
             .route("/api/v1/hub/models/{org}/{repo}", get(hub::detail))
             .route("/api/v1/status", get(status))

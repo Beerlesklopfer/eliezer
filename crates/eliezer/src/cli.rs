@@ -21,7 +21,7 @@ const LONG: Duration = Duration::from_secs(3600);
 
 const COMMANDS: &[&str] = &[
     "ls", "ps", "load", "unload", "status", "run", "show", "search", "inspect", "download", "pins",
-    "get", "help",
+    "get", "rm", "help",
 ];
 
 /// Complete help text of the program: service flags and client commands.
@@ -81,6 +81,8 @@ Commands (they use the HTTP API of the running service):
                                   progress (the repository must be on [huggingface] allow)
   pins [--verify]                 Files fetched earlier and whether they still match their pin;
                                   --verify hashes them (slow for big files)
+  rm ORG/REPO                     Delete a repository fetched earlier from the model store (refused
+                                  while a configured model still uses its files)
   help                            This text
 
 Options for all commands:
@@ -272,6 +274,11 @@ fn spec_for(command: &str) -> Spec {
             flags: &[],
             positional: (2, 17),
         },
+        "rm" => Spec {
+            values: &[],
+            flags: &[],
+            positional: (1, 1),
+        },
         "pins" => Spec {
             values: &[],
             flags: &["--verify"],
@@ -315,6 +322,7 @@ fn run(command: &str, args: &[String], at: usize) -> Res<()> {
         "inspect" => cmd_inspect(&client, json, &parsed.positional[0]),
         "download" => cmd_download(&client, json, &parsed),
         "get" => cmd_get(&client, json, &parsed),
+        "rm" => cmd_rm(&client, json, &parsed.positional[0]),
         "pins" => cmd_pins(&client, json, parsed.flag("--verify")),
         _ => cmd_run(&client, json, &parsed),
     }
@@ -700,6 +708,8 @@ fn run_download(
         );
     }
     let mut last = String::new();
+    // On a terminal the line is rewritten in place; in a pipe or log it changes in steps of 5 %.
+    let live = std::io::IsTerminal::is_terminal(&std::io::stdout());
     loop {
         std::thread::sleep(Duration::from_secs(1));
         let job = call(
@@ -709,9 +719,14 @@ fn run_download(
             None,
             SHORT,
         )?;
-        let line = format::download_line(&job);
+        let line = format::download_line(&job, live);
         if !json && line != last {
-            println!("{line}");
+            if live {
+                print!("\r\x1b[2K{line}");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            } else {
+                println!("{line}");
+            }
             last = line;
         }
         match job["state"].as_str() {
@@ -719,6 +734,9 @@ fn run_download(
                 if json {
                     print_json(&job);
                 } else {
+                    if live {
+                        println!();
+                    }
                     print!("{}", format::download_done(&job));
                 }
                 return Ok(());
@@ -735,6 +753,25 @@ fn run_download(
             _ => {}
         }
     }
+}
+
+fn cmd_rm(client: &Client, json: bool, repo: &str) -> Res<()> {
+    let result = call(
+        client,
+        "DELETE",
+        &format!("/api/v1/models/pins/{repo}"),
+        None,
+        SHORT,
+    )?;
+    if json {
+        print_json(&result);
+    } else {
+        println!(
+            "Deleted {repo}, freed {}.",
+            format::bytes(result["freed_bytes"].as_u64().unwrap_or(0))
+        );
+    }
+    Ok(())
 }
 
 fn cmd_pins(client: &Client, json: bool, verify: bool) -> Res<()> {
