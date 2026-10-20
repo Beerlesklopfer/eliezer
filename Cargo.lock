@@ -293,6 +293,7 @@ version = "0.6.0"
 dependencies = [
  "axum",
  "eliezer-api",
+ "eliezer-audiocpp",
  "eliezer-backend",
  "eliezer-core",
  "eliezer-gpu",
@@ -320,6 +321,17 @@ dependencies = [
  "sha2",
  "tokio",
  "tower",
+ "tracing",
+]
+
+[[package]]
+name = "eliezer-audiocpp"
+version = "0.6.0"
+dependencies = [
+ "eliezer-backend",
+ "reqwest",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 

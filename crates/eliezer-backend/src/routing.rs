@@ -1,10 +1,11 @@
-//! One `Backend` in front of two: language and embedding models go to the text runtime, image models to the
-//! image runtime. A new instance is routed by the model, a running one by its generation number: the image runtime
-//! numbers its instances from `image_base` on, so nothing has to be remembered per instance.
+//! One `Backend` in front of three: language and embedding models go to the text runtime, image models to the
+//! image runtime and music models to the music runtime. A new instance is routed by the model, a running one by its
+//! generation number: the image runtime numbers its instances from `image_base` on and the music runtime from
+//! `audio_base` on (the higher base), so nothing has to be remembered per instance.
 
 use crate::{
     Backend, BackendFuture, ChatRequest, Chunk, EmbedRequest, Embeddings, ImageRequest, LoadSpec,
-    Running,
+    MusicRequest, Running,
 };
 use std::{
     collections::HashSet,
@@ -17,6 +18,8 @@ pub struct RoutingBackend {
     image: Arc<dyn Backend>,
     image_base: u64,
     image_models: RwLock<HashSet<String>>,
+    audio: Option<(Arc<dyn Backend>, u64)>,
+    audio_models: RwLock<HashSet<String>>,
 }
 
 impl RoutingBackend {
@@ -26,6 +29,29 @@ impl RoutingBackend {
             image,
             image_base,
             image_models: RwLock::new(HashSet::new()),
+            audio: None,
+            audio_models: RwLock::new(HashSet::new()),
+        }
+    }
+
+    /// Adds the music runtime; its generation numbers start at `base`, above those of the image runtime.
+    pub fn with_audio(mut self, audio: Arc<dyn Backend>, base: u64) -> Self {
+        self.audio = Some((audio, base));
+        self
+    }
+
+    /// The keys of the models the music runtime serves.
+    pub fn set_audio_models(&self, keys: HashSet<String>) {
+        match self.audio_models.write() {
+            Ok(mut guard) => *guard = keys,
+            Err(poisoned) => *poisoned.into_inner() = keys,
+        }
+    }
+
+    fn is_audio_model(&self, key: &str) -> bool {
+        match self.audio_models.read() {
+            Ok(guard) => guard.contains(key),
+            Err(poisoned) => poisoned.into_inner().contains(key),
         }
     }
 
@@ -45,7 +71,11 @@ impl RoutingBackend {
     }
 
     fn of(&self, running: &Running) -> &Arc<dyn Backend> {
-        if running.generation >= self.image_base {
+        if let Some((audio, base)) = &self.audio
+            && running.generation >= *base
+        {
+            audio
+        } else if running.generation >= self.image_base {
             &self.image
         } else {
             &self.text
@@ -55,7 +85,11 @@ impl RoutingBackend {
 
 impl Backend for RoutingBackend {
     fn start<'a>(&'a self, spec: &'a LoadSpec) -> BackendFuture<'a, Running> {
-        if self.is_image_model(&spec.model) {
+        if let Some((audio, _)) = &self.audio
+            && self.is_audio_model(&spec.model)
+        {
+            audio.start(spec)
+        } else if self.is_image_model(&spec.model) {
             self.image.start(spec)
         } else {
             self.text.start(spec)
@@ -87,5 +121,12 @@ impl Backend for RoutingBackend {
         request: ImageRequest,
     ) -> BackendFuture<'a, Vec<String>> {
         self.of(running).image(running, request)
+    }
+    fn music<'a>(
+        &'a self,
+        running: &'a Running,
+        request: MusicRequest,
+    ) -> BackendFuture<'a, Vec<u8>> {
+        self.of(running).music(running, request)
     }
 }

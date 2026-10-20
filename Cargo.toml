@@ -25,6 +25,7 @@ eliezer-gpu = { path = "crates/eliezer-gpu" }
 eliezer-llamacpp = { path = "crates/eliezer-llamacpp" }
 eliezer-hub = { path = "crates/eliezer-hub" }
 eliezer-sdcpp = { path = "crates/eliezer-sdcpp" }
+eliezer-audiocpp = { path = "crates/eliezer-audiocpp" }
 # Plain HTTPS client for the Hugging Face API; rustls, no OpenSSL (docs/Dependencies.md).
 # Decodes the base64 images of chat requests (already in the dependency tree through reqwest).
 # SHA-256 of downloaded model files (checked against the hash Hugging Face lists).

@@ -120,6 +120,21 @@ pub struct ImageRequest {
     /// Pictures to edit (the bytes of PNG, JPEG or WebP files, at most four); empty draws a new picture.
     pub references: Vec<Vec<u8>>,
 }
+/// A song to compose.
+#[derive(Debug, Clone)]
+pub struct MusicRequest {
+    pub model: String,
+    /// The words to sing, with section tags such as `[verse]` and `[chorus]`.
+    pub lyrics: String,
+    /// The style, mood, vocals and arrangement.
+    pub description: String,
+    /// The length budget in seconds; the song can end earlier.
+    pub duration_sec: u32,
+    /// Denoising steps (a model default applies without).
+    pub steps: Option<u32>,
+    /// The start value of the random numbers; without one every request composes a new song.
+    pub seed: Option<i64>,
+}
 /// The kind of a picture file by its first bytes: `image/png`, `image/jpeg` or `image/webp`.
 pub fn image_type(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -148,6 +163,10 @@ pub trait Backend: Send + Sync {
     }
     /// Generated images as base64-encoded PNG data.
     fn image<'a>(&'a self, _: &'a Running, _: ImageRequest) -> BackendFuture<'a, Vec<String>> {
+        Box::pin(async { Err(BackendError::Unavailable) })
+    }
+    /// A composed song as the bytes of a WAV file.
+    fn music<'a>(&'a self, _: &'a Running, _: MusicRequest) -> BackendFuture<'a, Vec<u8>> {
         Box::pin(async { Err(BackendError::Unavailable) })
     }
 }
@@ -312,6 +331,42 @@ impl Backend for FakeBackend {
             Ok(vec![FAKE_PNG_BASE64.to_owned(); request.count as usize])
         })
     }
+    fn music<'a>(
+        &'a self,
+        running: &'a Running,
+        request: MusicRequest,
+    ) -> BackendFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            if !running.is_alive() {
+                return Err(BackendError::Crashed);
+            }
+            if request.model != running.spec.model || request.lyrics.trim().is_empty() {
+                return Err(BackendError::InvalidRequest);
+            }
+            tokio::time::sleep(self.config.chunk_delay).await;
+            Ok(fake_wav())
+        })
+    }
+}
+/// A valid WAV file of 0.1 s of silence (8 kHz, 16 bit, mono), so clients that read the fake song succeed.
+pub fn fake_wav() -> Vec<u8> {
+    let samples: u32 = 800;
+    let data = samples * 2;
+    let mut wav = Vec::with_capacity(44 + data as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&8000_u32.to_le_bytes());
+    wav.extend_from_slice(&16000_u32.to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data.to_le_bytes());
+    wav.resize(44 + data as usize, 0);
+    wav
 }
 /// A valid 1x1 PNG, so clients that decode the fake image succeed.
 pub const FAKE_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

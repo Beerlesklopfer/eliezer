@@ -58,3 +58,7 @@ path = "../../tests/m6/helper_api.rs"
 [[test]]
 name = "edits_api"
 path = "../../tests/m6/edits_api.rs"
+
+[[test]]
+name = "speech_api"
+path = "../../tests/m7/speech_api.rs"

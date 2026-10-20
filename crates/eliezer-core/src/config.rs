@@ -235,6 +235,7 @@ pub struct BackendConfig {
     pub mistralrs: Option<EmbeddedBackendConfig>,
     pub llamacpp: Option<EmbeddedBackendConfig>,
     pub sdcpp: Option<SdcppConfig>,
+    pub audiocpp: Option<AudiocppConfig>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -249,6 +250,21 @@ impl Default for EmbeddedBackendConfig {
             max_loaded: 4,
         }
     }
+}
+/// The audio.cpp server for music models: one `audiocpp_server` child process per loaded model.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudiocppConfig {
+    pub program: PathBuf,
+    pub port_range: [u16; 2],
+    #[serde(default)]
+    pub library_path: Vec<PathBuf>,
+    /// The compute backend of the program: `hip` (AMD, the default), `cuda`, `vulkan` or `cpu`.
+    #[serde(default = "compute_default")]
+    pub compute: String,
+}
+fn compute_default() -> String {
+    "hip".to_owned()
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -306,6 +322,7 @@ pub enum BackendKind {
     Mistralrs,
     Llamacpp,
     Sdcpp,
+    Audiocpp,
 }
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -313,6 +330,8 @@ pub enum ModelKind {
     Llm,
     Embedding,
     Image,
+    /// Music from lyrics and a description (`POST /v1/audio/speech`); served by audio.cpp.
+    Music,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -366,6 +385,13 @@ pub const SAMPLING_METHODS: &[&str] = &[
     "dpm++2m_sde_bt",
     "lms",
 ];
+/// The component files of a music package that are used when `extra` names none (the balanced mix of audio.cpp).
+pub const MUSIC_LANGUAGE_MODEL: &str = "language_model_q4_0.gguf";
+pub const MUSIC_RVQ_DEPTH_DECODER: &str = "rvq_depth_decoder_q8_0.gguf";
+pub const MUSIC_FLOW_TRANSFORMER: &str = "transformer_q4_0.gguf";
+/// The parts of a music package that every mix needs.
+pub const MUSIC_FIXED_COMPONENTS: [&str; 2] = ["condition_encoder.gguf", "vocoder.gguf"];
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExtraConfig {
@@ -385,6 +411,13 @@ pub struct ExtraConfig {
     pub prompt_helper: Option<String>,
     /// The model edits pictures: `POST /v1/images/edits` accepts it and `capabilities.image_edit` is reported.
     pub image_edit: Option<bool>,
+    /// Music models: the component files of the package, by name inside the package directory (the defaults of the
+    /// program are `language_model_q4_0.gguf`, `rvq_depth_decoder_q8_0.gguf` and `transformer_q4_0.gguf`).
+    pub language_model: Option<String>,
+    pub rvq_depth_decoder: Option<String>,
+    pub flow_transformer: Option<String>,
+    /// Music models: the length drawn when a request does not name one (seconds, 1 to 300; default 30).
+    pub duration_sec: Option<u32>,
 }
 
 /// The caller also resolves existing symbolic links within paths that do not exist yet.
@@ -411,7 +444,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -574,6 +607,8 @@ impl Config {
                 let Some(file) = file else {
                     continue;
                 };
+                // A music model is a package directory with several component files.
+                let package = model.kind == ModelKind::Music && field == "source.file";
                 match std::fs::File::open(file).and_then(|f| f.metadata()) {
                     Err(error) => problems.push(format!(
                         "model '{}': {} {} (moved or deleted? update {field}, or run `eliezer --import`)",
@@ -581,7 +616,20 @@ impl Config {
                         file.display(),
                         describe(&error)
                     )),
-                    Ok(meta) if !meta.is_file() => problems.push(format!(
+                    Ok(meta) if package && !meta.is_dir() => problems.push(format!(
+                        "model '{}': {} is not a directory (a music model names its package directory)",
+                        model.key,
+                        file.display()
+                    )),
+                    Ok(meta) if package && !file.join("config.json").is_file() => {
+                        problems.push(format!(
+                            "model '{}': {} has no config.json (is it a complete audio.cpp package?)",
+                            model.key,
+                            file.display()
+                        ));
+                        let _ = meta;
+                    }
+                    Ok(meta) if !package && !meta.is_file() => problems.push(format!(
                         "model '{}': {} is not a regular file",
                         model.key,
                         file.display()
@@ -758,28 +806,62 @@ impl Config {
                 )?;
             }
         }
-        if let Some(sd) = &self.backend.sdcpp {
+        let programs = [
+            (
+                "sdcpp",
+                self.backend
+                    .sdcpp
+                    .as_ref()
+                    .map(|c| (&c.program, &c.library_path, c.port_range)),
+            ),
+            (
+                "audiocpp",
+                self.backend
+                    .audiocpp
+                    .as_ref()
+                    .map(|c| (&c.program, &c.library_path, c.port_range)),
+            ),
+        ];
+        for (name, program) in programs {
+            let Some((program, library_path, port_range)) = program else {
+                continue;
+            };
             check(
-                clean_absolute(&sd.program),
-                "backend.sdcpp.program",
+                clean_absolute(program),
+                &format!("backend.{name}.program"),
                 "Absolute program path without parent components required",
             )?;
-            for dir in &sd.library_path {
+            for dir in library_path {
                 check(
                     clean_absolute(dir) && !dir.as_os_str().as_encoded_bytes().contains(&b':'),
-                    "backend.sdcpp.library_path",
+                    &format!("backend.{name}.library_path"),
                     "Absolute directories without parent components and without ':' required",
                 )?;
             }
             check(
-                sd.port_range[0] > 0 && sd.port_range[0] <= sd.port_range[1],
-                "backend.sdcpp.port_range",
+                port_range[0] > 0 && port_range[0] <= port_range[1],
+                &format!("backend.{name}.port_range"),
                 "Port range must be ascending and start above zero",
             )?;
             check(
-                !(sd.port_range[0]..=sd.port_range[1]).contains(&self.server.listen.port()),
-                "backend.sdcpp.port_range",
+                !(port_range[0]..=port_range[1]).contains(&self.server.listen.port()),
+                &format!("backend.{name}.port_range"),
                 "Port range overlaps the service port",
+            )?;
+        }
+        if let Some(music) = &self.backend.audiocpp {
+            check(
+                ["hip", "cuda", "vulkan", "cpu"].contains(&music.compute.as_str()),
+                "backend.audiocpp.compute",
+                "The compute backend is hip, cuda, vulkan or cpu",
+            )?;
+        }
+        if let (Some(images), Some(music)) = (&self.backend.sdcpp, &self.backend.audiocpp) {
+            check(
+                images.port_range[1] < music.port_range[0]
+                    || music.port_range[1] < images.port_range[0],
+                "backend.audiocpp.port_range",
+                "Port range overlaps the one of backend.sdcpp",
             )?;
         }
         for (path, field) in [
@@ -881,6 +963,7 @@ impl Config {
                 }
                 BackendKind::Llamacpp => self.backend.llamacpp.as_ref().is_some_and(|b| b.enabled),
                 BackendKind::Sdcpp => self.backend.sdcpp.is_some(),
+                BackendKind::Audiocpp => self.backend.audiocpp.is_some(),
             };
             check_model(
                 enabled,
@@ -924,21 +1007,59 @@ impl Config {
                 "vision",
                 "A llamacpp model reads images exactly when it has source.projector (set both)",
             )?;
+            let generation = matches!(model.kind, ModelKind::Image | ModelKind::Music);
             check_model(
-                model.kind != ModelKind::Image || model.vram_gb.is_some(),
+                !generation || model.vram_gb.is_some(),
                 "vram_gb",
-                "Image models require a measured memory requirement",
+                "Image and music models require a measured memory requirement",
             )?;
             check_model(
-                model.kind != ModelKind::Image || model.device != DevicePolicy::Cpu,
+                !generation || model.device != DevicePolicy::Cpu,
                 "device",
-                "Image models need the GPU; diffusion on the CPU is not supported",
+                "Image and music models need the GPU; generation on the CPU is not supported",
             )?;
             check_model(
                 (model.backend == BackendKind::Sdcpp) == (model.kind == ModelKind::Image),
                 "kind",
                 "Image models require sdcpp; sdcpp serves only image models",
             )?;
+            check_model(
+                (model.backend == BackendKind::Audiocpp) == (model.kind == ModelKind::Music),
+                "kind",
+                "Music models require audiocpp; audiocpp serves only music models",
+            )?;
+            if let Some(extra) = &model.extra {
+                let component = |name: &Option<String>| {
+                    name.as_ref().is_none_or(|n| {
+                        n.ends_with(".gguf")
+                            && n.len() > 5
+                            && n.bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                            && !n.starts_with('.')
+                    })
+                };
+                check_model(
+                    component(&extra.language_model)
+                        && component(&extra.rvq_depth_decoder)
+                        && component(&extra.flow_transformer),
+                    "extra",
+                    "Music components are file names of .gguf files inside the package directory",
+                )?;
+                check_model(
+                    model.kind == ModelKind::Music
+                        || (extra.language_model.is_none()
+                            && extra.rvq_depth_decoder.is_none()
+                            && extra.flow_transformer.is_none()
+                            && extra.duration_sec.is_none()),
+                    "extra",
+                    "language_model, rvq_depth_decoder, flow_transformer and duration_sec belong to music models",
+                )?;
+                check_model(
+                    extra.duration_sec.is_none_or(|d| (1..=300).contains(&d)),
+                    "extra.duration_sec",
+                    "The duration is between 1 and 300 seconds",
+                )?;
+            }
             if let Some(reasoning) = &model.reasoning {
                 let mut options = BTreeSet::new();
                 check_model(

@@ -1,5 +1,6 @@
 //! HTTP interfaces of the model supervisor.
 pub mod anthropic;
+mod audio;
 mod download;
 mod edits;
 pub mod helper;
@@ -134,6 +135,7 @@ pub fn managed_router(app: App) -> Router {
             .route("/v1/completions", post(completions))
             .route("/v1/embeddings", post(embeddings))
             .route("/v1/images/generations", post(images))
+            .route("/v1/audio/speech", post(audio::speech))
             .route(
                 "/v1/images/edits",
                 post(edits::edits).layer(axum::extract::DefaultBodyLimit::max(edits::MAX_BODY)),
@@ -322,6 +324,37 @@ fn size_bytes(model: &eliezer_core::config::ModelConfig) -> Option<u64> {
         return Some(bytes);
     }
     let extra = model.extra.as_ref();
+    if model.kind == eliezer_core::config::ModelKind::Music {
+        // A package directory: the three chosen components and the two fixed ones.
+        let dir = model.source.file.as_ref()?;
+        let chosen = |name: &Option<String>, default: &str| {
+            name.clone().unwrap_or_else(|| default.to_owned())
+        };
+        let mut names = vec![
+            chosen(
+                &extra.and_then(|e| e.language_model.clone()),
+                eliezer_core::config::MUSIC_LANGUAGE_MODEL,
+            ),
+            chosen(
+                &extra.and_then(|e| e.rvq_depth_decoder.clone()),
+                eliezer_core::config::MUSIC_RVQ_DEPTH_DECODER,
+            ),
+            chosen(
+                &extra.and_then(|e| e.flow_transformer.clone()),
+                eliezer_core::config::MUSIC_FLOW_TRANSFORMER,
+            ),
+        ];
+        names.extend(
+            eliezer_core::config::MUSIC_FIXED_COMPONENTS
+                .iter()
+                .map(|n| (*n).to_owned()),
+        );
+        let sizes: Vec<u64> = names
+            .iter()
+            .filter_map(|n| std::fs::metadata(dir.join(n)).ok().map(|m| m.len()))
+            .collect();
+        return (!sizes.is_empty()).then(|| sizes.iter().sum());
+    }
     let paths = [
         model.source.file.as_ref(),
         model.source.projector.as_ref(),
@@ -353,11 +386,13 @@ async fn models(State(app): State<App>) -> Response {
     let config = app.config.get();
     Json(json!({"models":config.model.iter().map(|m| {
         let loaded = states.iter().find(|i| i.key == m.key && i.state == eliezer_core::scheduler::State::Loaded);
-        let mut value = json!({"type":match m.kind { eliezer_core::config::ModelKind::Llm => "llm", eliezer_core::config::ModelKind::Embedding => "embedding", _ => "image" },
+        let mut value = json!({"type":match m.kind { eliezer_core::config::ModelKind::Llm => "llm", eliezer_core::config::ModelKind::Embedding => "embedding", eliezer_core::config::ModelKind::Music => "music", _ => "image" },
             "key":m.key,"display_name":m.key,"capabilities":{"vision":m.vision},"loaded_instances":[]});
-        // An image model has no context window.
+        // An image or music model has no context window.
         if m.ocr { value["capabilities"]["ocr"] = json!(true); }
-        if m.kind == eliezer_core::config::ModelKind::Image {
+        if m.kind == eliezer_core::config::ModelKind::Music {
+            value["capabilities"]["music_generation"] = json!(true);
+        } else if m.kind == eliezer_core::config::ModelKind::Image {
             value["capabilities"]["image_generation"] = json!(true);
             if m.extra.as_ref().and_then(|e| e.image_edit) == Some(true) {
                 value["capabilities"]["image_edit"] = json!(true);
@@ -368,7 +403,7 @@ async fn models(State(app): State<App>) -> Response {
         if let Some(reasoning) = &m.reasoning { value["capabilities"]["reasoning"] = json!({"allowed_options":reasoning.options,"default":reasoning.default}); }
         if let Some(size) = size_bytes(m) { value["size_bytes"] = json!(size); }
         if let (Some(_), Some(spec)) = (loaded, specs.iter().find(|s| s.model == m.key)) {
-            let config = if m.kind == eliezer_core::config::ModelKind::Image { json!({}) } else { json!({"context_length":spec.context,"parallel":spec.parallel}) };
+            let config = if matches!(m.kind, eliezer_core::config::ModelKind::Image | eliezer_core::config::ModelKind::Music) { json!({}) } else { json!({"context_length":spec.context,"parallel":spec.parallel}) };
             value["loaded_instances"] = json!([{"id":m.key,"config":config}]);
         }
         value
@@ -757,6 +792,9 @@ async fn embeddings(
         .into_response(),
         Err(e) => error(e, false),
     }
+}
+fn valid_music_length(seconds: u32) -> bool {
+    (1..=300).contains(&seconds)
 }
 fn valid_size(size: &str) -> bool {
     size.split_once('x').is_some_and(|(w, h)| {

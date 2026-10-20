@@ -85,7 +85,8 @@ fn models(config: &Config) -> Vec<Model> {
                 bytes,
                 priority: m.priority,
                 pinned: m.pinned,
-                image: m.kind == ModelKind::Image,
+                // Pictures and music are heavy jobs of a program of their own: they take the GPU one at a time.
+                image: matches!(m.kind, ModelKind::Image | ModelKind::Music),
                 in_flight: 0,
                 last_used_ms: 0,
             },
@@ -103,13 +104,15 @@ fn models(config: &Config) -> Vec<Model> {
 }
 
 /// The runtimes that serve models: embedded llama.cpp (when compiled in) for language and embedding models and
-/// stable-diffusion.cpp as a child process for image models (when `[backend.sdcpp]` is configured).
+/// stable-diffusion.cpp as a child process for image models (when `[backend.sdcpp]` is configured) and audio.cpp as a
+/// child process for music models (when `[backend.audiocpp]` is configured).
 struct Runtimes {
     backend: Arc<dyn Backend>,
     router: Arc<RoutingBackend>,
     #[cfg(feature = "llamacpp")]
     llamacpp: Arc<eliezer_llamacpp::LlamaCppBackend>,
     sdcpp: Option<Arc<eliezer_sdcpp::SdcppBackend>>,
+    audiocpp: Option<Arc<eliezer_audiocpp::AudiocppBackend>>,
 }
 impl Runtimes {
     fn new(config: &Config) -> Self {
@@ -146,17 +149,29 @@ impl Runtimes {
             Some(backend) => backend.clone(),
             None => Arc::new(NoBackend),
         };
-        let router = Arc::new(RoutingBackend::new(
-            text,
-            image,
-            eliezer_sdcpp::GENERATION_BASE,
-        ));
+        let audiocpp = config.backend.audiocpp.as_ref().map(|audio| {
+            tracing::info!(event = "runtime", "Music models are served by audio.cpp");
+            Arc::new(
+                eliezer_audiocpp::AudiocppBackend::new(
+                    audio.program.clone(),
+                    (audio.port_range[0], audio.port_range[1]),
+                    &audio.compute,
+                )
+                .with_library_path(audio.library_path.clone()),
+            )
+        });
+        let mut router = RoutingBackend::new(text, image, eliezer_sdcpp::GENERATION_BASE);
+        if let Some(backend) = &audiocpp {
+            router = router.with_audio(backend.clone(), eliezer_audiocpp::GENERATION_BASE);
+        }
+        let router = Arc::new(router);
         let runtimes = Self {
             backend: router.clone(),
             router,
             #[cfg(feature = "llamacpp")]
             llamacpp,
             sdcpp,
+            audiocpp,
         };
         runtimes.update(config);
         runtimes
@@ -169,6 +184,12 @@ impl Runtimes {
             .set_image_models(images.keys().cloned().collect());
         if let Some(sdcpp) = &self.sdcpp {
             sdcpp.set_models(images);
+        }
+        let songs = audiocpp_models(config);
+        self.router
+            .set_audio_models(songs.keys().cloned().collect());
+        if let Some(audiocpp) = &self.audiocpp {
+            audiocpp.set_models(songs);
         }
     }
 }
@@ -194,6 +215,48 @@ fn sdcpp_models(config: &Config) -> std::collections::HashMap<String, eliezer_sd
                     cfg_scale: extra.and_then(|e| e.cfg_scale),
                     sampling_method: extra.and_then(|e| e.sampling_method.clone()),
                     offload_to_cpu: extra.and_then(|e| e.offload_to_cpu).unwrap_or(true),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// The music models of the configuration with the package and settings the child process needs, by key.
+fn audiocpp_models(
+    config: &Config,
+) -> std::collections::HashMap<String, eliezer_audiocpp::MusicModel> {
+    use eliezer_core::config::{
+        MUSIC_FLOW_TRANSFORMER, MUSIC_LANGUAGE_MODEL, MUSIC_RVQ_DEPTH_DECODER,
+    };
+    config
+        .model
+        .iter()
+        .filter(|m| {
+            m.backend == eliezer_core::config::BackendKind::Audiocpp && m.kind == ModelKind::Music
+        })
+        .filter_map(|m| {
+            let extra = m.extra.as_ref();
+            let name = |chosen: Option<&String>, default: &str| {
+                chosen.cloned().unwrap_or_else(|| default.to_owned())
+            };
+            Some((
+                m.key.clone(),
+                eliezer_audiocpp::MusicModel {
+                    package: m.source.file.clone()?,
+                    language_model: name(
+                        extra.and_then(|e| e.language_model.as_ref()),
+                        MUSIC_LANGUAGE_MODEL,
+                    ),
+                    rvq_depth_decoder: name(
+                        extra.and_then(|e| e.rvq_depth_decoder.as_ref()),
+                        MUSIC_RVQ_DEPTH_DECODER,
+                    ),
+                    flow_transformer: name(
+                        extra.and_then(|e| e.flow_transformer.as_ref()),
+                        MUSIC_FLOW_TRANSFORMER,
+                    ),
+                    steps: extra.and_then(|e| e.steps),
+                    guidance: extra.and_then(|e| e.cfg_scale),
                 },
             ))
         })

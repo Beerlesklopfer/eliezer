@@ -29,7 +29,7 @@ fn cpu_placement_is_off_by_default_and_image_models_need_the_gpu() {
         "{EXAMPLE}\n[[model]]\nkey=\"pic\"\nbackend=\"sdcpp\"\nkind=\"image\"\ndevice=\"cpu\"\nvram_gb=4.0\nsource={{file=\"/var/lib/eliezer/models/p.gguf\"}}\n"
     );
     let error = Config::parse(&image).unwrap_err().to_string();
-    assert!(error.contains("diffusion on the CPU"), "{error}");
+    assert!(error.contains("generation on the CPU"), "{error}");
 }
 #[test]
 fn schema_rejects_unknown_fields_without_echoing_values() {
@@ -427,4 +427,121 @@ fn only_an_image_model_can_edit_pictures() {
     let text = base.replace("size_gb=1.0\n", "size_gb=1.0\nextra={image_edit=true}\n");
     let error = Config::parse(&text).unwrap_err().to_string();
     assert!(error.contains("extra.image_edit"), "{error}");
+}
+
+#[test]
+fn a_music_model_needs_the_music_backend_a_memory_figure_and_plain_component_names() {
+    let base = "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\n[backend.sdcpp]\nprogram=\"/usr/bin/sd-server\"\nport_range=[24600,24609]\n[backend.audiocpp]\nprogram=\"/usr/bin/audiocpp_server\"\nport_range=[24700,24709]\n";
+    let model = |extra: &str| {
+        format!(
+            "{base}[[model]]\nkey=\"m\"\nbackend=\"audiocpp\"\nkind=\"music\"\nsource={{file=\"/var/lib/eliezer/models/music\"}}\nvram_gb=10.0\n{extra}"
+        )
+    };
+    assert!(Config::parse(&model("")).is_ok());
+    assert!(
+        Config::parse(&model(
+            "extra={language_model=\"language_model_q8_0.gguf\",rvq_depth_decoder=\"a.gguf\",flow_transformer=\"b.gguf\",duration_sec=120,steps=20,cfg_scale=1.7}\n"
+        ))
+        .is_ok()
+    );
+    for (extra, field) in [
+        ("extra={language_model=\"../x.gguf\"}\n", "extra"),
+        ("extra={language_model=\"a/b.gguf\"}\n", "extra"),
+        ("extra={flow_transformer=\"x.bin\"}\n", "extra"),
+        ("extra={rvq_depth_decoder=\".hidden.gguf\"}\n", "extra"),
+        ("extra={duration_sec=0}\n", "extra.duration_sec"),
+        ("extra={duration_sec=301}\n", "extra.duration_sec"),
+    ] {
+        let error = Config::parse(&model(extra)).unwrap_err().to_string();
+        assert!(error.contains(field), "{extra}: {error}");
+    }
+    // no memory figure, the wrong backend, the wrong kind, the CPU
+    let no_figure = model("").replace("vram_gb=10.0\n", "");
+    assert!(
+        Config::parse(&no_figure)
+            .unwrap_err()
+            .to_string()
+            .contains("vram_gb")
+    );
+    let wrong_backend = model("").replace("backend=\"audiocpp\"", "backend=\"sdcpp\"");
+    assert!(
+        Config::parse(&wrong_backend)
+            .unwrap_err()
+            .to_string()
+            .contains("kind")
+    );
+    let wrong_kind = model("").replace("kind=\"music\"", "kind=\"image\"");
+    assert!(
+        Config::parse(&wrong_kind)
+            .unwrap_err()
+            .to_string()
+            .contains("kind")
+    );
+    let cpu = model("device=\"cpu\"\n");
+    assert!(
+        Config::parse(&cpu)
+            .unwrap_err()
+            .to_string()
+            .contains("device")
+    );
+    // the music settings belong to music models
+    let image = format!(
+        "{base}[[model]]\nkey=\"i\"\nbackend=\"sdcpp\"\nkind=\"image\"\nsource={{file=\"/var/lib/eliezer/models/p.gguf\"}}\nvram_gb=9.0\nextra={{duration_sec=30}}\n"
+    );
+    assert!(
+        Config::parse(&image)
+            .unwrap_err()
+            .to_string()
+            .contains("extra")
+    );
+    // the backend: its compute setting and a port range of its own
+    let compute = base.replace(
+        "port_range=[24700,24709]",
+        "port_range=[24700,24709]\ncompute=\"metal\"",
+    );
+    assert!(
+        Config::parse(&compute)
+            .unwrap_err()
+            .to_string()
+            .contains("compute")
+    );
+    for ok in ["hip", "cuda", "vulkan", "cpu"] {
+        let text = base.replace(
+            "port_range=[24700,24709]",
+            &format!("port_range=[24700,24709]\ncompute=\"{ok}\""),
+        );
+        assert!(Config::parse(&text).is_ok(), "{ok}");
+    }
+    let overlap = base.replace("[24700,24709]", "[24605,24615]");
+    assert!(
+        Config::parse(&overlap)
+            .unwrap_err()
+            .to_string()
+            .contains("audiocpp")
+    );
+    let on_service = base.replace("[24700,24709]", "[1200,1300]");
+    assert!(
+        Config::parse(&on_service)
+            .unwrap_err()
+            .to_string()
+            .contains("audiocpp")
+    );
+    let relative = base.replace("/usr/bin/audiocpp_server", "audiocpp_server");
+    assert!(
+        Config::parse(&relative)
+            .unwrap_err()
+            .to_string()
+            .contains("audiocpp")
+    );
+    // a music model without the backend
+    let without = model("").replace(
+        "[backend.audiocpp]\nprogram=\"/usr/bin/audiocpp_server\"\nport_range=[24700,24709]\n",
+        "",
+    );
+    assert!(
+        Config::parse(&without)
+            .unwrap_err()
+            .to_string()
+            .contains("backend")
+    );
 }
