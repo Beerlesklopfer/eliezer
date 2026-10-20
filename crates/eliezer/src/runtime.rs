@@ -189,6 +189,7 @@ fn sdcpp_models(config: &Config) -> std::collections::HashMap<String, eliezer_sd
                     diffusion: m.source.file.clone()?,
                     text_encoder: extra.and_then(|e| e.text_encoder.clone()),
                     vae: extra.and_then(|e| e.vae.clone()),
+                    tokenizer: extra.and_then(|e| e.tokenizer.clone()),
                     steps: extra.and_then(|e| e.steps),
                     cfg_scale: extra.and_then(|e| e.cfg_scale),
                     sampling_method: extra.and_then(|e| e.sampling_method.clone()),

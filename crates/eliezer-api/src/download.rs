@@ -548,6 +548,7 @@ pub async fn remove(State(app): State<App>, Path((org, name)): Path<(String, Str
                 || uses(&m.source.projector)
                 || uses(&extra.and_then(|e| e.text_encoder.clone()))
                 || uses(&extra.and_then(|e| e.vae.clone()))
+                || uses(&extra.and_then(|e| e.tokenizer.clone()))
         })
         .map(|m| m.key.as_str())
         .collect();

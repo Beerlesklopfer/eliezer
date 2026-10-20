@@ -120,5 +120,13 @@ Built with HIP for gfx1100 as in `tests/runtime/sdcpp/README.md` (`-DSD_HIPBLAS=
   edit with their normal start arguments, no extra option needed. FLUX.2 klein 4B (4 steps): a 1024x1024 fox made blue in
   27 s including the load. Qwen Image 2.1 UC Q4_K_M with the int8 encoder (20 steps, cfg 4): a 512x512 fox made blue in 35 s
   including the load; the safetensors encoder works for editing (the docs ask for `--llm_vision` only with a GGUF encoder).
+- MOSS-Image-SFT (checked 2026-10-20, `docs/moss_image.md` of the commit): `--diffusion-model` `MOSS-Image-SFT-Q8_0.gguf` of
+  `leejet/MOSS-Image-SFT-GGUF`, `--llm` `Qwen3.5-9B-Q4_K_M.gguf` of `unsloth/Qwen3.5-9B-GGUF`, `--vae` the FLUX.2 VAE (as
+  for FLUX.2 klein), `--tokenizer` the `tokenizer/tokenizer.json` of `OpenMOSS-Team/MOSS-Image-SFT` (the external file is
+  required: Qwen3.5 has another vocabulary than the embedded one; `extra.tokenizer`), `--cfg-scale 3.0`, default steps (20).
+  A cat with a wooden sign "moss-image" at 1024x1024: the text is rendered correctly; 4 min 17 s including the load, 768x768 in
+  2 min 21 s (warm), with the weights in RAM (`offload_to_cpu` default) and 10.6 GB VRAM in use. Two requests at once: the second
+  waits inside the program and is answered after the first. Slower than Qwen Image 2.1 (80 s at 1024x1024): MOSS runs two
+  passes per step (CFG) and a 9B text encoder.
 - The server also offers an asynchronous native API (`/sdcpp/v1/img_gen`, `/jobs/{id}`, cancel); Eliezer does not use it yet.
 

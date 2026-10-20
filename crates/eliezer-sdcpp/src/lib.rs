@@ -49,6 +49,7 @@ pub struct ImageModel {
     pub diffusion: PathBuf,
     pub text_encoder: Option<PathBuf>,
     pub vae: Option<PathBuf>,
+    pub tokenizer: Option<PathBuf>,
     pub steps: Option<u32>,
     pub cfg_scale: Option<f64>,
     pub sampling_method: Option<String>,
@@ -201,6 +202,9 @@ pub fn arguments(model: &ImageModel, port: u16) -> Vec<OsString> {
     if let Some(vae) = &model.vae {
         args.extend(["--vae".into(), vae.clone().into()]);
     }
+    if let Some(tokenizer) = &model.tokenizer {
+        args.extend(["--tokenizer".into(), tokenizer.clone().into()]);
+    }
     args.extend([
         "--listen-ip".into(),
         "127.0.0.1".into(),
@@ -263,6 +267,7 @@ impl Backend for SdcppBackend {
                 Some(&model.diffusion),
                 model.text_encoder.as_ref(),
                 model.vae.as_ref(),
+                model.tokenizer.as_ref(),
             ]
             .into_iter()
             .flatten()

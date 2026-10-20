@@ -134,7 +134,7 @@ vram_gb = 14.0                         # a measured value always takes precedenc
 extra = { text_encoder = "/var/lib/eliezer/models/qwen3vl_8b_int8_convrot.safetensors", vae = "/var/lib/eliezer/models/qwen_image_2.1_vae_bf16.safetensors", steps = 20, cfg_scale = 4.0, sampling_method = "euler", offload_to_cpu = true }
 ```
 
-`extra` of an image model: `text_encoder` and `vae` (paths), `steps` (1 to 150), `cfg_scale` (0 to 30),
+`extra` of an image model: `text_encoder`, `vae` and `tokenizer` (paths; `tokenizer` is the external `tokenizer.json` that MOSS-Image needs, passed as `--tokenizer`), `steps` (1 to 150), `cfg_scale` (0 to 30),
 `sampling_method` (one of the methods of stable-diffusion.cpp), `offload_to_cpu` (default true) and `prompt_helper` (the
 key of a configured language model, see below); all optional, the program's own defaults apply to what is left out.
 
@@ -488,7 +488,7 @@ trait Backend: Send + Sync {
     panic catching, dedicated threads). A hard crash in C++ code terminates the process (systemd restarts it).
 - **sdcpp (M6):** Child process `sd-server` (stable-diffusion.cpp, `[backend.sdcpp] program`) for each loaded image
   model on a free loopback port of `port_range`. Started without a shell with `--diffusion-model` (the GGUF, which holds
-  only the transformer), `--llm` (`extra.text_encoder`), `--vae` (`extra.vae`), `--listen-ip 127.0.0.1`, `--listen-port`,
+  only the transformer), `--llm` (`extra.text_encoder`), `--vae` (`extra.vae`), `--tokenizer` (`extra.tokenizer`), `--listen-ip 127.0.0.1`, `--listen-port`,
   `--offload-to-cpu` (default; weights stay in RAM and go to the GPU when needed), `--steps`, `--cfg-scale`,
   `--sampling-method` (from `extra`), `--seed -1` (random; the program's default is the fixed seed 42, which made every
   request with the same prompt draw the same picture) and `--log-level warn`. It counts as loaded when `GET /v1/models` answers 200 (the

@@ -371,6 +371,8 @@ pub const SAMPLING_METHODS: &[&str] = &[
 pub struct ExtraConfig {
     pub text_encoder: Option<PathBuf>,
     pub vae: Option<PathBuf>,
+    /// The `tokenizer.json` of a model whose text encoder has no tokenizer of its own in the program (MOSS-Image).
+    pub tokenizer: Option<PathBuf>,
     /// Sampling steps of an image model (default of the program: 20).
     pub steps: Option<u32>,
     /// Guidance scale (default of the program: 7.0).
@@ -409,7 +411,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -1102,6 +1104,9 @@ fn model_paths(model: &ModelConfig) -> Vec<(&Path, &'static str)> {
         }
         if let Some(path) = &extra.vae {
             paths.push((path.as_path(), "extra.vae"));
+        }
+        if let Some(path) = &extra.tokenizer {
+            paths.push((path.as_path(), "extra.tokenizer"));
         }
     }
     paths

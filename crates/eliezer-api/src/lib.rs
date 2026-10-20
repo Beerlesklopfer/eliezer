@@ -327,6 +327,7 @@ fn size_bytes(model: &eliezer_core::config::ModelConfig) -> Option<u64> {
         model.source.projector.as_ref(),
         extra.and_then(|e| e.text_encoder.as_ref()),
         extra.and_then(|e| e.vae.as_ref()),
+        extra.and_then(|e| e.tokenizer.as_ref()),
     ];
     let sizes: Vec<u64> = paths
         .into_iter()
