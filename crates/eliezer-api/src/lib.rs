@@ -1,6 +1,7 @@
 //! HTTP interfaces of the model supervisor.
 pub mod anthropic;
 mod download;
+pub mod helper;
 mod hub;
 use axum::{
     Json, Router,
@@ -783,6 +784,23 @@ async fn images(
     let Some(prompt) = body["prompt"].as_str().filter(|p| !p.trim().is_empty()) else {
         return bad("prompt must be a non-empty string");
     };
+    // The prompt helper: a language model that writes a detailed description from a short wish.
+    let helper = model.extra.as_ref().and_then(|e| e.prompt_helper.clone());
+    let enhance = match body.get("enhance_prompt") {
+        None | Some(Value::Null) => helper.is_some(),
+        Some(Value::Bool(wanted)) => {
+            if *wanted && helper.is_none() {
+                return bad("No prompt helper is configured for this model (extra.prompt_helper)");
+            }
+            *wanted
+        }
+        Some(_) => return bad("enhance_prompt must be true or false"),
+    };
+    let revised = match (&helper, enhance) {
+        (Some(key), true) => helper::revise(&app, key, prompt).await,
+        _ => None,
+    };
+    let prompt = revised.as_deref().unwrap_or(prompt);
     let count = match body.get("n") {
         None => 1,
         Some(n) => match n.as_u64().filter(|n| (1..=4).contains(n)) {
@@ -827,7 +845,14 @@ async fn images(
     {
         Ok(images) => Json(json!({
             "created": unix_now(),
-            "data": images.iter().map(|b64| json!({"b64_json": b64})).collect::<Vec<_>>(),
+            "prompt_enhanced": revised.is_some(),
+            "data": images
+                .iter()
+                .map(|b64| match &revised {
+                    Some(text) => json!({"b64_json": b64, "revised_prompt": text}),
+                    None => json!({"b64_json": b64}),
+                })
+                .collect::<Vec<_>>(),
         }))
         .into_response(),
         Err(e) => error(e, false),

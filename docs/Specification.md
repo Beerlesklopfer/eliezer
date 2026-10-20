@@ -135,8 +135,15 @@ extra = { text_encoder = "/var/lib/eliezer/models/qwen3vl_8b_int8_convrot.safete
 ```
 
 `extra` of an image model: `text_encoder` and `vae` (paths), `steps` (1 to 150), `cfg_scale` (0 to 30),
-`sampling_method` (one of the methods of stable-diffusion.cpp) and `offload_to_cpu` (default true); all optional, the
-program's own defaults apply to what is left out.
+`sampling_method` (one of the methods of stable-diffusion.cpp), `offload_to_cpu` (default true) and `prompt_helper` (the
+key of a configured language model, see below); all optional, the program's own defaults apply to what is left out.
+
+**Prompt helper.** Short wishes ("a sunflower") give image models uneven results. With `extra.prompt_helper = "<key>"` the
+service lets that language model write one detailed English description of at most 80 words (subject, setting, lighting,
+mood, style) and draws from it. The helper runs on the CPU when `[cpu] ram_budget_gb` is set, so the image model keeps the
+GPU; it is an aid only: if it fails or answers nothing, the original prompt is used. A request can switch it off with
+`"enhance_prompt": false` (`true` without a configured helper is 400). The answer carries `prompt_enhanced` and, per image,
+`revised_prompt`. A language model such as Qwen3-VL-8B-Instruct (the family of the Qwen Image text encoder) works well.
 
 Rules: unknown fields are an error (`#[serde(deny_unknown_fields)]`). `key` is unique.
 Errors at startup are reported with line and field (in English) and terminate the service with code 2.

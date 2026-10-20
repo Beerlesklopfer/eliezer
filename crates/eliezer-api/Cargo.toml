@@ -50,3 +50,7 @@ path = "../../tests/m5/download_api.rs"
 [[test]]
 name = "models_api"
 path = "../../tests/m6/models_api.rs"
+
+[[test]]
+name = "helper_api"
+path = "../../tests/m6/helper_api.rs"

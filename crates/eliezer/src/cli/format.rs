@@ -553,7 +553,7 @@ pub fn inspect_text(detail: &Value) -> String {
             ));
         }
     }
-    out.push_str("\nNothing is downloaded. Downloading is not implemented yet: put the files in the model store and run `eliezer --import`.\n");
+    out.push_str("\nNothing is downloaded. To fetch it: `eliezer get ORG/REPO` (the repository must be on [huggingface] allow).\n");
     out
 }
 

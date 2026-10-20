@@ -336,3 +336,26 @@ fn the_ocr_flag_needs_vision() {
         .to_string();
     assert!(error.contains("model[0].ocr"), "{error}");
 }
+
+#[test]
+fn a_prompt_helper_names_a_language_model_and_belongs_to_an_image_model() {
+    let base = "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\n[backend.llamacpp]\nenabled=true\n[backend.sdcpp]\nprogram=\"/usr/bin/sd-server\"\nport_range=[24600,24609]\n[[model]]\nkey=\"w\"\nbackend=\"llamacpp\"\nkind=\"llm\"\nsource={file=\"/var/lib/eliezer/models/w.gguf\"}\nsize_gb=1.0\narch={layers=2,kv_heads=2,head_dim=64}\n[[model]]\nkey=\"p\"\nbackend=\"sdcpp\"\nkind=\"image\"\nsource={file=\"/var/lib/eliezer/models/p.gguf\"}\nvram_gb=9.0\n";
+    let ok = format!("{base}extra={{prompt_helper=\"w\"}}\n");
+    assert!(Config::parse(&ok).is_ok());
+    for bad in [
+        "extra={prompt_helper=\"missing\"}",
+        "extra={prompt_helper=\"p\"}",
+    ] {
+        let error = Config::parse(&format!("{base}{bad}\n"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("extra.prompt_helper"), "{bad}: {error}");
+    }
+    // a language model cannot have a helper
+    let text = base.replace(
+        "size_gb=1.0\n",
+        "size_gb=1.0\nextra={prompt_helper=\"w\"}\n",
+    );
+    let error = Config::parse(&text).unwrap_err().to_string();
+    assert!(error.contains("extra.prompt_helper"), "{error}");
+}

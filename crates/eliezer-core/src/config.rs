@@ -351,6 +351,8 @@ pub struct ExtraConfig {
     pub sampling_method: Option<String>,
     /// Keep the weights in RAM and move them to the GPU when needed (default: yes, which saves VRAM).
     pub offload_to_cpu: Option<bool>,
+    /// The key of a language model that writes a detailed description from a short wish before the picture is drawn.
+    pub prompt_helper: Option<String>,
 }
 
 /// The caller also resolves existing symbolic links within paths that do not exist yet.
@@ -377,7 +379,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae steps cfg_scale sampling_method offload_to_cpu";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp enabled max_loaded program port_range library_path model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae steps cfg_scale sampling_method offload_to_cpu prompt_helper";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -763,6 +765,17 @@ impl Config {
                     clean_absolute(path),
                     field,
                     "Absolute path without parent components required",
+                )?;
+            }
+        }
+        for (index, model) in self.model.iter().enumerate() {
+            if let Some(helper) = model.extra.as_ref().and_then(|e| e.prompt_helper.as_ref()) {
+                let named = self.model.iter().find(|m| m.key == *helper);
+                check(
+                    model.kind == ModelKind::Image
+                        && named.is_some_and(|m| m.kind == ModelKind::Llm),
+                    &format!("model[{index}].extra.prompt_helper"),
+                    "A prompt helper belongs to an image model and names a configured language model",
                 )?;
             }
         }
