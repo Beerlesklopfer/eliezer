@@ -171,15 +171,43 @@ pub struct HuggingFaceConfig {
     pub allow: Vec<String>,
 }
 impl HuggingFaceConfig {
-    /// Whether a download from `repo` is on the allowlist.
+    /// Whether a download from `repo` is on the allowlist. An entry is `Organisation/Repository`; in each of the two
+    /// parts `*` stands for any run of characters (`Qwen/*`, `*/Qwen3-VL*`).
     pub fn allows(&self, repo: &str) -> bool {
-        self.allow
-            .iter()
-            .any(|entry| match entry.strip_suffix("/*") {
-                Some(org) => repo.split_once('/').is_some_and(|(o, _)| o == org),
-                None => entry == repo,
-            })
+        let Some((org, name)) = repo.split_once('/') else {
+            return false;
+        };
+        self.allow.iter().any(|entry| {
+            entry
+                .split_once('/')
+                .is_some_and(|(o, n)| wildcard(o, org) && wildcard(n, name))
+        })
     }
+}
+/// Matches `text` against `pattern`, where `*` stands for any run of characters (also none).
+pub fn wildcard(pattern: &str, text: &str) -> bool {
+    let (p, t): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
+    let (mut pi, mut ti, mut star, mut mark) = (0, 0, None, 0);
+    while ti < t.len() {
+        if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == t[ti] {
+            pi += 1;
+            ti += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
 }
 impl Default for HuggingFaceConfig {
     fn default() -> Self {
@@ -679,24 +707,23 @@ impl Config {
             "Cache limit must be finite and greater than zero",
         )?;
         for entry in &self.huggingface.allow {
-            let name = entry.strip_suffix("/*").unwrap_or(entry);
             let part_ok = |p: &str| {
                 !p.is_empty()
                     && p.len() <= 96
                     && !p.starts_with('.')
                     && p.bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+                        .all(|c| c.is_ascii_alphanumeric() || b"._-*".contains(&c))
             };
-            let ok = if entry.ends_with("/*") {
-                part_ok(name)
-            } else {
-                name.split_once('/')
-                    .is_some_and(|(org, repo)| part_ok(org) && part_ok(repo))
-            };
+            let ok = entry.split_once('/').is_some_and(|(org, repo)| {
+                part_ok(org)
+                    && part_ok(repo)
+                    // `*/*` would allow every repository of Hugging Face.
+                    && !(org.bytes().all(|c| c == b'*') && repo.bytes().all(|c| c == b'*'))
+            });
             check(
                 ok,
                 "huggingface.allow",
-                "Entries are `Organisation/Repository` or `Organisation/*`",
+                "Entries are `Organisation/Repository`; `*` is a wildcard in a part, but not in both parts only",
             )?;
         }
         for (value, field) in [

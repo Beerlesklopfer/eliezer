@@ -359,3 +359,62 @@ fn a_prompt_helper_names_a_language_model_and_belongs_to_an_image_model() {
     let error = Config::parse(&text).unwrap_err().to_string();
     assert!(error.contains("extra.prompt_helper"), "{error}");
 }
+
+#[test]
+fn the_download_allowlist_takes_wildcards_in_the_parts_but_never_everything() {
+    let parse = |entry: &str| {
+        Config::parse(&format!(
+            "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\n[huggingface]\nallow=[\"{entry}\"]\n"
+        ))
+    };
+    let allows = |entry: &str, repo: &str| parse(entry).unwrap().huggingface.allows(repo);
+    // exact, whole organisation, and a pattern for the repository name in any organisation
+    assert!(allows(
+        "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+        "Qwen/Qwen3-VL-8B-Instruct-GGUF"
+    ));
+    assert!(!allows(
+        "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+        "Qwen/Qwen3-VL-8B"
+    ));
+    assert!(allows("Qwen/*", "Qwen/anything-at-all"));
+    assert!(!allows("Qwen/*", "mradermacher/Qwen3-VL-8B-GGUF"));
+    assert!(allows(
+        "*/Qwen3-VL*",
+        "mradermacher/Qwen3-VL-8B-Instruct-abliterated-GGUF"
+    ));
+    assert!(allows("*/Qwen3-VL*", "Qwen/Qwen3-VL-8B-Instruct-GGUF"));
+    assert!(!allows("*/Qwen3-VL*", "mradermacher/Llama-3-8B-GGUF"));
+    assert!(allows(
+        "mradermacher/*VL-8B*GGUF",
+        "mradermacher/Qwen3-VL-8B-Instruct-GGUF"
+    ));
+    // `**` is the same as `*`, so the pattern of a hurried entry works
+    assert!(allows("**/Qwen*", "mradermacher/Qwen3-VL-8B-GGUF"));
+    // the organisation part does not leak into the name and the other way round
+    assert!(!allows("Qwen/*", "Qwen"));
+    assert!(!allows("*/Qwen*", "Qwen3/other"));
+    // everything at once is refused, and so are malformed entries
+    for bad in [
+        "*/*",
+        "**/**",
+        "*",
+        "a/b/c",
+        "../x",
+        "a b/c",
+        "/x",
+        "x/",
+        ".hidden/x",
+        "a/b;c",
+    ] {
+        let error = parse(bad).unwrap_err().to_string();
+        assert!(error.contains("huggingface.allow"), "{bad}: {error}");
+    }
+    assert!(
+        Config::parse("[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\n")
+            .unwrap()
+            .huggingface
+            .allow
+            .is_empty()
+    );
+}

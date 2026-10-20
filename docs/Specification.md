@@ -592,8 +592,10 @@ Exit code 2 for unusable arguments, configuration or accounts, 1 if a file faile
 
 Downloading is an administrative act and never happens on a chat request.
 
-- **Allowlist.** `[huggingface] allow = ["Organisation/Repository", "Organisation/*"]` names the repositories
-  the service may fetch from. Empty means nothing can be fetched. `downloads = "never"` switches downloading off
+- **Allowlist.** `[huggingface] allow = ["Organisation/Repository", "Organisation/*", "*/Qwen3-VL*"]` names the repositories
+  the service may fetch from; in each of the two parts `*` stands for any run of characters. `*/*` (everything) is refused. A
+  wildcard in the organisation lets anybody's repository of that name through: write it only where that is meant.
+  Empty means nothing can be fetched. `downloads = "never"` switches downloading off
   altogether. A repository on the list is not yet a model: adding the model to the configuration stays a
   separate step (`eliezer --suggest FILE` prints the block).
 - `POST /api/v1/models/download`, body `{"repo": "Organisation/Repository", "files": ["a.gguf", "vae/v.safetensors"],

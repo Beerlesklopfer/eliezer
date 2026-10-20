@@ -56,6 +56,8 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     `enhance_prompt` in the request switches it, the answer has `prompt_enhanced` and `revised_prompt`; a helper that fails
     leaves the original prompt in use. Checked live with Qwen3-VL-8B-Instruct (fetched with `eliezer get`, Q4_K_M, also reads
     images through its projector; about 10 tokens/s on the CPU, a description in 6 s) and Qwen Image 2.1.
+  * Take wildcards in the download allowlist: `*` stands for any run of characters in the organisation or in the repository name
+    (`*/Qwen3-VL*`, `mradermacher/*GGUF`); `*/*` is refused. `**/Qwen*` works as a pattern now instead of stopping a reload.
   * Never pass a refusal of the prompt helper on as the prompt: a stock model sometimes answers a wish with "I cannot ..." (in the
     language of the wish). Refusals, questions, German or overlong answers count as `declined`, the original prompt is drawn and the
     answer says `"prompt_helper": "declined"` (`used`, `off`, `failed` otherwise).
