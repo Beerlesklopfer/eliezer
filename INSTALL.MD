@@ -190,7 +190,7 @@ or `cpu`. A package without a runtime would start but could not load any model, 
 
 ```bash
 scripts/build-deb.sh            # rocm when ROCm is installed, otherwise cpu; or name the variant
-sudo apt install ./target/debian/eliezer_0.5.0-1_amd64.deb
+sudo apt install ./target/debian/eliezer_0.6.0-1_amd64.deb
 ```
 
 Build the distributable package with `scripts/build-deb.sh`, not a bare `cargo deb`.

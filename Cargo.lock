@@ -282,7 +282,7 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "eliezer"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "axum",
  "eliezer-api",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "eliezer-api"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "axum",
  "eliezer-backend",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "eliezer-backend"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "eliezer-core",
  "tokio",
@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "eliezer-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_path_to_error",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "eliezer-gpu"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "eliezer-core",
  "nvml-wrapper",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "eliezer-hub"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "reqwest",
  "serde_json",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "eliezer-llamacpp"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "eliezer-backend",

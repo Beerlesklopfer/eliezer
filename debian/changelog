@@ -1,10 +1,6 @@
-eliezer (0.5.0) UNRELEASED; urgency=low
+eliezer (0.6.0) UNRELEASED; urgency=low
 
-  * Set the package version to 0.5.0 for apt upgrades, as requested.
-  * Bundle ROCm userspace libraries, HIP runtime compiler and GPU kernel assets
-    in /usr/lib/<multiarch-triplet>/eliezer with relative library search paths,
-    third-party license notices and a manifest. Check the package without host
-    ROCm mounts; document Debian build-library availability and ABI differences.
+  * Set the package version to 0.6.0, as requested.
   * Prioritize diffusion models on the GPU: add `[cpu] ram_budget_gb` and a per-model
     `device = "auto" | "gpu" | "cpu"` (also a `device` field of the load request). While an image model
     loads, is loaded or is waiting, language models left to `auto` run on the CPU (llama.cpp with no GPU
@@ -45,6 +41,17 @@ eliezer (0.5.0) UNRELEASED; urgency=low
     checked live on Mistral in both dialects. Name a missing configuration section or field in the error message.
     A file download is no longer cut off by the 15 s limit of metadata requests (found with the first real download).
   * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
+  * Update the installation example to eliezer_0.6.0-1_amd64.deb.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Tue, 20 Oct 2026 02:17:18 +0200
+
+eliezer (0.5.0) UNRELEASED; urgency=low
+
+  * Set the package version to 0.5.0 for apt upgrades, as requested.
+  * Bundle ROCm userspace libraries, HIP runtime compiler and GPU kernel assets
+    in /usr/lib/<multiarch-triplet>/eliezer with relative library search paths,
+    third-party license notices and a manifest. Check the package without host
+    ROCm mounts; document Debian build-library availability and ABI differences.
   * Update the installation example to eliezer_0.5.0-1_amd64.deb.
     M5 model acquisition is still pending; the Candle ROCm experiment remains
     on its separate branch and is not included in this package.
