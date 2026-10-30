@@ -3,6 +3,8 @@
 //! of the service is started.
 mod format;
 mod http;
+mod speak_cmd;
+mod voices_cmd;
 
 use eliezer_core::config::Config;
 use http::{Client, Endpoint, HttpError};
@@ -18,6 +20,9 @@ use std::{
 const DEFAULT_HOST: &str = "http://127.0.0.1:1234";
 const SHORT: Duration = Duration::from_secs(15);
 const LONG: Duration = Duration::from_secs(3600);
+
+/// The commands that have their own files (`speak_cmd.rs`, `voices_cmd.rs`).
+const AUDIO_COMMANDS: &[&str] = &["speak", "voices"];
 
 const COMMANDS: &[&str] = &[
     "ls", "ps", "load", "unload", "status", "run", "show", "search", "inspect", "download", "pins",
@@ -67,6 +72,27 @@ Commands (they use the HTTP API of the running service):
       --max-tokens N              Limit the answer length
       --reasoning LEVEL           none, low, medium or high
       --stats                     Print token statistics at the end (to stderr)
+  speak [OPTIONS]                 Read a text aloud (speech synthesis) and write the audio while it is
+                                  made. The text comes from --text, --file or standard input; the audio
+                                  goes to standard output, so `| sox -t wav - -t mp3 out.mp3` or
+                                  `| play -t wav -` take it over (Eliezer itself writes wav and pcm only)
+      --text TEXT                 The text
+      --file FILE                 Read the text from a file
+      --model KEY                 Speech synthesis model (default: the only tts model of the service)
+      --voice NAME                A voice of `eliezer voices` (default: the model's setting)
+      --language CODE             Language code such as de (default: the model's setting)
+      --speed F                   Speed from 0.25 to 4
+      --seed N                    Seed for a repeatable reading
+      --format wav|pcm            wav (default, with an open length) or raw 16 bit mono samples
+      --out PATH|-                A file (written as PATH.part and renamed; --replace overwrites), a
+                                  named pipe (written into as it is), or - for standard output
+                                  (the default; refused on a terminal unless --out - is given)
+      --replace                   Overwrite an existing file
+  voices                          List the voices of speech synthesis
+  voices add NAME FILE [--replace] [--transcript TEXT]
+                                  Add a voice from a recording (any audio file); --transcript gives
+                                  the words spoken in it
+  voices rm NAME                  Remove a voice
   search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]
                                   Search Hugging Face for model candidates (nothing is downloaded).
                                   T: llm, vision, embedding or image; F: gguf (default) or safetensors;
@@ -293,6 +319,26 @@ fn spec_for(command: &str) -> Spec {
             flags: &[],
             positional: (2, 17),
         },
+        "speak" => Spec {
+            values: &[
+                "--model",
+                "--voice",
+                "--language",
+                "--speed",
+                "--seed",
+                "--format",
+                "--text",
+                "--file",
+                "--out",
+            ],
+            flags: &["--replace"],
+            positional: (0, 0),
+        },
+        "voices" => Spec {
+            values: &["--transcript"],
+            flags: &["--replace"],
+            positional: (0, 3),
+        },
         "rm" => Spec {
             values: &[],
             flags: &[],
@@ -317,7 +363,7 @@ fn spec_for(command: &str) -> Spec {
 }
 
 fn run(command: &str, args: &[String], at: usize) -> Res<()> {
-    if !COMMANDS.contains(&command) {
+    if !COMMANDS.contains(&command) && !AUDIO_COMMANDS.contains(&command) {
         return usage_err(format!("Unknown command '{command}'"));
     }
     // Global options before the command word and everything after it are parsed alike.
@@ -340,6 +386,8 @@ fn run(command: &str, args: &[String], at: usize) -> Res<()> {
     match command {
         "ls" => cmd_ls(&client, json),
         "ps" => cmd_ps(&client, json),
+        "speak" => speak_cmd::cmd_speak(&client, &parsed),
+        "voices" => voices_cmd::cmd_voices(&client, json, &parsed),
         "status" => cmd_status(&client, json),
         "show" => cmd_show(&client, json, &parsed.positional[0]),
         "load" => cmd_load(&client, json, &parsed),
