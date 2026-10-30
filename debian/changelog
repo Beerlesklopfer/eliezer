@@ -1,6 +1,10 @@
 eliezer (0.6.0) UNRELEASED; urgency=low
 
   * Set the package version to 0.6.0, as requested.
+  * Add `eliezer transcribe PATH... --out DIR`: transcribes audio files (or directories, with `--recursive`) one after the other
+    through `POST /v1/audio/transcriptions` and writes `txt`, `srt`, `vtt` and `json` outputs built from one `verbose_json`
+    answer. Existing outputs are kept (resumable), outputs are written atomically, `--dry-run`, `--limit`, `--replace`,
+    `--prompt-file` and `--timeout-secs` are supported; a failing file does not stop the run.
   * Prioritize diffusion models on the GPU: add `[cpu] ram_budget_gb` and a per-model
     `device = "auto" | "gpu" | "cpu"` (also a `device` field of the load request). While an image model
     loads, is loaded or is waiting, language models left to `auto` run on the CPU (llama.cpp with no GPU

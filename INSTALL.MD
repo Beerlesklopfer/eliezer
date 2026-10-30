@@ -164,6 +164,16 @@ eliezer run qwen/qwen3-coder-30b    # interactive chat; an empty line or Ctrl-D 
 echo "Summarize this" | eliezer run qwen/qwen3-coder-30b
 ```
 
+Transcribing a collection of recordings (needs an `stt` model; see `eliezer help` for all options):
+
+```bash
+eliezer transcribe ~/Audio/interviews --recursive --out ~/Texts --language de --prompt-file names.txt
+eliezer transcribe talk.mp3 --out . --format srt,vtt --dry-run    # only list what would happen
+```
+
+One file after the other; outputs that exist are kept, so an interrupted run is repeated with the same command.
+Progress and a summary go to stderr; exit code 1 if a file failed.
+
 `run` prints the answer while it is generated. Reasoning ("thinking") text is dimmed on a terminal
 and goes to stderr when the output is piped, so stdout holds only the answer. `--stats` prints the
 token statistics to stderr. Further options: `--system TEXT`, `--temperature F`, `--max-tokens N`,
