@@ -1,6 +1,7 @@
-//! `POST /v1/audio/speech`: a song from lyrics and a description, for models with `kind = "music"`. The shape is that of
-//! the speech API of the model's own serving framework: the lyrics are `input`, the music description is
-//! `instructions`, the answer is the WAV file (`audio/wav`).
+//! `POST /v1/audio/speech`: the endpoint chooses by the kind of the model. A model with `kind = "music"` composes a song
+//! from lyrics and a description: the lyrics are `input`, the music description is `instructions`, the answer is the
+//! WAV file (`audio/wav`). A model with `kind = "tts"` reads `input` aloud in the voice named in `voice` (see
+//! `tts.rs`).
 
 use super::{App, Error, error, failure, spec, valid_music_length};
 use axum::{
@@ -24,8 +25,17 @@ pub async fn speech(
     State(app): State<App>,
     body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
-    let Ok(Json(body)) = body else {
-        return bad("Invalid JSON request body");
+    let body = match body {
+        Ok(Json(body)) => body,
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return failure(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "The request is too big",
+                false,
+            );
+        }
+        Err(_) => return bad("Invalid JSON request body"),
     };
     let config = app.config.get();
     let model = match body["model"].as_str() {
@@ -34,15 +44,24 @@ pub async fn speech(
             None => return error(Error::UnknownModel, false),
         },
         None => {
-            let mut songs = config.model.iter().filter(|m| m.kind == ModelKind::Music);
-            match (songs.next(), songs.next()) {
+            let mut found = config
+                .model
+                .iter()
+                .filter(|m| matches!(m.kind, ModelKind::Music | ModelKind::Tts));
+            match (found.next(), found.next()) {
                 (Some(only), None) => only,
-                _ => return bad("model is required when there is not exactly one music model"),
+                _ => {
+                    return bad(
+                        "model is required when there is not exactly one music or speech synthesis model",
+                    );
+                }
             }
         }
     };
-    if model.kind != ModelKind::Music {
-        return bad("Model is not a music model");
+    match model.kind {
+        ModelKind::Music => {}
+        ModelKind::Tts => return super::tts::speak(&app, &config, model, &body).await,
+        _ => return bad("Model is not a music or speech synthesis model"),
     }
     // A text field: the text, or a message why it is wrong.
     let text = |name: &str, meaning: &str| -> Result<String, String> {
