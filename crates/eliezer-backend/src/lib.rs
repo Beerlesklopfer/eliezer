@@ -135,6 +135,28 @@ pub struct MusicRequest {
     /// The start value of the random numbers; without one every request composes a new song.
     pub seed: Option<i64>,
 }
+/// One passage of a text to read aloud.
+#[derive(Debug, Clone)]
+pub struct SpeechRequest {
+    pub model: String,
+    /// The text of the passage.
+    pub text: String,
+    /// The voice sample to clone: the file (a name of the service's voice directory, checked by the caller) and the
+    /// words spoken in it, when the model needs them. `None` is the model's own speaker.
+    pub voice: Option<VoiceSample>,
+    /// A language code; `None` leaves the choice to the program.
+    pub language: Option<String>,
+    /// The speaking rate; `None` leaves it to the program.
+    pub speed: Option<f64>,
+    /// The start value of the random numbers; the same for every passage of one text.
+    pub seed: Option<u64>,
+}
+/// A reference recording of a voice, kept by the service.
+#[derive(Debug, Clone)]
+pub struct VoiceSample {
+    pub path: std::path::PathBuf,
+    pub transcript: Option<String>,
+}
 /// One piece of a recording to transcribe.
 #[derive(Debug, Clone)]
 pub struct TranscriptionRequest {
@@ -201,6 +223,10 @@ pub trait Backend: Send + Sync {
         _: &'a Running,
         _: TranscriptionRequest,
     ) -> BackendFuture<'a, Transcription> {
+        Box::pin(async { Err(BackendError::Unavailable) })
+    }
+    /// One passage read aloud, as the bytes of a WAV file (16 bit PCM).
+    fn speak<'a>(&'a self, _: &'a Running, _: SpeechRequest) -> BackendFuture<'a, Vec<u8>> {
         Box::pin(async { Err(BackendError::Unavailable) })
     }
 }
@@ -375,6 +401,22 @@ impl Backend for FakeBackend {
                 return Err(BackendError::Crashed);
             }
             if request.model != running.spec.model || request.lyrics.trim().is_empty() {
+                return Err(BackendError::InvalidRequest);
+            }
+            tokio::time::sleep(self.config.chunk_delay).await;
+            Ok(fake_wav())
+        })
+    }
+    fn speak<'a>(
+        &'a self,
+        running: &'a Running,
+        request: SpeechRequest,
+    ) -> BackendFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            if !running.is_alive() {
+                return Err(BackendError::Crashed);
+            }
+            if request.model != running.spec.model || request.text.trim().is_empty() {
                 return Err(BackendError::InvalidRequest);
             }
             tokio::time::sleep(self.config.chunk_delay).await;
