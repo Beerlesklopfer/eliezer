@@ -827,3 +827,25 @@ fn a_terminal_gets_no_audio_unless_out_dash_is_given() {
     assert!(text.contains("terminal") && text.contains("rc=2"), "{text}");
     assert!(fake.requests().is_empty());
 }
+
+#[test]
+fn a_rejected_request_shows_the_message_of_the_service_and_exits_with_1() {
+    let message = "The model \"reader\" needs a voice: pass \"voice\" (see GET /v1/audio/voices) or set extra.default_voice in the model's configuration.";
+    let list = models(&[("tts", "reader")]);
+    let fake = serve(Box::new(move |r, stream| match r.path.as_str() {
+        "/api/v1/models" => json_reply(stream, "200 OK", &list),
+        _ => json_reply(
+            stream,
+            "400 Bad Request",
+            &json!({"error": {"type": "invalid_request", "message": message}}),
+        ),
+    }));
+    let o = speak(&fake, &["--text", "Hallo.", "--out", "-"]);
+    assert_eq!(code(&o), 1, "{}", err(&o));
+    assert!(o.stdout.is_empty());
+    assert!(err(&o).contains(message), "{}", err(&o));
+    assert!(err(&o).contains("HTTP 400"), "{}", err(&o));
+    // the help tells that a model may need a voice
+    let help = String::from_utf8_lossy(&command(&["help"]).output().unwrap().stdout).into_owned();
+    assert!(help.contains("needs one"), "{help}");
+}

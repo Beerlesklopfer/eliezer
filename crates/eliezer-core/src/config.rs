@@ -608,6 +608,9 @@ pub struct ExtraConfig {
     pub paragraph_pause_ms: Option<u32>,
     /// Speech synthesis models: the voice (a name in the voice directory) used when a request names none.
     pub default_voice: Option<String>,
+    /// Speech synthesis models: the model has no speaker of its own, so a request without a voice (and without
+    /// `default_voice`) is refused with 400 before anything is read (default: false).
+    pub requires_voice: Option<bool>,
     /// Speech synthesis models: numeric request options of the family (see [`tts_option_names`]).
     pub tts_options: Option<BTreeMap<String, f64>>,
 }
@@ -636,7 +639,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp whispercpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec language threads max_file_mb max_audio_minutes flash_attn gpu_device chunk_secs overlap_secs split_on_word max_segment_chars load_timeout_secs request_timeout_secs stop_grace_secs voices_dir max_input_chars max_passage_chars pause_ms paragraph_pause_ms voice_max_file_mb voice_max_seconds voice_name_max_chars voice_sample_rate max_voices family speed default_voice tts_options";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp whispercpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec language threads max_file_mb max_audio_minutes flash_attn gpu_device chunk_secs overlap_secs split_on_word max_segment_chars load_timeout_secs request_timeout_secs stop_grace_secs voices_dir max_input_chars max_passage_chars pause_ms paragraph_pause_ms voice_max_file_mb voice_max_seconds voice_name_max_chars voice_sample_rate max_voices family speed default_voice requires_voice tts_options";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -1376,6 +1379,7 @@ impl Config {
                     || extra.pause_ms.is_some()
                     || extra.paragraph_pause_ms.is_some()
                     || extra.default_voice.is_some()
+                    || extra.requires_voice.is_some()
                     || extra.tts_options.is_some();
                 check_model(
                     model.kind == ModelKind::Tts || !synthesis,

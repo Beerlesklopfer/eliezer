@@ -1,5 +1,6 @@
 use eliezer_audiocpp::{
-    AudiocppBackend, GENERATION_BASE, MusicModel, TtsModel, arguments, speak_body, speech_body,
+    AudiocppBackend, GENERATION_BASE, MAX_PROGRAM_MESSAGE_CHARS, MusicModel, TtsModel, arguments,
+    program_message, speak_body, speech_body,
 };
 use eliezer_backend::{
     Backend, BackendError, ChatRequest, LoadSpec, MusicRequest, SpeechRequest, VoiceSample,
@@ -568,5 +569,45 @@ async fn answers_that_are_no_reading_are_mapped_to_errors() {
             "{mode}"
         );
         b.stop(&running).await.unwrap();
+    }
+}
+
+#[test]
+fn the_message_of_the_program_is_cleaned_and_cut_for_the_log() {
+    let body = br#"{"error":{"message":"Chatterbox prepare requires speaker reference audio","type":"server_error"}}"#;
+    assert_eq!(
+        program_message(body).as_deref(),
+        Some("Chatterbox prepare requires speaker reference audio")
+    );
+    // control characters (a forged log line) are removed, text around them stays
+    let hostile = serde_json::json!({"error": {"message": "bad\n\u{1b}[31mred\r\tx\0 end"}});
+    assert_eq!(
+        program_message(hostile.to_string().as_bytes()).as_deref(),
+        Some("bad[31mredx end")
+    );
+    // cut to the named maximum
+    let long =
+        serde_json::json!({"error": {"message": "ä".repeat(MAX_PROGRAM_MESSAGE_CHARS + 50)}});
+    let cut = program_message(long.to_string().as_bytes()).unwrap();
+    assert_eq!(cut.chars().count(), MAX_PROGRAM_MESSAGE_CHARS + 3);
+    assert!(cut.ends_with("..."));
+    let exact = serde_json::json!({"error": {"message": "x".repeat(MAX_PROGRAM_MESSAGE_CHARS)}});
+    assert_eq!(
+        program_message(exact.to_string().as_bytes()).unwrap().len(),
+        MAX_PROGRAM_MESSAGE_CHARS
+    );
+    // a plain string error, and bodies without a message
+    assert_eq!(
+        program_message(br#"{"error":"boom"}"#).as_deref(),
+        Some("boom")
+    );
+    for none in [
+        &b""[..],
+        b"not json",
+        b"{}",
+        br#"{"error":{"message":"  \n "}}"#,
+        br#"{"error":{"message":5}}"#,
+    ] {
+        assert_eq!(program_message(none), None);
     }
 }

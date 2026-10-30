@@ -188,6 +188,31 @@ impl AudiocppBackend {
     }
 }
 
+/// The longest program message (characters) that goes into the log.
+pub const MAX_PROGRAM_MESSAGE_CHARS: usize = 300;
+
+/// The `error.message` of an error answer of the program, for the log: control characters removed, cut to
+/// [`MAX_PROGRAM_MESSAGE_CHARS`] characters (with `...` when cut). `None` when the body has no such text. The request
+/// text is never part of it.
+pub fn program_message(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let text = value["error"]["message"]
+        .as_str()
+        .or_else(|| value["error"].as_str())?;
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let clean = clean.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    if clean.chars().count() > MAX_PROGRAM_MESSAGE_CHARS {
+        let mut cut: String = clean.chars().take(MAX_PROGRAM_MESSAGE_CHARS).collect();
+        cut.push_str("...");
+        Some(cut)
+    } else {
+        Some(clean.to_owned())
+    }
+}
+
 /// A file name that stays inside the package: plain characters, no separator.
 fn plain_name(name: &str) -> bool {
     !name.is_empty()
@@ -615,12 +640,20 @@ impl AudiocppBackend {
             })?;
         let status = response.status();
         let bytes = response.bytes().await.map_err(|_| BackendError::Crashed)?;
-        if status.is_client_error() {
-            return Err(BackendError::InvalidRequest);
-        }
         if !status.is_success() {
-            tracing::warn!(status = status.as_u16(), "audiocpp_server could not {what}");
-            return Err(BackendError::Crashed);
+            // The program's own reason, for the log only: the error types of the service carry no detail, so an
+            // answer to a client cannot hold it without changing them all.
+            let reason = program_message(&bytes).unwrap_or_default();
+            tracing::warn!(
+                status = status.as_u16(),
+                reason = %reason,
+                "audiocpp_server could not {what}"
+            );
+            return Err(if status.is_client_error() {
+                BackendError::InvalidRequest
+            } else {
+                BackendError::Crashed
+            });
         }
         // The answer must be a WAV file; anything else (an error body with status 200) is a failure.
         if bytes.len() < 44 || !bytes.starts_with(b"RIFF") || &bytes[8..12] != b"WAVE" {

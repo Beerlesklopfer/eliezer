@@ -1500,3 +1500,121 @@ async fn a_closed_connection_stops_the_synthesis() {
     }
     assert_eq!(backend.passages.lock().unwrap().len(), 2);
 }
+
+// ---- models that need a voice ----------------------------------------------------------------------------------
+
+fn needs_voice(extra: &str) -> String {
+    READER.replace(
+        "extra={language=\"de\"}",
+        &format!("extra={{language=\"de\",requires_voice=true{extra}}}"),
+    )
+}
+
+#[tokio::test]
+async fn a_model_that_needs_a_voice_refuses_a_request_without_one_before_reading() {
+    let t = Temp::new();
+    let (app, backend) = setup(&(base(&t.voices(), "") + &needs_voice("")), vec![]);
+    for body in [
+        json!({"model": "reader", "input": "Hallo."}),
+        json!({"model": "reader", "input": "Hallo.", "voice": ""}),
+        json!({"model": "reader", "input": "Hallo.", "voice": null}),
+        json!({"model": "reader", "input": "Hallo.", "stream": true}),
+        json!({"model": "reader", "input": "Hallo.", "stream": true, "response_format": "pcm"}),
+    ] {
+        let streaming = body.get("stream").is_some();
+        let (status, text) = if streaming {
+            let mut a = open(&app, body.clone()).await;
+            (
+                a.status,
+                String::from_utf8_lossy(&a.rest().await.unwrap()).into_owned(),
+            )
+        } else {
+            let a = speak(&app, body.clone()).await;
+            (a.status, a.text())
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {text}");
+        let message: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(message["error"]["type"], "invalid_request");
+        let message = message["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("The model \"reader\" needs a voice"),
+            "{message}"
+        );
+        assert!(
+            message.contains("GET /v1/audio/voices") && message.contains("extra.default_voice")
+        );
+        // the library is empty: the hint says how to add a voice
+        assert!(
+            message.contains("There are no voices yet") && message.contains("eliezer voices add"),
+            "{message}"
+        );
+    }
+    assert!(backend.passages.lock().unwrap().is_empty());
+    // with a voice in the library the hint about the empty library is gone
+    upload(&app, &[("name", "mama")], Some(&sample(1.0))).await;
+    let a = speak(&app, json!({"model": "reader", "input": "Hallo."})).await;
+    assert_eq!(a.status, StatusCode::BAD_REQUEST);
+    assert!(!a.text().contains("no voices yet"), "{}", a.text());
+    assert!(backend.passages.lock().unwrap().is_empty());
+    // a request voice works, plain and streamed
+    let a = speak(
+        &app,
+        json!({"model": "reader", "input": "Hallo.", "voice": "mama"}),
+    )
+    .await;
+    assert_eq!(a.status, StatusCode::OK, "{}", a.text());
+    let mut s = open(
+        &app,
+        json!({"model": "reader", "input": "Hallo.", "voice": "mama", "stream": true}),
+    )
+    .await;
+    assert_eq!(s.status, StatusCode::OK);
+    assert!(!s.rest().await.unwrap().is_empty());
+    // an unknown voice is still the old error
+    let a = speak(
+        &app,
+        json!({"model": "reader", "input": "Hallo.", "voice": "nobody"}),
+    )
+    .await;
+    assert!(a.text().contains("Unknown voice"), "{}", a.text());
+}
+
+#[tokio::test]
+async fn the_default_voice_satisfies_a_model_that_needs_a_voice() {
+    let t = Temp::new();
+    let (app, backend) = setup(
+        &(base(&t.voices(), "") + &needs_voice(",default_voice=\"mama\"")),
+        vec![],
+    );
+    upload(&app, &[("name", "mama")], Some(&sample(1.0))).await;
+    let a = speak(&app, json!({"model": "reader", "input": "Hallo."})).await;
+    assert_eq!(a.status, StatusCode::OK, "{}", a.text());
+    assert_eq!(
+        backend.passages.lock().unwrap()[0]
+            .voice
+            .as_ref()
+            .unwrap()
+            .path,
+        t.voices().join("mama.wav")
+    );
+    // a default voice that is gone is the unknown-voice error, not the needs-a-voice one
+    delete(&app, "/v1/audio/voices/mama").await;
+    let a = speak(&app, json!({"model": "reader", "input": "Hallo."})).await;
+    assert_eq!(a.status, StatusCode::BAD_REQUEST);
+    assert!(a.text().contains("Unknown voice"), "{}", a.text());
+}
+
+#[tokio::test]
+async fn without_the_flag_a_request_without_a_voice_is_unchanged() {
+    let t = Temp::new();
+    for extra in [
+        "extra={language=\"de\"}",
+        "extra={language=\"de\",requires_voice=false}",
+    ] {
+        let text = READER.replace("extra={language=\"de\"}", extra);
+        let (app, backend) = setup(&(base(&t.voices(), "") + &text), vec![]);
+        let a = speak(&app, json!({"model": "reader", "input": "Hallo."})).await;
+        assert_eq!(a.status, StatusCode::OK, "{extra}: {}", a.text());
+        assert!(backend.passages.lock().unwrap()[0].voice.is_none());
+    }
+}

@@ -79,7 +79,8 @@ Commands (they use the HTTP API of the running service):
       --text TEXT                 The text
       --file FILE                 Read the text from a file
       --model KEY                 Speech synthesis model (default: the only tts model of the service)
-      --voice NAME                A voice of `eliezer voices` (default: the model's setting)
+      --voice NAME                A voice of `eliezer voices` (default: the model's setting; a model
+                                  without a speaker of its own, such as Chatterbox, needs one)
       --language CODE             Language code such as de (default: the model's setting)
       --speed F                   Speed from 0.25 to 4
       --seed N                    Seed for a repeatable reading

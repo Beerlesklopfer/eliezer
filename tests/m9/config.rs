@@ -65,12 +65,26 @@ fn the_settings_of_a_speech_synthesis_model_are_checked() {
         // an option of the other family
         ("tts_options={top_k=5.0}", "tts_options"),
         ("tts_options={temperature=\"hot\"}", "extra"),
+        ("requires_voice=\"yes\"", "extra"),
+        ("requires_voice=1", "extra"),
         ("duration_sec=30", "extra"),
         ("threads=4", "extra"),
     ] {
         let message = error_of(&tts(&format!("extra={{{setting}}}\n")));
         assert!(message.contains(field), "{setting}: {message}");
     }
+    // the flag is a bool, on tts models only
+    let flagged = tts("extra={requires_voice=true}\n");
+    let flag = Config::parse(&flagged).unwrap().model[0]
+        .extra
+        .as_ref()
+        .unwrap()
+        .requires_voice;
+    assert_eq!(flag, Some(true));
+    let music = format!(
+        "{BASE}[[model]]\nkey=\"m\"\nbackend=\"audiocpp\"\nkind=\"music\"\nsource={{file=\"/var/lib/eliezer/models/music\"}}\nvram_gb=10.0\nextra={{requires_voice=true}}\n"
+    );
+    assert!(error_of(&music).contains("extra"));
     // the options of the family named
     let cosy =
         tts("extra={family=\"cosyvoice3\",tts_options={top_k=5.0,num_inference_steps=10}}\n");

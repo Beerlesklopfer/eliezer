@@ -231,6 +231,31 @@ pub async fn speak(app: &App, config: &Config, model: &ModelConfig, body: &Value
         Some(Value::String(name)) => Some(name.as_str()),
         Some(_) => return bad("voice must be a string"),
     };
+    let default_voice = extra.and_then(|e| e.default_voice.as_deref());
+    if requested.is_none()
+        && default_voice.is_none()
+        && extra.and_then(|e| e.requires_voice) == Some(true)
+    {
+        let empty = voices::names(
+            &config.voices_dir(),
+            config
+                .backend
+                .audiocpp
+                .as_ref()
+                .map_or(64, |a| a.voice_name_max_chars),
+        )
+        .is_empty();
+        let mut message = format!(
+            "The model \"{}\" needs a voice: pass \"voice\" (see GET /v1/audio/voices) or set extra.default_voice in the model's configuration.",
+            model.key
+        );
+        if empty {
+            message.push_str(
+                " There are no voices yet; add one with POST /v1/audio/voices or \"eliezer voices add\".",
+            );
+        }
+        return bad(&message);
+    }
     let voice = match requested.or(extra.and_then(|e| e.default_voice.as_deref())) {
         None => None,
         Some(name) => match voices::find(config, name) {
