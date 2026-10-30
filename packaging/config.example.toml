@@ -66,6 +66,32 @@ port_range = [24600, 24609]
 # vram_gb = 10.0
 # extra = { duration_sec = 30, steps = 30, cfg_scale = 1.7 }
 
+# Speech synthesis with voice cloning (text to speech) through the same audio.cpp program: POST /v1/audio/speech with `input` (the
+# text) and `voice` (a name from GET /v1/audio/voices). The program must be built with the family
+# (`AUDIOCPP_MODELS=minimax_music3,chatterbox scripts/build-audiocpp.sh`). Download the model with
+# `eliezer download audio-cpp/audio.cpp-gguf Chatterbox-GGUF/chatterbox-q8_0.gguf` (MIT, 2.1 GB; list audio-cpp/audio.cpp-gguf in
+# [huggingface] allow first). Alternative family: cosyvoice3 (`CosyVoice3-GGUF/cosyvoice3-q8_0.gguf`, needs the words of the sample in
+# <name>.txt). No voices come with the package: put `<name>.wav` (and `<name>.txt`) of people who agreed into voices_dir, or upload
+# them with POST /v1/audio/voices. Consent and profiles are the business of the calling application, not of Eliezer.
+# [backend.audiocpp]
+# voices_dir = "/var/lib/eliezer/models/voices"   # default: "voices" inside storage.models_dir; mode 0700, never served
+# max_input_chars = 100000             # longest text of one request (413 above); a model can set its own in extra
+# max_passage_chars = 400              # the text is cut into passages of at most this many characters, at sentence boundaries
+# pause_ms = 400                       # silence between two passages; paragraph_pause_ms = 800 after a paragraph
+# voice_max_file_mb = 20               # voice upload limits: size, length in seconds, name length, stored sample rate, count
+# voice_max_seconds = 120
+# voice_name_max_chars = 64
+# voice_sample_rate = 24000
+# max_voices = 100
+#
+# [[model]]
+# key = "reader-de"
+# backend = "audiocpp"
+# kind = "tts"
+# source = { file = "/var/lib/eliezer/models/audio-cpp/audio.cpp-gguf/Chatterbox-GGUF/chatterbox-q8_0.gguf" }
+# vram_gb = 4.0                        # an estimate, to be measured
+# extra = { family = "chatterbox", language = "de", default_voice = "mama", tts_options = { exaggeration = 0.5, temperature = 0.8 } }
+
 # Speech recognition (speech to text) through whisper.cpp: POST /v1/audio/transcriptions (OpenAI shape). Uncomment both
 # blocks. The service decodes the upload (MP3, M4A/AAC, Ogg, FLAC, WAV) itself, cuts long recordings into pieces and
 # starts `whisper-server` (no ffmpeg needed). Download the model with

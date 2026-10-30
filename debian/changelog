@@ -26,6 +26,12 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     `verbose_json`, `srt`, `vtt`) with `type: "stt"` and `capabilities.transcription`. The service decodes MP3, M4A/AAC, Ogg, FLAC and
     WAV itself, cuts long recordings into overlapping pieces and joins the segments; limits and piece length are settings.
     New dependencies: `symphonia` 0.5.5 and `rubato` 0.16.2 (pure Rust). The program itself was not run yet (docs/Runtimes.md).
+  * Add speech synthesis with voice cloning: `kind = "tts"` (served by the existing audiocpp backend, family `chatterbox` or
+    `cosyvoice3` in `extra.family`), `POST /v1/audio/speech` chooses by the kind of the model (the music request is unchanged),
+    cuts the text into passages at sentence boundaries and joins the audio with configurable pauses. Voices are files in
+    `[backend.audiocpp] voices_dir` (default `voices` in the model store, mode 0700, never served): `GET`/`POST /v1/audio/voices`
+    and `DELETE /v1/audio/voices/{name}`. `scripts/build-audiocpp.sh` takes the model set from `AUDIOCPP_MODELS`. The program was
+    not run with a speech model yet (docs/Runtimes.md). No new dependency.
   * A picture request that fails no longer takes the model down: a request the program refused is answered with 400,
     and a picture that could not be drawn marks the model as crashed only when its program no longer answers.
     Before, any failure marked the model failed, which dropped it and the jobs other requests had running on it.

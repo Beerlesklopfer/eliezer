@@ -231,3 +231,82 @@ shorter or longer wrap.
 What the tests cover instead: `tests/m8/fake_whisper_server.rs` is a stand-in that speaks the interface as described above
 (arguments, `/health`, the multipart form, `verbose_json`); `tests/m8/whispercpp.rs` checks the arguments, the environment, the
 private directory, the form, error mapping and crashes against it.
+
+## audio.cpp `audiocpp_server`: speech synthesis with voice cloning (read 2026-10-31, commit 18bba55)
+
+Nothing below was run: the program was built with the music model only and no speech model was downloaded. What was **verified** is the
+source of audio.cpp at the pinned commit `18bba55495c8991bbbfe7625234d4d8dbc6e82f4` (fetched over HTTPS and read: `app/server/README.md`,
+`app/server/api.md`, `app/server/server_protocol.cpp`, `app/server/runtime.cpp`, `examples/server/README.md`, `docs/tts.md`,
+`docs/models/cosyvoice3.md`, `model_specs/chatterbox.json`, `model_specs/cosyvoice3.json`, `src/models/chatterbox/loader.cpp`,
+`CMakeLists.txt`, `scripts/build_linux.sh`) and the file lists of the Hugging Face repositories (read with `hf` and the Hub API; nothing
+downloaded).
+
+Verified against the source:
+
+- The route is the same as for music: `POST /v1/audio/speech`, JSON. `model` (the entry's `id`), `input` (the text), `language` (a
+  top-level string, becomes the language of the text), `speed`/`speaking_rate` (a positive number; an error unless the model's spec
+  declares the option, except that 1 is accepted as "not set"), `seed` (and `temperature`, `top_k`, `top_p`, `max_tokens`, ...; also
+  inside `options`), `response_format` (`wav` default; `json`/`b64_json` gives base64 WAV in JSON; `mp3` only in a build with the optional
+  `mp3_encode` frontend module; `pcm` for streaming), `options` (model specific). `instructions` maps to the model option `instruction`.
+- The reference voice for cloning: `voice_ref` is **either a path string or an object** `{"type": "path", "path": ...}` (a path on the
+  server's machine; relative paths resolve against the config file's directory) **or** `{"type": "base64", "data": ...}` (WAV bytes,
+  also a `data:audio/wav;base64,` URI; decoded limit 5 MiB, so about 110 s of 24 kHz mono 16 bit). `reference_text` is the transcript
+  of the reference (a model option; models that do not take it ignore it or refuse it). The service sends `voice_ref` as a `path`
+  object built from the file in its own voice directory and never sends `voice`, so the server's own `voice_dir`/`prompt_text` library and
+  its `voice_presets` are not used (a name that matches neither is passed to the model as a "cached voice id", which is why the service
+  does not send names).
+- Response: the WAV file (`audio/wav`, 16 bit PCM from `encode_pcm16_wav`, the sample rate of the model, 24 kHz for Chatterbox as far
+  as its S3Gen decoder is concerned; not measured). Errors are JSON with `error.message`; a bad request is 4xx, a failed run 5xx.
+- Streaming exists (`stream_format = "sse"` or `"audio"`, base64 PCM chunks) but only for models configured with `"mode": "streaming"`; the
+  service does not use it (it joins whole passages, and Chatterbox is `offline` only).
+- Model entry of the server config (`models[]`): `id`, `family`, `path` (a `.gguf` **file** for single-file packages such as
+  Chatterbox and CosyVoice3, a directory for packages with several files), `task` (`tts`; `clon`/`clone` is the same path for Chatterbox:
+  "`tts` is an alias to the same voice-cloning synthesis path"), `mode = "offline"`, `default_request_options` (request options as numbers or
+  strings), `session_options` (`chatterbox.weight_type`, `chatterbox.mem_saver`, `chatterbox.multilingual_t3 = v2|v3`,
+  `chatterbox.conditionals_cache_slots` default 1, ...; not used by the service, they stay at the program's defaults), `busy_timeout_ms`.
+  The service writes `id`, `family`, `path`, `task = "tts"`, `mode = "offline"`, `busy_timeout_ms = 0` and the numbers of `extra.tts_options` as
+  `default_request_options`.
+- `chatterbox` (docs/tts.md, `model_specs/chatterbox.json`): tasks `tts`, `clon`, `vc`; offline; languages `ar da de el en es fi fr hi it ko
+  ms nl no pl pt sv sw tr`; a reference WAV is required ("Built-in voices: not exposed"); the default language is `en`, so the service
+  sends the model's `extra.language`. Request options: `exaggeration` 0.5, `guidance_scale` 0.5, `temperature` 0.8, `repetition_penalty`
+  1.2, `min_p` 0.05, `top_p` 1, `flow_guidance_scale` 0.7, `max_tokens` 384, `do_sample`, `stop_on_eos`, `text_chunk_size` 128 (the
+  program cuts long text itself; the service cuts earlier, at sentence boundaries), `seed`. License of the model: MIT
+  (`docs/model_licenses.md`). Speech model with `speed` support: not declared by the spec, so a `speed` other than 1 is expected to be refused.
+- `cosyvoice3` (`docs/models/cosyvoice3.md`): tasks `tts`, `clon`; languages `zh en ja ko de es fr it ru yue`; reference WAV required;
+  `template_name` default `zero_shot` (voice cloning with prompt audio **and its transcript**: this is what `<name>.txt` is for),
+  other templates `cross_lingual`/`instruct` are not used. Options: `text_chunk_size` 600, `max_tokens`, `min_tokens`, `top_k` 25,
+  `num_inference_steps` 10, `seed` 1986. License Apache-2.0.
+- Build: `scripts/build_linux.sh --model-set custom --models LIST` passes `LIST` to CMake as `AUDIOCPP_MODELS`; CMake accepts commas
+  or semicolons, strips blanks, and takes every name as a target or alias of `audiocpp_add_model(...)` (`minimax_music3`,
+  `chatterbox`, `cosyvoice3` exist at the commit; an unknown name stops with "Unknown AUDIOCPP_MODELS entry"). A comma separated list
+  therefore builds several families into one `audiocpp_server`. `scripts/build-audiocpp.sh` takes the list from `AUDIOCPP_MODELS`
+  (default `minimax_music3`) and keeps one cache stamp per list.
+- GGUF packages (file lists of `audio-cpp/audio.cpp-gguf` at its revision `874fcb41`, 2026-10-27, license field `other`, per-model
+  licenses in `docs/model_licenses.md`): `Chatterbox-GGUF/chatterbox-q8_0.gguf` (2 088 399 204 bytes) and `chatterbox-f16.gguf`
+  (3 744 365 922 bytes), `Chatterbox-Turbo-GGUF/chatterbox-turbo-q8_0.gguf` (English only), `CosyVoice3-GGUF/cosyvoice3-q8_0.gguf`
+  (2 257 658 336 bytes) and `cosyvoice3-f32.gguf`. Fetch with `eliezer download audio-cpp/audio.cpp-gguf Chatterbox-GGUF/chatterbox-q8_0.gguf`
+  (the repository must be on `huggingface.allow`).
+
+Not verified (needs a model and the binary):
+
+- That `audiocpp_server` accepts a `.gguf` file as `path` for Chatterbox. The Kokoro/Pocket examples and `docs/gguf.md` say GGUF files are
+  single-file packages, and `audio-cpp/audio.cpp-gguf` publishes Chatterbox that way, but the loader (`src/models/chatterbox/assets.cpp`)
+  was not read to the end.
+- The sample rate and channels of the answer, and that all passages of one request have the same format (the service refuses to join
+  parts that differ and answers 502).
+- That a changing `seed` or the same `seed` for different passages and voices is accepted: the spec says the cloning settings, including
+  `seed`, are "captured during clone preparation; changing it on the same prepared session is rejected". The service sends the same
+  `seed` for every passage of a request and nothing otherwise; a request with another seed for the same voice may be refused by the program
+  (it would show as a 400). To be tested live.
+- Memory (`vram_gb = 4.0` of the example is an estimate for the q8_0 file of 2.1 GB plus the decoders), speed, and the quality of
+  German speech with a cloned voice (a listening test with a real parent's recording decides between Chatterbox and CosyVoice3).
+- **Ming-3.0-TTS and XTTS v2 are not available at the pinned commit.** `audio-cpp/Ming-3.0-TTS-0.5B-GGUF` (MIT, `ming-3.0-tts-0.5b-q8_0.gguf`
+  and `-bf16.gguf`) was published on 2026-10-21, two days after the commit (2026-10-19), and there is no model target or spec for it in the
+  source; the commit has to be moved before it can be tried. XTTS v2 does not appear anywhere in audio.cpp (no target, no spec, no GGUF
+  repository under `audio-cpp`); it is not served by this backend.
+- mp3 and flac are not offered: the program writes mp3 only in a build with an optional frontend module, and the service has no encoder
+  (symphonia only decodes). `response_format` is `wav`.
+
+What the tests cover instead: `tests/m7/fake_audio_server.rs` answers the request as described above (the model entry, `voice_ref` and
+the options are recorded); `tests/m7/audiocpp.rs` checks the configuration file, the request body and the error mapping;
+`tests/m9/tts_api.rs` checks the endpoints with the fake backend.
