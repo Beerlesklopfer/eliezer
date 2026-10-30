@@ -1,7 +1,7 @@
 //! A single task manages instances; load and unload work runs outside of it.
 use crate::{
     Backend, BackendError, ChatRequest, Chunk, EmbedRequest, Embeddings, ImageRequest, LoadSpec,
-    MusicRequest, Running,
+    MusicRequest, Running, Transcription, TranscriptionRequest,
 };
 use eliezer_core::{
     config::DevicePolicy,
@@ -277,6 +277,17 @@ impl Supervisor {
         backend: &dyn Backend,
     ) -> Result<Vec<u8>, Error> {
         match backend.music(&lease.running, request).await {
+            Ok(result) => Ok(result),
+            Err(error) => Err(self.generation_failed(lease, error, backend).await),
+        }
+    }
+    pub async fn transcribe(
+        &self,
+        lease: &Lease,
+        request: TranscriptionRequest,
+        backend: &dyn Backend,
+    ) -> Result<Transcription, Error> {
+        match backend.transcribe(&lease.running, request).await {
             Ok(result) => Ok(result),
             Err(error) => Err(self.generation_failed(lease, error, backend).await),
         }

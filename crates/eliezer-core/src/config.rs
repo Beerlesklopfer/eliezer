@@ -236,6 +236,7 @@ pub struct BackendConfig {
     pub llamacpp: Option<EmbeddedBackendConfig>,
     pub sdcpp: Option<SdcppConfig>,
     pub audiocpp: Option<AudiocppConfig>,
+    pub whispercpp: Option<WhispercppConfig>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -262,6 +263,43 @@ pub struct AudiocppConfig {
     /// The compute backend of the program: `hip` (AMD, the default), `cuda`, `vulkan` or `cpu`.
     #[serde(default = "compute_default")]
     pub compute: String,
+}
+/// The whisper.cpp server for speech recognition: one `whisper-server` child process per loaded model.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WhispercppConfig {
+    pub program: PathBuf,
+    pub port_range: [u16; 2],
+    #[serde(default)]
+    pub library_path: Vec<PathBuf>,
+    /// Flash attention of the program (`--flash-attn` / `--no-flash-attn`); the program's own default without.
+    pub flash_attn: Option<bool>,
+    /// The GPU the program uses (`--device`); the program's default (0) without.
+    pub gpu_device: Option<u32>,
+    /// The length of one piece (seconds) a long recording is cut into before it goes to the program.
+    #[serde(default = "chunk_secs_default")]
+    pub chunk_secs: u32,
+    /// How much two neighbouring pieces overlap (seconds), so no word is cut in two.
+    #[serde(default = "overlap_secs_default")]
+    pub overlap_secs: u32,
+    /// The size limit of an uploaded file in MB; a model can set its own (`extra.max_file_mb`).
+    #[serde(default = "max_file_mb_default")]
+    pub max_file_mb: u32,
+    /// The length limit of a recording in minutes; a model can set its own (`extra.max_audio_minutes`).
+    #[serde(default = "max_audio_minutes_default")]
+    pub max_audio_minutes: u32,
+}
+fn chunk_secs_default() -> u32 {
+    600
+}
+fn overlap_secs_default() -> u32 {
+    5
+}
+fn max_file_mb_default() -> u32 {
+    100
+}
+fn max_audio_minutes_default() -> u32 {
+    120
 }
 fn compute_default() -> String {
     "hip".to_owned()
@@ -323,6 +361,7 @@ pub enum BackendKind {
     Llamacpp,
     Sdcpp,
     Audiocpp,
+    Whispercpp,
 }
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -332,6 +371,8 @@ pub enum ModelKind {
     Image,
     /// Music from lyrics and a description (`POST /v1/audio/speech`); served by audio.cpp.
     Music,
+    /// Speech recognition (`POST /v1/audio/transcriptions`); served by whisper.cpp.
+    Stt,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -418,6 +459,14 @@ pub struct ExtraConfig {
     pub flow_transformer: Option<String>,
     /// Music models: the length drawn when a request does not name one (seconds, 1 to 300; default 30).
     pub duration_sec: Option<u32>,
+    /// Speech models: the language used when a request names none (`auto` detects it; default `auto`).
+    pub language: Option<String>,
+    /// Speech models: threads of the program (its own default without).
+    pub threads: Option<u32>,
+    /// Speech models: the size limit of an uploaded file in MB (default: `backend.whispercpp.max_file_mb`).
+    pub max_file_mb: Option<u32>,
+    /// Speech models: the length limit of a recording in minutes (default: `backend.whispercpp.max_audio_minutes`).
+    pub max_audio_minutes: Option<u32>,
 }
 
 /// The caller also resolves existing symbolic links within paths that do not exist yet.
@@ -444,7 +493,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp whispercpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec language threads max_file_mb max_audio_minutes flash_attn gpu_device chunk_secs overlap_secs";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -821,6 +870,13 @@ impl Config {
                     .as_ref()
                     .map(|c| (&c.program, &c.library_path, c.port_range)),
             ),
+            (
+                "whispercpp",
+                self.backend
+                    .whispercpp
+                    .as_ref()
+                    .map(|c| (&c.program, &c.library_path, c.port_range)),
+            ),
         ];
         for (name, program) in programs {
             let Some((program, library_path, port_range)) = program else {
@@ -863,6 +919,52 @@ impl Config {
                 "backend.audiocpp.port_range",
                 "Port range overlaps the one of backend.sdcpp",
             )?;
+        }
+        if let Some(speech) = &self.backend.whispercpp {
+            check(
+                (30..=3600).contains(&speech.chunk_secs),
+                "backend.whispercpp.chunk_secs",
+                "A piece is between 30 and 3600 seconds long",
+            )?;
+            check(
+                speech.overlap_secs <= 60 && speech.overlap_secs * 2 < speech.chunk_secs,
+                "backend.whispercpp.overlap_secs",
+                "The overlap is at most 60 seconds and less than half a piece",
+            )?;
+            check(
+                speech.max_file_mb > 0 && speech.max_audio_minutes > 0,
+                "backend.whispercpp.max_file_mb",
+                "The limits must be greater than zero",
+            )?;
+        }
+        let mut taken: Vec<(&str, [u16; 2])> = Vec::new();
+        for (name, range) in [
+            ("sdcpp", self.backend.sdcpp.as_ref().map(|c| c.port_range)),
+            (
+                "audiocpp",
+                self.backend.audiocpp.as_ref().map(|c| c.port_range),
+            ),
+            (
+                "whispercpp",
+                self.backend.whispercpp.as_ref().map(|c| c.port_range),
+            ),
+        ] {
+            let Some(range) = range else { continue };
+            // The pair sdcpp/audiocpp is checked above; every other pair here.
+            if name == "whispercpp" {
+                for (other, taken_range) in &taken {
+                    check(
+                        range[1] < taken_range[0] || taken_range[1] < range[0],
+                        "backend.whispercpp.port_range",
+                        if *other == "sdcpp" {
+                            "Port range overlaps the one of backend.sdcpp"
+                        } else {
+                            "Port range overlaps the one of backend.audiocpp"
+                        },
+                    )?;
+                }
+            }
+            taken.push((name, range));
         }
         for (path, field) in [
             (Some(&self.storage.models_dir), "storage.models_dir"),
@@ -964,6 +1066,7 @@ impl Config {
                 BackendKind::Llamacpp => self.backend.llamacpp.as_ref().is_some_and(|b| b.enabled),
                 BackendKind::Sdcpp => self.backend.sdcpp.is_some(),
                 BackendKind::Audiocpp => self.backend.audiocpp.is_some(),
+                BackendKind::Whispercpp => self.backend.whispercpp.is_some(),
             };
             check_model(
                 enabled,
@@ -1008,10 +1111,11 @@ impl Config {
                 "A llamacpp model reads images exactly when it has source.projector (set both)",
             )?;
             let generation = matches!(model.kind, ModelKind::Image | ModelKind::Music);
+            // Speech recognition needs a measured size too (it is placed by it), but may run on the CPU.
             check_model(
-                !generation || model.vram_gb.is_some(),
+                (!generation && model.kind != ModelKind::Stt) || model.vram_gb.is_some(),
                 "vram_gb",
-                "Image and music models require a measured memory requirement",
+                "Image, music and speech models require a measured memory requirement",
             )?;
             check_model(
                 !generation || model.device != DevicePolicy::Cpu,
@@ -1028,7 +1132,42 @@ impl Config {
                 "kind",
                 "Music models require audiocpp; audiocpp serves only music models",
             )?;
+            check_model(
+                (model.backend == BackendKind::Whispercpp) == (model.kind == ModelKind::Stt),
+                "kind",
+                "Speech models require whispercpp; whispercpp serves only speech models",
+            )?;
+            check_model(
+                model.kind != ModelKind::Stt || model.source.file.is_some(),
+                "source.file",
+                "A speech model names its ggml file in source.file (download it with `eliezer download`)",
+            )?;
             if let Some(extra) = &model.extra {
+                let speech = extra.language.is_some()
+                    || extra.threads.is_some()
+                    || extra.max_file_mb.is_some()
+                    || extra.max_audio_minutes.is_some();
+                check_model(
+                    model.kind == ModelKind::Stt || !speech,
+                    "extra",
+                    "language, threads, max_file_mb and max_audio_minutes belong to speech models",
+                )?;
+                check_model(
+                    extra.language.as_ref().is_none_or(|l| {
+                        l == "auto"
+                            || ((2..=3).contains(&l.len())
+                                && l.bytes().all(|b| b.is_ascii_lowercase()))
+                    }),
+                    "extra.language",
+                    "The language is auto or a lowercase language code such as de or en",
+                )?;
+                check_model(
+                    extra.threads.is_none_or(|t| (1..=256).contains(&t))
+                        && extra.max_file_mb.is_none_or(|m| m > 0)
+                        && extra.max_audio_minutes.is_none_or(|m| m > 0),
+                    "extra",
+                    "threads are 1 to 256, the limits are greater than zero",
+                )?;
                 let component = |name: &Option<String>| {
                     name.as_ref().is_none_or(|n| {
                         n.ends_with(".gguf")

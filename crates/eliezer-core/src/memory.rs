@@ -151,7 +151,10 @@ pub fn estimate_parts(
     if let Some(gb) = model.vram_gb {
         return Ok(whole(gb_bytes(gb)?, Basis::Configured));
     }
-    if matches!(model.kind, ModelKind::Image | ModelKind::Music) {
+    if matches!(
+        model.kind,
+        ModelKind::Image | ModelKind::Music | ModelKind::Stt
+    ) {
         return Err(MemoryError::MissingWeights);
     }
     let weights = match model.size_gb {

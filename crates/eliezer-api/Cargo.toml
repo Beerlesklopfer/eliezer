@@ -14,6 +14,7 @@ serde_json.workspace = true
 eliezer-core.workspace = true
 eliezer-backend.workspace = true
 eliezer-gpu.workspace = true
+eliezer-speech.workspace = true
 eliezer-hub = { workspace = true, default-features = false }
 tokio.workspace = true
 tracing.workspace = true
@@ -62,3 +63,7 @@ path = "../../tests/m6/edits_api.rs"
 [[test]]
 name = "speech_api"
 path = "../../tests/m7/speech_api.rs"
+
+[[test]]
+name = "transcription_api"
+path = "../../tests/m8/transcription_api.rs"

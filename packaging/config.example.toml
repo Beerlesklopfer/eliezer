@@ -66,6 +66,31 @@ port_range = [24600, 24609]
 # vram_gb = 10.0
 # extra = { duration_sec = 30, steps = 30, cfg_scale = 1.7 }
 
+# Speech recognition (speech to text) through whisper.cpp: POST /v1/audio/transcriptions (OpenAI shape). Uncomment both
+# blocks. The service decodes the upload (MP3, M4A/AAC, Ogg, FLAC, WAV) itself, cuts long recordings into pieces and
+# starts `whisper-server` (no ffmpeg needed). Download the model with
+# `eliezer download cstr/whisper-large-v3-turbo-german-ggml ggml-model-q5_0.bin` (Apache-2.0, about 0.6 GB); list it in
+# [huggingface] allow = ["cstr/whisper-large-v3-turbo-german-ggml"] first. First choice for German speech; alternatives are
+# primeline/whisper-large-v3-turbo-german and openai/whisper-large-v3-turbo (a listening test decides).
+# [backend.whispercpp]
+# program = "/usr/libexec/x86_64-linux-gnu/eliezer/whisper-server"
+# port_range = [24800, 24809]
+# chunk_secs = 600                     # a long recording is cut into pieces of this length ...
+# overlap_secs = 5                     # ... that overlap by this much
+# max_file_mb = 100                    # limits of an upload; a model can set its own
+# max_audio_minutes = 120
+# flash_attn = true                    # optional: --flash-attn / --no-flash-attn
+# gpu_device = 0                       # optional: --device
+#
+# [[model]]
+# key = "whisper-de"
+# backend = "whispercpp"
+# kind = "stt"
+# source = { file = "/var/lib/eliezer/models/cstr/whisper-large-v3-turbo-german-ggml/ggml-model-q5_0.bin" }
+# vram_gb = 2.0
+# device = "auto"                      # "cpu" runs it on the processor without taking the GPU slot
+# extra = { language = "de", threads = 8, max_file_mb = 200, max_audio_minutes = 180 }
+
 [[model]]
 key = "qwen/qwen3-coder-30b"
 backend = "mistralrs"

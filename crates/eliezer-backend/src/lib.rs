@@ -135,6 +135,32 @@ pub struct MusicRequest {
     /// The start value of the random numbers; without one every request composes a new song.
     pub seed: Option<i64>,
 }
+/// One piece of a recording to transcribe.
+#[derive(Debug, Clone)]
+pub struct TranscriptionRequest {
+    pub model: String,
+    /// A WAV file: 16 kHz, mono, 16 bit (what the service made of the upload).
+    pub wav: Vec<u8>,
+    /// A language code, or `None` for the one of the model.
+    pub language: Option<String>,
+    /// Text that steers the style and the spelling of names.
+    pub prompt: Option<String>,
+    pub temperature: Option<f64>,
+}
+/// A stretch of speech with its text; times are seconds from the start of the piece that was sent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscribedSegment {
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+}
+/// What the program heard in one piece.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Transcription {
+    /// The language the program reports, when it does.
+    pub language: Option<String>,
+    pub segments: Vec<TranscribedSegment>,
+}
 /// The kind of a picture file by its first bytes: `image/png`, `image/jpeg` or `image/webp`.
 pub fn image_type(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -167,6 +193,14 @@ pub trait Backend: Send + Sync {
     }
     /// A composed song as the bytes of a WAV file.
     fn music<'a>(&'a self, _: &'a Running, _: MusicRequest) -> BackendFuture<'a, Vec<u8>> {
+        Box::pin(async { Err(BackendError::Unavailable) })
+    }
+    /// The text of one piece of a recording.
+    fn transcribe<'a>(
+        &'a self,
+        _: &'a Running,
+        _: TranscriptionRequest,
+    ) -> BackendFuture<'a, Transcription> {
         Box::pin(async { Err(BackendError::Unavailable) })
     }
 }
@@ -345,6 +379,31 @@ impl Backend for FakeBackend {
             }
             tokio::time::sleep(self.config.chunk_delay).await;
             Ok(fake_wav())
+        })
+    }
+    fn transcribe<'a>(
+        &'a self,
+        running: &'a Running,
+        request: TranscriptionRequest,
+    ) -> BackendFuture<'a, Transcription> {
+        Box::pin(async move {
+            if !running.is_alive() {
+                return Err(BackendError::Crashed);
+            }
+            if request.model != running.spec.model || request.wav.len() < 44 {
+                return Err(BackendError::InvalidRequest);
+            }
+            tokio::time::sleep(self.config.chunk_delay).await;
+            // One segment over the whole piece (16 kHz, 16 bit, mono: 32000 bytes per second).
+            let seconds = (request.wav.len() - 44) as f64 / 32000.0;
+            Ok(Transcription {
+                language: request.language,
+                segments: vec![TranscribedSegment {
+                    start: 0.0,
+                    end: seconds,
+                    text: "test transcript".into(),
+                }],
+            })
         })
     }
 }

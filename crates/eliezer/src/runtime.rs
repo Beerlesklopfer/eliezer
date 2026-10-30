@@ -86,7 +86,10 @@ fn models(config: &Config) -> Vec<Model> {
                 priority: m.priority,
                 pinned: m.pinned,
                 // Pictures and music are heavy jobs of a program of their own: they take the GPU one at a time.
-                image: matches!(m.kind, ModelKind::Image | ModelKind::Music),
+                // Speech recognition does too, unless the model is set to the CPU (whisper.cpp can run there).
+                image: matches!(m.kind, ModelKind::Image | ModelKind::Music)
+                    || (m.kind == ModelKind::Stt
+                        && m.device != eliezer_core::config::DevicePolicy::Cpu),
                 in_flight: 0,
                 last_used_ms: 0,
             },
@@ -113,6 +116,7 @@ struct Runtimes {
     llamacpp: Arc<eliezer_llamacpp::LlamaCppBackend>,
     sdcpp: Option<Arc<eliezer_sdcpp::SdcppBackend>>,
     audiocpp: Option<Arc<eliezer_audiocpp::AudiocppBackend>>,
+    whispercpp: Option<Arc<eliezer_whispercpp::WhispercppBackend>>,
 }
 impl Runtimes {
     fn new(config: &Config) -> Self {
@@ -160,9 +164,26 @@ impl Runtimes {
                 .with_library_path(audio.library_path.clone()),
             )
         });
+        let whispercpp = config.backend.whispercpp.as_ref().map(|speech| {
+            tracing::info!(event = "runtime", "Speech models are served by whisper.cpp");
+            Arc::new(
+                eliezer_whispercpp::WhispercppBackend::new(
+                    speech.program.clone(),
+                    (speech.port_range[0], speech.port_range[1]),
+                    eliezer_whispercpp::ProgramSettings {
+                        flash_attn: speech.flash_attn,
+                        gpu_device: speech.gpu_device,
+                    },
+                )
+                .with_library_path(speech.library_path.clone()),
+            )
+        });
         let mut router = RoutingBackend::new(text, image, eliezer_sdcpp::GENERATION_BASE);
         if let Some(backend) = &audiocpp {
             router = router.with_audio(backend.clone(), eliezer_audiocpp::GENERATION_BASE);
+        }
+        if let Some(backend) = &whispercpp {
+            router = router.with_speech(backend.clone(), eliezer_whispercpp::GENERATION_BASE);
         }
         let router = Arc::new(router);
         let runtimes = Self {
@@ -172,6 +193,7 @@ impl Runtimes {
             llamacpp,
             sdcpp,
             audiocpp,
+            whispercpp,
         };
         runtimes.update(config);
         runtimes
@@ -190,6 +212,12 @@ impl Runtimes {
             .set_audio_models(songs.keys().cloned().collect());
         if let Some(audiocpp) = &self.audiocpp {
             audiocpp.set_models(songs);
+        }
+        let speech = whispercpp_models(config);
+        self.router
+            .set_speech_models(speech.keys().cloned().collect());
+        if let Some(whispercpp) = &self.whispercpp {
+            whispercpp.set_models(speech);
         }
     }
 }
@@ -215,6 +243,32 @@ fn sdcpp_models(config: &Config) -> std::collections::HashMap<String, eliezer_sd
                     cfg_scale: extra.and_then(|e| e.cfg_scale),
                     sampling_method: extra.and_then(|e| e.sampling_method.clone()),
                     offload_to_cpu: extra.and_then(|e| e.offload_to_cpu).unwrap_or(true),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// The speech models of the configuration with the file and settings the child process needs, by key.
+fn whispercpp_models(
+    config: &Config,
+) -> std::collections::HashMap<String, eliezer_whispercpp::SpeechModel> {
+    config
+        .model
+        .iter()
+        .filter(|m| {
+            m.backend == eliezer_core::config::BackendKind::Whispercpp && m.kind == ModelKind::Stt
+        })
+        .filter_map(|m| {
+            let extra = m.extra.as_ref();
+            Some((
+                m.key.clone(),
+                eliezer_whispercpp::SpeechModel {
+                    file: m.source.file.clone()?,
+                    language: extra
+                        .and_then(|e| e.language.clone())
+                        .unwrap_or_else(|| "auto".to_owned()),
+                    threads: extra.and_then(|e| e.threads),
                 },
             ))
         })

@@ -1,0 +1,17 @@
+[package]
+name = "eliezer-speech"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Decoding of uploaded audio, cutting into pieces and joining of transcripts"
+
+[dependencies]
+eliezer-backend.workspace = true
+symphonia.workspace = true
+rubato.workspace = true
+
+[[test]]
+name = "speech"
+path = "../../tests/m8/speech.rs"

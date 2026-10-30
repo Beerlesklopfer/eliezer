@@ -26,6 +26,7 @@ eliezer-gpu.workspace = true
 eliezer-hub.workspace = true
 eliezer-sdcpp.workspace = true
 eliezer-audiocpp.workspace = true
+eliezer-whispercpp.workspace = true
 eliezer-llamacpp = { workspace = true, optional = true }
 axum.workspace = true
 tokio.workspace = true

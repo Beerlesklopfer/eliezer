@@ -545,3 +545,157 @@ fn a_music_model_needs_the_music_backend_a_memory_figure_and_plain_component_nam
             .contains("backend")
     );
 }
+
+const SPEECH_BASE: &str = "[server]\nlisten=\"127.0.0.1:1234\"\n[gpu]\nvendor=\"none\"\n[backend.sdcpp]\nprogram=\"/usr/bin/sd-server\"\nport_range=[24600,24609]\n[backend.audiocpp]\nprogram=\"/usr/bin/audiocpp_server\"\nport_range=[24700,24709]\n[backend.whispercpp]\nprogram=\"/usr/bin/whisper-server\"\nport_range=[24800,24809]\n";
+
+fn speech_model(extra: &str) -> String {
+    format!(
+        "{SPEECH_BASE}[[model]]\nkey=\"w\"\nbackend=\"whispercpp\"\nkind=\"stt\"\nsource={{file=\"/var/lib/eliezer/models/ggml-model-q5_0.bin\"}}\nvram_gb=2.0\n{extra}"
+    )
+}
+
+#[test]
+fn a_speech_model_needs_the_whisper_backend_a_memory_figure_and_sane_settings() {
+    let config = Config::parse(&speech_model("")).unwrap();
+    let speech = config.backend.whispercpp.as_ref().unwrap();
+    // the defaults of the section
+    assert_eq!(
+        (
+            speech.chunk_secs,
+            speech.overlap_secs,
+            speech.max_file_mb,
+            speech.max_audio_minutes
+        ),
+        (600, 5, 100, 120)
+    );
+    assert!(speech.flash_attn.is_none() && speech.gpu_device.is_none());
+    assert!(
+        Config::parse(&speech_model(
+            "device=\"cpu\"\nextra={language=\"de\",threads=8,max_file_mb=300,max_audio_minutes=90}\n"
+        ))
+        .is_ok(),
+        "speech recognition may run on the CPU"
+    );
+    assert!(Config::parse(&speech_model("extra={language=\"auto\"}\n")).is_ok());
+    for (extra, field) in [
+        ("extra={language=\"German\"}\n", "extra.language"),
+        ("extra={language=\"de;x\"}\n", "extra.language"),
+        ("extra={threads=0}\n", "extra"),
+        ("extra={threads=1000}\n", "extra"),
+        ("extra={max_file_mb=0}\n", "extra"),
+        ("extra={max_audio_minutes=0}\n", "extra"),
+    ] {
+        let error = Config::parse(&speech_model(extra)).unwrap_err().to_string();
+        assert!(error.contains(field), "{extra}: {error}");
+    }
+    // the speech settings belong to speech models
+    let music = format!(
+        "{SPEECH_BASE}[[model]]\nkey=\"m\"\nbackend=\"audiocpp\"\nkind=\"music\"\nsource={{file=\"/var/lib/eliezer/models/music\"}}\nvram_gb=10.0\nextra={{language=\"de\"}}\n"
+    );
+    assert!(
+        Config::parse(&music)
+            .unwrap_err()
+            .to_string()
+            .contains("extra")
+    );
+    // no memory figure, the wrong backend, the wrong kind, a Hugging Face source
+    let no_figure = speech_model("").replace("vram_gb=2.0\n", "");
+    assert!(
+        Config::parse(&no_figure)
+            .unwrap_err()
+            .to_string()
+            .contains("vram_gb")
+    );
+    let wrong_backend = speech_model("").replace("backend=\"whispercpp\"", "backend=\"audiocpp\"");
+    assert!(
+        Config::parse(&wrong_backend)
+            .unwrap_err()
+            .to_string()
+            .contains("kind")
+    );
+    let wrong_kind = speech_model("").replace("kind=\"stt\"", "kind=\"music\"");
+    assert!(
+        Config::parse(&wrong_kind)
+            .unwrap_err()
+            .to_string()
+            .contains("kind")
+    );
+    let hf = speech_model("").replace(
+        "source={file=\"/var/lib/eliezer/models/ggml-model-q5_0.bin\"}",
+        "source={hf=\"cstr/whisper-large-v3-turbo-german-ggml\"}",
+    );
+    assert!(
+        Config::parse(&hf)
+            .unwrap_err()
+            .to_string()
+            .contains("source")
+    );
+    // a music model on the CPU is still refused
+    let cpu_music = music.replace("extra={language=\"de\"}\n", "device=\"cpu\"\n");
+    assert!(
+        Config::parse(&cpu_music)
+            .unwrap_err()
+            .to_string()
+            .contains("device")
+    );
+    // without the backend section
+    let without = speech_model("").replace(
+        "[backend.whispercpp]\nprogram=\"/usr/bin/whisper-server\"\nport_range=[24800,24809]\n",
+        "",
+    );
+    assert!(
+        Config::parse(&without)
+            .unwrap_err()
+            .to_string()
+            .contains("backend")
+    );
+}
+
+#[test]
+fn the_whisper_backend_section_is_checked() {
+    assert!(Config::parse(SPEECH_BASE).is_ok());
+    let with = |line: &str| {
+        SPEECH_BASE.replace(
+            "port_range=[24800,24809]",
+            &format!("port_range=[24800,24809]\n{line}"),
+        )
+    };
+    assert!(Config::parse(&with("flash_attn=true\ngpu_device=1\nchunk_secs=300\noverlap_secs=10\nmax_file_mb=500\nmax_audio_minutes=240\nlibrary_path=[\"/opt/rocm/lib\"]")).is_ok());
+    for (line, field) in [
+        ("chunk_secs=10", "chunk_secs"),
+        ("chunk_secs=4000", "chunk_secs"),
+        ("chunk_secs=60\noverlap_secs=30", "overlap_secs"),
+        ("overlap_secs=61", "overlap_secs"),
+        ("max_file_mb=0", "max_file_mb"),
+        ("max_audio_minutes=0", "max_file_mb"),
+        ("unknown=1", "unknown"),
+    ] {
+        let error = Config::parse(&with(line)).unwrap_err().to_string();
+        assert!(
+            error.contains(field) || error.contains("Unknown"),
+            "{line}: {error}"
+        );
+    }
+    for (range, other) in [("[24605,24615]", "sdcpp"), ("[24705,24715]", "audiocpp")] {
+        let text = SPEECH_BASE.replace("[24800,24809]", range);
+        let error = Config::parse(&text).unwrap_err().to_string();
+        assert!(
+            error.contains("whispercpp") && error.contains(other),
+            "{error}"
+        );
+    }
+    let on_service = SPEECH_BASE.replace("[24800,24809]", "[1200,1300]");
+    assert!(
+        Config::parse(&on_service)
+            .unwrap_err()
+            .to_string()
+            .contains("whispercpp")
+    );
+    let relative = SPEECH_BASE.replace("/usr/bin/whisper-server", "whisper-server");
+    assert!(
+        Config::parse(&relative)
+            .unwrap_err()
+            .to_string()
+            .contains("whispercpp")
+    );
+}
