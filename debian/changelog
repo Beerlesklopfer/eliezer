@@ -32,6 +32,13 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     `[backend.audiocpp] voices_dir` (default `voices` in the model store, mode 0700, never served): `GET`/`POST /v1/audio/voices`
     and `DELETE /v1/audio/voices/{name}`. `scripts/build-audiocpp.sh` takes the model set from `AUDIOCPP_MODELS`. The program was
     not run with a speech model yet (docs/Runtimes.md). No new dependency.
+  * Stream speech synthesis: `POST /v1/audio/speech` of a `tts` model takes `"stream": true` and `response_format` `pcm` (raw
+    signed 16 bit little-endian samples, rate in the header `X-Audio-Sample-Rate`, plus `X-Audio-Channels` and `X-Audio-Bits`)
+    or `wav` (open length, sizes 0xFFFFFFFF, for sox, ffmpeg and mpv). The body is chunked; the first passage is sent as soon as
+    it is read, the pauses are silence in between. A client that goes away stops the synthesis of the next passages; an error
+    after the first bytes aborts the connection (no closing chunk). The answer without `stream` is unchanged. No encoder for mp3
+    or flac: sox and ffmpeg do that. New `eliezer speak` (text from `--text`, `--file` or stdin; audio to stdout, a file or a
+    named pipe) and `eliezer voices`, `voices add NAME FILE`, `voices rm NAME`. No new dependency.
   * A picture request that fails no longer takes the model down: a request the program refused is answered with 400,
     and a picture that could not be drawn marks the model as crashed only when its program no longer answers.
     Before, any failure marked the model failed, which dropped it and the jobs other requests had running on it.

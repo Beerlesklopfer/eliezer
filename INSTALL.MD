@@ -164,6 +164,22 @@ eliezer run qwen/qwen3-coder-30b    # interactive chat; an empty line or Ctrl-D 
 echo "Summarize this" | eliezer run qwen/qwen3-coder-30b
 ```
 
+Reading a text aloud (needs a `tts` model and, for a cloned voice, a voice added with `eliezer voices add`):
+
+```bash
+eliezer voices add mama mama-sample.wav --transcript "Es war einmal."   # the voices are listed by: eliezer voices
+eliezer speak --voice mama --file kapitel.txt | sox -t wav - -t mp3 kapitel.mp3
+eliezer speak --voice mama --file kapitel.txt | play -t wav -           # listen while it is read
+eliezer speak --voice mama --file kapitel.txt --out kapitel.wav         # a plain WAV file
+mkfifo /tmp/speech.fifo; sox -t wav /tmp/speech.fifo -t flac kapitel.flac &   # a named pipe
+eliezer speak --voice mama --file kapitel.txt --out /tmp/speech.fifo
+```
+
+The audio is written while the text is read, passage by passage, so a player starts after the first sentences. Eliezer
+produces `wav` and raw `pcm` (`--format pcm`) only: **mp3, flac and other formats are made by sox or ffmpeg**, not by
+Eliezer. On a pipe the WAV has an open length, which sox, ffmpeg and mpv read until the end; a file named with `--out`
+gets the real sizes. If a passage fails after the audio has started, the command exits with 1 (a file is not left behind).
+
 `run` prints the answer while it is generated. Reasoning ("thinking") text is dimmed on a terminal
 and goes to stderr when the output is piped, so stdout holds only the answer. `--stats` prints the
 token statistics to stderr. Further options: `--system TEXT`, `--temperature F`, `--max-tokens N`,

@@ -396,11 +396,29 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
   The same endpoint chooses by the kind of the model: for a model with `kind = "tts"` (`type: "tts"`, `capabilities.speech_synthesis`
   and `voice_cloning`) the JSON is `model`, `input` (the text, at most `max_input_chars`, else `413`), `voice` (a name from
   `GET /v1/audio/voices`; empty or missing is `extra.default_voice`, else the model's own speaker; an unknown or invalid name is `400`),
-  `response_format` (`wav`, the only one: no encoder for mp3 or flac is in the service), and optionally `speed`, `language` (a code)
-  and `seed` (0 to 4294967295). The service cuts the text into passages at sentence boundaries (blank lines separate paragraphs; a
+  `response_format` (`wav`, the default, or `pcm`; no encoder for mp3 or flac is in the service, sox or ffmpeg do that), `stream`
+  (true or false, default false), and optionally `speed`, `language` (a code) and `seed` (0 to 4294967295). The service cuts the text into passages at sentence boundaries (blank lines separate paragraphs; a
   number or a single letter before a full stop and a lower-case word after a sentence mark do not end a sentence; longer sentences are
   cut at commas, then between words), reads them one after the other with the loaded model, and joins the audio with `pause_ms` (and
   `paragraph_pause_ms` after a paragraph), so a chapter works. The answer is one WAV file. A passage that fails fails the request.
+  - `pcm` is raw signed 16 bit little-endian samples (`audio/pcm`, as the `pcm` of OpenAI) without any header; the format is in the
+    response headers `X-Audio-Sample-Rate` (the rate of the first passage's WAV from audio.cpp, not an assumed value),
+    `X-Audio-Channels` and `X-Audio-Bits` (`16`). Without `stream` the whole body comes in one piece with a `Content-Length`.
+  - `stream = true` sends the answer while it is made, with chunked transfer encoding (`Transfer-Encoding: chunked`, no
+    `Content-Length`): the first passage is read before the status is sent (so an error in it is an ordinary error answer, for
+    example `502`), then its audio goes out at once and the later passages follow as they are read. The pauses (`pause_ms`,
+    `paragraph_pause_ms`) are written as silence after the passage they follow. At most two finished chunks wait for a slow reader, so
+    the synthesis does not run far ahead of a player. `wav` is then a WAV file of open length: RIFF and data sizes are `0xFFFFFFFF`,
+    which sox, ffmpeg and mpv read until the end of the stream. `input` limits, passage size and pauses are the same settings as
+    without a stream; the non-streamed answer is unchanged.
+  - The sample rate and the channel count are those of the first passage. A later passage with another rate or channel count ends the
+    stream with an error instead of being resampled: one model has one output rate, so a change means that the speech program
+    misbehaves, and converting would hide that (the non-streamed answer refuses such a mix with `502` as well).
+  - A client that closes the connection stops the synthesis, also in the middle of a passage (the request to audio.cpp is dropped), so
+    the passages that follow are not read and the GPU is free again. An error in passage N after the first bytes were sent cannot be
+    reported (the status is out, a chunked body has no place for an error): it is logged and the service aborts the connection
+    without the closing chunk, so the client sees a failed transfer (curl: error 18, `eliezer speak`: exit 1) and not a file that
+    looks complete. A client must treat a stream that ends without the closing chunk as failed.
 - `GET /v1/audio/voices`: `{"voices": ["mama", "papa"]}`, the names only. `POST /v1/audio/voices` (multipart: `name`, `file` in any
   format the service decodes, optional `transcript`, optional `replace=true`): the file is decoded and stored as a mono 16 bit WAV at
   `voice_sample_rate`; `201` (`200` when replaced), `400` for a bad name or a file that is not audio, `409` when the name exists
@@ -455,7 +473,21 @@ The `eliezer` binary is also a client of the running service (synchronous HTTP/1
 | `run MODEL [PROMPT]` | `POST /v1/chat/completions` (SSE) | tokens as they arrive; reasoning dimmed (stderr when piped); `--stats` |
 | `search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]` | `GET /api/v1/hub/search` | candidate repositories on Hugging Face; nothing is downloaded |
 | `inspect ORG/REPO` | `GET /api/v1/hub/models/{org}/{repo}` | files, quantizations, backend support and fit of one repository |
+| `speak [--model KEY] [--voice NAME] [--language CODE] [--speed F] [--seed N] [--format wav\|pcm] [--text TEXT \| --file FILE] [--out PATH\|-] [--replace]` | `GET /api/v1/models`, `POST /v1/audio/speech` (`stream = true`) | the audio, while it is made |
+| `voices`, `voices add NAME FILE [--replace] [--transcript TEXT]`, `voices rm NAME` | `GET`/`POST /v1/audio/voices`, `DELETE /v1/audio/voices/{name}` | the voice names, one per line |
 | `help` | – | overview |
+
+`speak` reads the text from `--text`, `--file` or standard input (the limit `max_input_chars` is the service's: it answers `413`) and
+uses `--model` or the only `tts` model of the service (none or several: exit 2). The audio goes to standard output (also with
+`--out -`; chunk by chunk as it arrives, nothing else on stdout, messages on stderr) so that `sox`, `ffmpeg` or `play` can take it
+over: `eliezer speak --file kapitel.txt | sox -t wav - -t mp3 kapitel.mp3`. Without `--out` and with a terminal as stdout it
+refuses (exit 2); `--out -` writes anyway. `--out PATH` writes a regular file as `PATH.part` and renames it when the stream is
+complete (a WAV gets its real sizes then), refuses an existing file without `--replace` (exit 2) and removes the `.part` file when the
+stream fails or on Ctrl-C; a named pipe (found by its file type) is opened for writing when the service has accepted the request and
+is written block by block, without `.part` and rename; a missing path is created as a regular file. A broken pipe (the reader quit,
+for example `head -c`) ends quietly with exit 0 after the connection is closed, which stops the synthesis. A stream that ends
+without the closing chunk is exit 1. `voices add` uploads the recording as the endpoint expects it; the library is the
+service's (names only, no paths). Eliezer writes `wav` and `pcm` only; mp3 and flac are made by sox or ffmpeg.
 
 Global options: `--host URL` (else `ELIEZER_HOST`, else `server.listen` of the configuration with
 `0.0.0.0` read as `127.0.0.1`, else `http://127.0.0.1:1234`), `--key-file PATH` (else

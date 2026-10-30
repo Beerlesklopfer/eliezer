@@ -293,7 +293,9 @@ Not verified (needs a model and the binary):
   single-file packages, and `audio-cpp/audio.cpp-gguf` publishes Chatterbox that way, but the loader (`src/models/chatterbox/assets.cpp`)
   was not read to the end.
 - The sample rate and channels of the answer, and that all passages of one request have the same format (the service refuses to join
-  parts that differ and answers 502).
+  parts that differ and answers 502; a stream ends with an aborted connection). The service does not assume 24 kHz: it reads the rate from
+  the first passage's WAV and reports it in `X-Audio-Sample-Rate`. Also not verified: that dropping the HTTP request to `audiocpp_server`
+  (a client that went away) stops the program's work on that passage.
 - That a changing `seed` or the same `seed` for different passages and voices is accepted: the spec says the cloning settings, including
   `seed`, are "captured during clone preparation; changing it on the same prepared session is rejected". The service sends the same
   `seed` for every passage of a request and nothing otherwise; a request with another seed for the same voice may be refused by the program
