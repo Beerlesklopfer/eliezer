@@ -3,6 +3,8 @@
 //! of the service is started.
 mod format;
 mod http;
+mod transcribe;
+mod transcribe_cmd;
 
 use eliezer_core::config::Config;
 use http::{Client, Endpoint, HttpError};
@@ -20,8 +22,21 @@ const SHORT: Duration = Duration::from_secs(15);
 const LONG: Duration = Duration::from_secs(3600);
 
 const COMMANDS: &[&str] = &[
-    "ls", "ps", "load", "unload", "status", "run", "show", "search", "inspect", "download", "pins",
-    "get", "rm", "help",
+    "ls",
+    "ps",
+    "load",
+    "unload",
+    "status",
+    "run",
+    "show",
+    "search",
+    "inspect",
+    "download",
+    "pins",
+    "get",
+    "rm",
+    "transcribe",
+    "help",
 ];
 
 /// Complete help text of the program: service flags and client commands.
@@ -83,6 +98,26 @@ Commands (they use the HTTP API of the running service):
                                   --verify hashes them (slow for big files)
   rm ORG/REPO                     Delete a repository fetched earlier from the model store (refused
                                   while a configured model still uses its files)
+  transcribe PATH... --out DIR [OPTIONS]
+                                  Transcribe audio files (or the audio files of directories) one
+                                  after the other and write DIR/<name>.txt, .srt, .vtt and .json.
+                                  Existing outputs are kept, so an interrupted run can be repeated.
+      --out DIR                   Where the outputs go (required); with --recursive the
+                                  sub-directories below each PATH are kept
+      --model KEY                 Speech model (default: the only stt model of the service)
+      --language CODE             Language code such as de, or auto (default: the model's setting)
+      --format LIST               txt,srt,vtt,json (default: all four)
+      --prompt TEXT               Hint words such as names, passed to the recognizer
+      --prompt-file FILE          Read the hint from a file
+      --recursive                 Descend into sub-directories of directories
+      --extensions LIST           File extensions searched in directories
+                                  (default: mp3,m4a,aac,ogg,oga,opus,flac,wav); hidden files are ignored
+      --replace                   Overwrite existing outputs
+      --dry-run                   List what would be done, send nothing
+      --limit N                   Stop after N transcribed files
+      --timeout-secs N            Wait at most N seconds for one file (default: 21600)
+                                  Progress goes to stderr, one line per file, and a summary at the end;
+                                  exit 1 if any file failed, 3 if the service went away
   help                            This text
 
 Options for all commands:
@@ -293,6 +328,21 @@ fn spec_for(command: &str) -> Spec {
             flags: &[],
             positional: (2, 17),
         },
+        "transcribe" => Spec {
+            values: &[
+                "--out",
+                "--model",
+                "--language",
+                "--format",
+                "--prompt",
+                "--prompt-file",
+                "--extensions",
+                "--limit",
+                "--timeout-secs",
+            ],
+            flags: &["--recursive", "--replace", "--dry-run"],
+            positional: (1, usize::MAX),
+        },
         "rm" => Spec {
             values: &[],
             flags: &[],
@@ -349,6 +399,7 @@ fn run(command: &str, args: &[String], at: usize) -> Res<()> {
         "download" => cmd_download(&client, json, &parsed),
         "get" => cmd_get(&client, json, &parsed),
         "rm" => cmd_rm(&client, json, &parsed.positional[0]),
+        "transcribe" => transcribe_cmd::cmd_transcribe(&client, json, &parsed),
         "pins" => cmd_pins(&client, json, parsed.flag("--verify")),
         _ => cmd_run(&client, json, &parsed),
     }

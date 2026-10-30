@@ -205,6 +205,18 @@ impl Client {
         body: Option<&str>,
         read_timeout: Duration,
     ) -> Result<Response, HttpError> {
+        let payload = body.map(|b| ("application/json", b.as_bytes()));
+        self.send_bytes(method, path, payload, read_timeout)
+    }
+
+    /// Like [`Client::send`], but the body is bytes with its own content type (for uploads).
+    pub fn send_bytes(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<(&str, &[u8])>,
+        read_timeout: Duration,
+    ) -> Result<Response, HttpError> {
         let addrs = (self.endpoint.host.as_str(), self.endpoint.port)
             .to_socket_addrs()
             .map_err(|e| HttpError::Unreachable(e.to_string()))?;
@@ -243,16 +255,16 @@ impl Client {
         if let Some(key) = &self.key {
             head += &format!("Authorization: Bearer {key}\r\n");
         }
-        if let Some(body) = body {
+        if let Some((content_type, body)) = body {
             head += &format!(
-                "Content-Type: application/json\r\nContent-Length: {}\r\n",
+                "Content-Type: {content_type}\r\nContent-Length: {}\r\n",
                 body.len()
             );
         }
         head += "\r\n";
         stream.write_all(head.as_bytes()).map_err(proto)?;
-        if let Some(body) = body {
-            stream.write_all(body.as_bytes()).map_err(proto)?;
+        if let Some((_, body)) = body {
+            stream.write_all(body).map_err(proto)?;
         }
         stream.flush().map_err(proto)?;
 
