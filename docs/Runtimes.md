@@ -152,3 +152,66 @@ condition encoder and vocoder 0.3 GB; 8.4 GB in all).
   in the package's README); the weights sit in VRAM only while a stage needs them (`mem_saver`). The output is not silent and varies in
   loudness (checked by the sample values; not listened to). Stopping the service leaves no `audiocpp_server` process and no directory behind.
 
+
+## whisper.cpp `whisper-server` (read 2026-10-30, not run)
+
+MIT licensed, ggml based. The program is not installed on this machine and was not built, so nothing below was run against
+the real binary. What was **verified** is what the source of `examples/server/server.cpp` and its README on the `master` branch of
+`ggml-org/whisper.cpp` say on 2026-10-30 (read over HTTPS; the commit was not recorded, so pin one when the program is built).
+What could **not be verified** is listed separately; the live check stays to do, as for audio.cpp (`cargo test -- --ignored` has no
+such test yet).
+
+Verified against the source:
+
+- Routes: `POST /inference` (the path prefix can be changed with `--request-path`/`--inference-path`; the defaults are used),
+  `POST /load` (swap the model; not used), `GET /health` (503 with a loading status while a model is being loaded, otherwise ready),
+  `GET /` (a built-in HTML form; static files of the `--public` folder).
+- `POST /inference` is `multipart/form-data`. `file` is required (a missing one is `400`); optional text fields include
+  `response_format` (`json` default, `text`, `srt`, `vtt`, `verbose_json`), `language` (a code or `auto`; the default is `en`
+  unless the program was started with `--language`), `prompt`, `temperature` (default 0) and `temperature_inc` (0.2),
+  `no_language_probabilities`, `translate`, `detect_language`, `no_timestamps`, `offset_t`, `offset_n`, `duration`, `best_of`,
+  `beam_size`, `vad` and more. Booleans are true for `true`, `1`, `yes`, `y`. The service sends only `response_format`,
+  `no_language_probabilities`, `language`, `prompt` and `temperature`.
+- `verbose_json` holds `task`, `language`, `duration`, `text` and `segments`, each with `id`, `text`, `tokens`, `words`,
+  `temperature`, `avg_logprob`, `no_speech_prob`, and `start` and `end` in **seconds** (the program's centiseconds times 0.01).
+  `json` holds only `text`; `text` is one line per segment; `srt` and `vtt` are subtitle files. The service asks for `verbose_json`
+  every time and builds its own `json`, `text`, `srt` and `vtt`, because it needs the segment times to join the pieces of a long
+  file; only `segments[].start/end/text` and `language` are read.
+- Errors are JSON with an `error` key: `400` for a missing `file` or audio that cannot be read, `500` for a failed inference or a
+  failed ffmpeg conversion, `499` when the client left. There is no "busy" answer: `/inference` and `/load` take one mutex, so
+  requests run one at a time and the others wait. `/health` does not take the mutex.
+- The HTTP port is opened only after the model is loaded (so connection refused until ready; the service polls `/health`).
+- Arguments used: `-m/--model`, `--host` (a value ending in `.sock` selects a Unix socket; the service always passes
+  `127.0.0.1`), `--port`, `-l/--language`, `-t/--threads`, `-ng/--no-gpu`, `-fa/--flash-attn` and `-nfa/--no-flash-attn`
+  (flash attention is on by default), `-dev/--device` (GPU index, default 0; also the environment variable `WHISPER_ARG_DEVICE`),
+  `--public`. Long forms are used. `--convert` makes the program start ffmpeg for uploads: **not used**; the README warns to
+  run the server sandboxed and to sanitize uploads, which is why the service decodes the audio itself and sends only a WAV file of
+  its own making.
+- The program's request parser is not hardened against hostile input beyond that, so it listens on loopback only, runs with a
+  cleared environment in a private directory, and gets nothing but the files the service wrote.
+
+**Not verified (needs the binary):**
+
+- That the program's WAV reader takes the service's file (16 kHz, mono, 16 bit PCM, 44-byte header, exact `data` size) without
+  `--convert`. The README names 16 kHz WAV as the requirement; the reader is a separate module that was not read. If it refuses
+  the file, `400` appears in the log and the fix is in `eliezer_speech::wav`.
+- The body of `GET /health` when ready (the service only checks for a success status), and that `/health` exists in the
+  revision that gets built.
+- That an empty `language` falls back to the `--language` of the start; the service therefore always sends `language` itself
+  (the request's, else the model's `extra.language`, else `auto`).
+- The exact `language` text in `verbose_json` (a name such as `german` or a code); the service shows its own value when the request
+  or the model named a language and the program's value only for `auto`.
+- Speed, memory (`vram_gb = 2.0` of the example is an estimate for a large-v3-turbo q5_0 model, not a measurement) and the quality of
+  the recommended German models. The choice between `cstr/whisper-large-v3-turbo-german-ggml` (`ggml-model-q5_0.bin`,
+  Apache-2.0; first choice for German sermons), `primeline/whisper-large-v3-turbo-german` and `openai/whisper-large-v3-turbo`
+  is made by a listening test with a real recording (word errors, names, real-time factor on the GPU and the CPU).
+
+Build (from the README of whisper.cpp and the CMake options of ggml; not run here): `cmake -B build -DGGML_VULKAN=1` for Vulkan
+(needs the Vulkan headers and `glslc`), `cmake -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1100` for AMD with HIP (older revisions
+call the option `GGML_HIPBLAS`; ROCm development files are needed, the same as for audio.cpp), `-DGGML_CUDA=1` for NVIDIA, none
+of them for the CPU. Then `cmake --build build -j --config Release --target whisper-server`; the binary is `build/bin/whisper-server`.
+A `scripts/build-whispercpp.sh` like the one for audio.cpp, and bundling the program in the ROCm package, are not written yet.
+
+What the tests cover instead: `tests/m8/fake_whisper_server.rs` is a stand-in that speaks the interface as described above
+(arguments, `/health`, the multipart form, `verbose_json`); `tests/m8/whispercpp.rs` checks the arguments, the environment, the
+private directory, the form, error mapping and crashes against it.

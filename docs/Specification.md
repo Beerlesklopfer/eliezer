@@ -115,11 +115,22 @@ port_range = [24700, 24709]            # must not overlap port_range of sdcpp or
 compute = "hip"                        # "hip" (default) | "cuda" | "vulkan" | "cpu": the compute backend of the program
 # library_path = [...]                 # as for sdcpp
 
+[backend.whispercpp]                   # optional: speech recognition through whisper.cpp (a child process per loaded model)
+program = "/usr/libexec/x86_64-linux-gnu/eliezer/whisper-server"
+port_range = [24800, 24809]            # must not overlap the port ranges of sdcpp or audiocpp, nor the service port
+chunk_secs = 600                       # a long recording is cut into pieces of this length (30 to 3600) ...
+overlap_secs = 5                       # ... that overlap by this much (0 to 60, less than half a piece)
+max_file_mb = 100                      # upload limit; a model can set its own (extra.max_file_mb)
+max_audio_minutes = 120                # length limit of a recording; a model can set its own (extra.max_audio_minutes)
+# flash_attn = true                    # optional: --flash-attn / --no-flash-attn; without it the program's default applies
+# gpu_device = 0                       # optional: --device
+# library_path = [...]                 # as for sdcpp
+
 [[model]]
 key = "qwen/qwen3-coder-30b"           # name used by MultiGPT
 backend = "mistralrs"
 source = { hf = "Qwen/Qwen3-Coder-30B-A3B-Instruct", revision = "main" }  # or { file = "/path/model.gguf" }
-kind = "llm"                           # "llm" | "embedding" | "image" | "music"
+kind = "llm"                           # "llm" | "embedding" | "image" | "music" | "stt"
 priority = 10
 max_context = 131072
 default_context = 32768
@@ -157,6 +168,30 @@ extra = { duration_sec = 30, steps = 30, cfg_scale = 1.7 }
 package; default `language_model_q4_0.gguf`, `rvq_depth_decoder_q8_0.gguf`, `transformer_q4_0.gguf`), `duration_sec` (1 to 300,
 the length drawn when a request names none; default 30), `steps` (flow matching steps) and `cfg_scale` (flow guidance scale).
 `size_bytes` of the model list is the sum of the five component files that are in use.
+
+A speech model (`kind = "stt"`, `backend = "whispercpp"`) names the ggml file of whisper.cpp in `source.file` (a Hugging Face
+source is not accepted: download the file with `eliezer download ORG/REPO FILE`, the repository must be on the `huggingface.allow`
+list, and point `source.file` at it) and needs `vram_gb`. Unlike pictures and music it may run on the CPU:
+
+```toml
+[[model]]
+key = "whisper-de"
+backend = "whispercpp"
+kind = "stt"
+source = { file = "/var/lib/eliezer/models/cstr/whisper-large-v3-turbo-german-ggml/ggml-model-q5_0.bin" }
+vram_gb = 2.0
+device = "auto"                        # "auto" and "gpu": the GPU slot, one job at a time; "cpu": no GPU, RAM budget
+extra = { language = "de", threads = 8, max_file_mb = 200, max_audio_minutes = 180 }
+```
+
+`extra` of a speech model: `language` (a lowercase language code such as `de`, or `auto` to detect it; the language used when a
+request names none; default `auto`), `threads` (1 to 256; the program's default without), `max_file_mb` and `max_audio_minutes`
+(the limits of an upload and of a recording; default: the values of `[backend.whispercpp]`, which default to 100 and 120). The
+limits, the length of a piece and the overlap are always settings, never constants. Recommended models (the choice is made by a
+listening test with real recordings, counting word errors, names and speed): first
+`cstr/whisper-large-v3-turbo-german-ggml`, file `ggml-model-q5_0.bin` (Apache-2.0), for German speech such as sermons; alternatives
+`primeline/whisper-large-v3-turbo-german` (convert to ggml, or use a ggml build of it) and `openai/whisper-large-v3-turbo`
+(multilingual, also available as ggml in `ggerganov/whisper.cpp`).
 
 `extra` of an image model: `text_encoder`, `vae` and `tokenizer` (paths; `tokenizer` is the external `tokenizer.json` that MOSS-Image needs, passed as `--tokenizer`), `steps` (1 to 150), `cfg_scale` (0 to 30),
 `sampling_method` (one of the methods of stable-diffusion.cpp), `offload_to_cpu` (default true) and `prompt_helper` (the
@@ -306,6 +341,32 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
   `seed`, `response_format = "wav"`) for models with `kind = "music"` (`capabilities.music_generation`); the answer is the WAV
   file (`audio/wav`, 16 bit, stereo; 44.1 kHz as measured with audio.cpp). Lyrics may carry section tags such as `[verse]` and `[chorus]`. `model` can be
   left out when exactly one music model is configured. The length is a budget: the song can end earlier.
+- `POST /v1/audio/transcriptions` (speech to text, OpenAI shape, `multipart/form-data`) for models with `kind = "stt"`
+  (`type: "stt"` and `capabilities.transcription` in the model list):
+  - Fields: `file` (the audio, required), `model` (can be left out when exactly one speech model is configured), `language`
+    (`auto` or a lowercase code; default: `extra.language` of the model, else `auto`), `prompt` (a hint with names and terms),
+    `response_format` (`json` default, `text`, `verbose_json`, `srt`, `vtt`), `temperature` (0 to 1) and
+    `timestamp_granularities[]` (only `segment`; `word` is refused). Other fields (`stream` and the like) are ignored.
+  - Answers: `json` is `{"text": "…"}`; `text` is the plain text (`text/plain`); `verbose_json` is `{"task": "transcribe",
+    "language", "duration" (seconds of the whole file), "text", "segments": [{"id", "start", "end", "text"}]}`; `srt` and `vtt`
+    are subtitle files (`application/x-subrip`, `text/vtt`). All times are seconds from the start of the whole file.
+  - Decoding is the service's job and happens in Rust: MP3, M4A/AAC, Ogg Vorbis, FLAC and WAV (any rate, any channel count, 8 to 32
+    bit) are decoded to 16 kHz mono 16 bit. ffmpeg is not used. A file that is not audio (or that no decoder of the build reads)
+    gives `400`.
+  - Limits (settings, section 4): a file over `max_file_mb` or a recording over `max_audio_minutes` gives `413`; the file is
+    read in pieces and refused as soon as it passes the limit, and decoding stops at the length limit, so a hostile file cannot
+    fill the memory. `404` for an unknown model, and for a request without `model` when no speech model is configured; `400` for a
+    model that does not transcribe, for several speech models without `model`, for a missing `file` and for a wrong field value.
+  - Long files: the decoded audio is cut into pieces of `chunk_secs` that overlap by `overlap_secs` (the last piece takes a tail
+    that would only be overlap). The pieces go to the program one after the other, so only one piece is in flight. The cut lies in the
+    middle of the overlap: a segment of the earlier piece is kept when its middle is before the cut, a segment of the later piece
+    when its middle is at or after it; so the speech heard twice appears once. Segments without text are dropped; the times get
+    the offset of their piece; the `id`s are numbered again.
+  - The request is answered when the whole file is done (it can take minutes: the request timeout of the service must allow it).
+    There is no job form (`POST` returning a job id) in this version; a client that wants to poll cuts the file itself.
+  - Scheduling: the job takes the GPU slot like a music job (one picture, song or transcription at a time; language models then
+    run on the CPU, section 7a), unless the model is set to `device = "cpu"`: then it is placed in RAM like a language model on the
+    CPU (`[cpu] ram_budget_gb`), starts with `--no-gpu` and does not wait for the GPU.
 - Streaming statistics: in the last SSE chunk of the chat response additionally `"eliezer": {"ttft_ms", "gen_ms",
   "tokens"}` (MultiGPT measures on its own and ignores it; Eliezer serves as a cross-check).
 
@@ -539,6 +600,18 @@ trait Backend: Send + Sync {
   (section 7, item 4; language models then run on the CPU, section 7a). A request that fails does not take the model down while
   its program still answers (the same holds for image models): `400` for what the program refuses, `502` for a song it could not
   compose; only a program that no longer answers marks the model failed.
+- **whispercpp (M8):** Child process `whisper-server` (whisper.cpp, `[backend.whispercpp] program`) for each loaded speech model on a free
+  loopback port of `port_range`. The service starts it without a shell, with a cleared environment (the same short list of
+  inherited variables as audio.cpp) and a private run directory (mode 0700, working directory of the child and the program's
+  `--public` folder, removed when the model is unloaded), with the fixed arguments `--model FILE --host 127.0.0.1 --port N
+  --language L --public DIR`, plus `--threads N` (`extra.threads`), `--no-gpu` for a model placed on the CPU, or else `--device N`
+  and `--flash-attn`/`--no-flash-attn` (the settings of the section). `--convert` (which starts ffmpeg) is never used. The model counts
+  as loaded when `GET /health` answers 200 (the program opens its port only after the model is loaded; load time out 300 s). A
+  piece becomes `POST /inference`, a `multipart/form-data` body with the 16 kHz mono WAV as `file` and the fields
+  `response_format = verbose_json` (the service builds every other format itself from the segments), `language`, `prompt`,
+  `temperature` and `no_language_probabilities`. Request text is only ever a form field. The answer must hold `segments` with
+  `start`, `end` (seconds) and `text`. `400` of the program is a request it refused (`400`); other failures and answers
+  without segments are `502`; a program that no longer answers marks the model failed. The program serializes requests itself.
 - **fake:** Test bench: configurable load time, VRAM demand, responses, crashes; basis of all tests.
 - Environment of child processes: only `HF_HOME`, `HF_TOKEN` (read from the file, not passed through from the
   parent environment), `PATH` and the vendor's device selection (`CUDA_VISIBLE_DEVICES` or `HIP_VISIBLE_DEVICES`/`ROCR_VISIBLE_DEVICES`). Never tokens in arguments.

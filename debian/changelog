@@ -21,6 +21,11 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     `flow_transformer`, `duration_sec`, `steps` and `cfg_scale`. `scripts/build-audiocpp.sh` builds the program (pinned commit,
     HIP); `scripts/build-deb.sh rocm` bundles it as `/usr/libexec/<triplet>/eliezer/audiocpp_server`. Checked live on the Radeon RX
     7900 XTX: a 20 s song in 1 min 20 s (including the load), a 30 s song in 2 min 32 s.
+  * Add speech recognition: `kind = "stt"` with `backend = "whispercpp"` (new `[backend.whispercpp]`), served by `whisper-server` of
+    whisper.cpp as a child process per loaded model, and `POST /v1/audio/transcriptions` (OpenAI shape; `json`, `text`,
+    `verbose_json`, `srt`, `vtt`) with `type: "stt"` and `capabilities.transcription`. The service decodes MP3, M4A/AAC, Ogg, FLAC and
+    WAV itself, cuts long recordings into overlapping pieces and joins the segments; limits and piece length are settings.
+    New dependencies: `symphonia` 0.5.5 and `rubato` 0.16.2 (pure Rust). The program itself was not run yet (docs/Runtimes.md).
   * A picture request that fails no longer takes the model down: a request the program refused is answered with 400,
     and a picture that could not be drawn marks the model as crashed only when its program no longer answers.
     Before, any failure marked the model failed, which dropped it and the jobs other requests had running on it.
