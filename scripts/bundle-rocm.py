@@ -16,10 +16,11 @@ def output(*args, **kwargs):
 
 
 def main():
-    # Usage: bundle-rocm.py PACKAGE.deb [--sd-server PATH] [--audiocpp-server PATH]
+    # Usage: bundle-rocm.py PACKAGE.deb [--sd-server PATH] [--audiocpp-server PATH] [--whisper-server PATH]
     arguments = sys.argv[1:]
     sd_server = None
     audiocpp_server = None
+    whisper_server = None
     if "--sd-server" in arguments:
         at = arguments.index("--sd-server")
         sd_server = Path(arguments[at + 1]).resolve()
@@ -27,6 +28,10 @@ def main():
     if "--audiocpp-server" in arguments:
         at = arguments.index("--audiocpp-server")
         audiocpp_server = Path(arguments[at + 1]).resolve()
+        del arguments[at : at + 2]
+    if "--whisper-server" in arguments:
+        at = arguments.index("--whisper-server")
+        whisper_server = Path(arguments[at + 1]).resolve()
         del arguments[at : at + 2]
     package = Path(arguments[0]).resolve()
     rocm = Path(os.environ.get("ROCM_PATH", "/opt/rocm")).resolve()
@@ -57,6 +62,14 @@ def main():
             shutil.copy2(audiocpp_server, music)
             music.chmod(0o755)
             pending.append(music)
+        # The speech runtime is a fourth program; it sits in the same multiarch libexec directory.
+        speech = None
+        if whisper_server is not None:
+            speech = root / "usr/libexec" / triplet / "eliezer" / "whisper-server"
+            speech.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(whisper_server, speech)
+            speech.chmod(0o755)
+            pending.append(speech)
         copied = {}
         system = set()
         inspected = set()
@@ -65,7 +78,7 @@ def main():
             if path in inspected:
                 continue
             inspected.add(path)
-            if path not in (executable, drawing, music):
+            if path not in (executable, drawing, music, speech):
                 destination = private / path.name
                 shutil.copy2(path, destination)
                 soname = output("patchelf", "--print-soname", str(path)).strip()
@@ -103,6 +116,14 @@ def main():
             licence = audiocpp_server.parents[3] / "LICENSE"
             if licence.is_file():
                 target = root / "usr/share/doc/eliezer/audio.cpp-LICENSE"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(licence, target)
+        if speech is not None:
+            subprocess.run(["patchelf", "--set-rpath", f"$ORIGIN/../../../lib/{triplet}/eliezer", str(speech)], check=True)
+            # whisper.cpp and ggml are MIT licensed; their license text goes with the program.
+            licence = whisper_server.parents[2] / "LICENSE"
+            if licence.is_file():
+                target = root / "usr/share/doc/eliezer/whisper.cpp-LICENSE"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(licence, target)
         if drawing is not None:

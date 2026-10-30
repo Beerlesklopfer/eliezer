@@ -1,6 +1,9 @@
 #!/bin/sh
 # Builds `whisper-server` of whisper.cpp at the tag that was checked (docs/Runtimes.md) with HIP for the installed card
-# and prints its path. The result is cached in target/whispercpp; nothing is installed.
+# and prints its path. The result is cached in target/whispercpp; nothing is installed. whisper.cpp and ggml are linked
+# statically (like audiocpp_server), so the program needs only the ROCm libraries, which scripts/bundle-rocm.py adds to
+# the package; scripts/build-deb.sh bundles it into the multiarch libexec directory of the package. The HIP objects must
+# be position independent for the static link (the same flags as in scripts/build-deb.sh).
 #
 #   scripts/build-whispercpp.sh [--rebuild]
 #
@@ -13,7 +16,7 @@ rocm="${ROCM_PATH:-/opt/rocm}"
 dir=target/whispercpp
 src=$dir/src
 binary=$src/build/bin/whisper-server
-stamp=$dir/built-$commit
+stamp=$dir/built-$commit-static
 
 if [ "${1:-}" = --rebuild ]; then rm -rf "$src/build" "$stamp"; fi
 if [ -x "$binary" ] && [ -e "$stamp" ]; then echo "$binary"; exit 0; fi
@@ -39,7 +42,8 @@ echo "Building whisper-server $tag for $targets" >&2
 rm -f "$dir"/built-*
 (cd "$src" && \
     HIPCXX="$rocm/llvm/bin/clang" HIP_PATH="$rocm" cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-        -DGGML_HIP=ON -DAMDGPU_TARGETS="$targets" -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON >&2 && \
+        -DGGML_HIP=ON -DAMDGPU_TARGETS="$targets" -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_HIP_FLAGS=-fPIC \
+        -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON >&2 && \
     cmake --build build --target whisper-server >&2)
 [ -x "$binary" ] || { echo "The build did not produce $binary" >&2; exit 1; }
 touch "$stamp"

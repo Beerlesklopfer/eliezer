@@ -47,14 +47,18 @@ cargo deb -p eliezer --locked --variant "$variant" --output "$stage/" "$@"
 deb=$(find "$stage" -maxdepth 1 -name 'eliezer_*.deb' -print -quit)
 [ -n "$deb" ] || { echo "No package produced in the staging directory" >&2; exit 1; }
 if [ "$variant" = rocm ]; then
-    # The image runtime (sd-server) and the music runtime (audiocpp_server) are part of the ROCm package;
-    # SKIP_SDCPP=1 and SKIP_AUDIOCPP=1 leave them out.
+    # The image runtime (sd-server), the music runtime (audiocpp_server) and the speech runtime (whisper-server)
+    # are part of the ROCm package (in the multiarch libexec directory); SKIP_SDCPP=1, SKIP_AUDIOCPP=1 and
+    # SKIP_WHISPERCPP=1 leave them out.
     set --
     if [ "${SKIP_SDCPP:-0}" != 1 ]; then
         set -- --sd-server "$(scripts/build-sdcpp.sh)"
     fi
     if [ "${SKIP_AUDIOCPP:-0}" != 1 ]; then
         set -- "$@" --audiocpp-server "$(scripts/build-audiocpp.sh)"
+    fi
+    if [ "${SKIP_WHISPERCPP:-0}" != 1 ]; then
+        set -- "$@" --whisper-server "$(scripts/build-whispercpp.sh)"
     fi
     python3 scripts/bundle-rocm.py "$deb" "$@"
 fi
