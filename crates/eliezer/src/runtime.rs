@@ -167,14 +167,19 @@ impl Runtimes {
         let whispercpp = config.backend.whispercpp.as_ref().map(|speech| {
             tracing::info!(event = "runtime", "Speech models are served by whisper.cpp");
             Arc::new(
-                eliezer_whispercpp::WhispercppBackend::new(
+                eliezer_whispercpp::WhispercppBackend::with_timeouts(
                     speech.program.clone(),
                     (speech.port_range[0], speech.port_range[1]),
                     eliezer_whispercpp::ProgramSettings {
                         flash_attn: speech.flash_attn,
                         gpu_device: speech.gpu_device,
                     },
+                    std::time::Duration::from_secs(u64::from(speech.load_timeout_secs)),
+                    std::time::Duration::from_secs(u64::from(speech.request_timeout_secs)),
                 )
+                .with_stop_grace(std::time::Duration::from_secs(u64::from(
+                    speech.stop_grace_secs,
+                )))
                 .with_library_path(speech.library_path.clone()),
             )
         });
@@ -253,6 +258,7 @@ fn sdcpp_models(config: &Config) -> std::collections::HashMap<String, eliezer_sd
 fn whispercpp_models(
     config: &Config,
 ) -> std::collections::HashMap<String, eliezer_whispercpp::SpeechModel> {
+    let section = config.backend.whispercpp.as_ref();
     config
         .model
         .iter()
@@ -269,6 +275,14 @@ fn whispercpp_models(
                         .and_then(|e| e.language.clone())
                         .unwrap_or_else(|| "auto".to_owned()),
                     threads: extra.and_then(|e| e.threads),
+                    split_on_word: extra
+                        .and_then(|e| e.split_on_word)
+                        .or(section.map(|b| b.split_on_word))
+                        .unwrap_or(true),
+                    max_segment_chars: extra
+                        .and_then(|e| e.max_segment_chars)
+                        .or(section.map(|b| b.max_segment_chars))
+                        .unwrap_or(0),
                 },
             ))
         })

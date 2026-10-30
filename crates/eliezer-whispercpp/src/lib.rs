@@ -54,6 +54,10 @@ pub struct SpeechModel {
     /// The language the program is started with (`auto` detects it).
     pub language: String,
     pub threads: Option<u32>,
+    /// Break segments only between words (`split_on_word`).
+    pub split_on_word: bool,
+    /// Wrap segments after this many characters (`max_len`); 0 leaves the program's own wrapping.
+    pub max_segment_chars: u32,
 }
 
 /// The settings of `[backend.whispercpp]` that reach the command line of the program.
@@ -83,6 +87,7 @@ pub struct WhispercppBackend {
     http: reqwest::Client,
     ready_timeout: Duration,
     request_timeout: Duration,
+    stop_grace: Duration,
 }
 
 impl WhispercppBackend {
@@ -122,7 +127,14 @@ impl WhispercppBackend {
                 .unwrap_or_default(),
             ready_timeout: ready,
             request_timeout: request,
+            stop_grace: Duration::from_secs(15),
         }
+    }
+
+    /// How long a child gets to end after it is told to stop, before it is killed.
+    pub fn with_stop_grace(mut self, grace: Duration) -> Self {
+        self.stop_grace = grace;
+        self
     }
 
     /// Directories put in front of the library path of the child process (the ROCm libraries).
@@ -235,15 +247,23 @@ pub fn multipart_body(boundary: &str, fields: &[(&str, String)], file: &[u8]) ->
 /// The text fields of `POST /inference` for a request. `verbose_json` is asked for in every case: the service builds
 /// its own `json`, `text`, `srt` and `vtt` from the segments, so it needs their times.
 ///
-/// `split_on_word` is on in every case: with `verbose_json` the program turns the token times on, and then it wraps
+/// `split_on_word` is on by default (`backend.whispercpp.split_on_word`, per model `extra.split_on_word`): with `verbose_json` the program turns the token times on, and then it wraps
 /// every segment after about 60 characters on a token boundary, which cuts words in two ("Füs" and "se.", measured with
 /// whisper.cpp v1.9.5 on 2026-10-30). The service joins the segments with a space, so a cut word would reach the text.
-pub fn inference_fields(request: &TranscriptionRequest) -> Vec<(&'static str, String)> {
+/// `max_segment_chars` other than 0 is sent as `max_len`.
+pub fn inference_fields(
+    request: &TranscriptionRequest,
+    split_on_word: bool,
+    max_segment_chars: u32,
+) -> Vec<(&'static str, String)> {
     let mut fields = vec![
         ("response_format", "verbose_json".to_owned()),
         ("no_language_probabilities", "true".to_owned()),
-        ("split_on_word", "true".to_owned()),
+        ("split_on_word", split_on_word.to_string()),
     ];
+    if max_segment_chars > 0 {
+        fields.push(("max_len", max_segment_chars.to_string()));
+    }
     if let Some(language) = &request.language {
         fields.push(("language", language.clone()));
     }
@@ -423,7 +443,7 @@ impl Backend for WhispercppBackend {
                 instance.stopped.store(true, Ordering::Release);
                 let mut child = instance.child.lock().await;
                 let _ = child.start_kill();
-                let _ = tokio::time::timeout(Duration::from_secs(15), child.wait()).await;
+                let _ = tokio::time::timeout(self.stop_grace, child.wait()).await;
                 remove_directory(&instance.directory);
             }
             Ok(())
@@ -464,7 +484,10 @@ impl Backend for WhispercppBackend {
             {
                 return Err(BackendError::InvalidRequest);
             }
-            let fields = inference_fields(&request);
+            let (split_on_word, max_segment_chars) = self
+                .model(&running.spec.model)
+                .map_or((true, 0), |m| (m.split_on_word, m.max_segment_chars));
+            let fields = inference_fields(&request, split_on_word, max_segment_chars);
             // A boundary that is in none of the texts.
             let boundary = loop {
                 let n = self.boundary_counter.fetch_add(1, Ordering::Relaxed);

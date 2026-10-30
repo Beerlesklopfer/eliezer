@@ -288,6 +288,33 @@ pub struct WhispercppConfig {
     /// The length limit of a recording in minutes; a model can set its own (`extra.max_audio_minutes`).
     #[serde(default = "max_audio_minutes_default")]
     pub max_audio_minutes: u32,
+    /// Ask the program to break segments only between words (`split_on_word`); a model can set its own.
+    #[serde(default = "split_on_word_default")]
+    pub split_on_word: bool,
+    /// Wrap segments after this many characters (`max_len`, 20 to 400); 0 leaves the program's own wrapping. A model can set its own.
+    #[serde(default)]
+    pub max_segment_chars: u32,
+    /// How long a model may take to load (seconds).
+    #[serde(default = "load_timeout_secs_default")]
+    pub load_timeout_secs: u32,
+    /// How long the program may take for one piece of a recording (seconds).
+    #[serde(default = "request_timeout_secs_default")]
+    pub request_timeout_secs: u32,
+    /// How long the program gets to end after it is told to stop, before it is killed (seconds).
+    #[serde(default = "stop_grace_secs_default")]
+    pub stop_grace_secs: u32,
+}
+fn split_on_word_default() -> bool {
+    true
+}
+fn load_timeout_secs_default() -> u32 {
+    300
+}
+fn request_timeout_secs_default() -> u32 {
+    3600
+}
+fn stop_grace_secs_default() -> u32 {
+    15
 }
 fn chunk_secs_default() -> u32 {
     600
@@ -467,6 +494,10 @@ pub struct ExtraConfig {
     pub max_file_mb: Option<u32>,
     /// Speech models: the length limit of a recording in minutes (default: `backend.whispercpp.max_audio_minutes`).
     pub max_audio_minutes: Option<u32>,
+    /// Speech models: `split_on_word` of the program (default: `backend.whispercpp.split_on_word`).
+    pub split_on_word: Option<bool>,
+    /// Speech models: `max_len` of the program, 0 or 20 to 400 (default: `backend.whispercpp.max_segment_chars`).
+    pub max_segment_chars: Option<u32>,
 }
 
 /// The caller also resolves existing symbolic links within paths that do not exist yet.
@@ -493,7 +524,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp whispercpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec language threads max_file_mb max_audio_minutes flash_attn gpu_device chunk_secs overlap_secs";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp whispercpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec language threads max_file_mb max_audio_minutes flash_attn gpu_device chunk_secs overlap_secs split_on_word max_segment_chars load_timeout_secs request_timeout_secs stop_grace_secs";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -932,6 +963,26 @@ impl Config {
                 "The overlap is at most 60 seconds and less than half a piece",
             )?;
             check(
+                speech.max_segment_chars == 0 || (20..=400).contains(&speech.max_segment_chars),
+                "backend.whispercpp.max_segment_chars",
+                "The segment length is 0 (the program's own) or 20 to 400 characters",
+            )?;
+            check(
+                (1..=3600).contains(&speech.load_timeout_secs),
+                "backend.whispercpp.load_timeout_secs",
+                "The load time out is 1 to 3600 seconds",
+            )?;
+            check(
+                (1..=86_400).contains(&speech.request_timeout_secs),
+                "backend.whispercpp.request_timeout_secs",
+                "The request time out is 1 to 86400 seconds",
+            )?;
+            check(
+                (1..=300).contains(&speech.stop_grace_secs),
+                "backend.whispercpp.stop_grace_secs",
+                "The stop grace time is 1 to 300 seconds",
+            )?;
+            check(
                 speech.max_file_mb > 0 && speech.max_audio_minutes > 0,
                 "backend.whispercpp.max_file_mb",
                 "The limits must be greater than zero",
@@ -1146,11 +1197,13 @@ impl Config {
                 let speech = extra.language.is_some()
                     || extra.threads.is_some()
                     || extra.max_file_mb.is_some()
-                    || extra.max_audio_minutes.is_some();
+                    || extra.max_audio_minutes.is_some()
+                    || extra.split_on_word.is_some()
+                    || extra.max_segment_chars.is_some();
                 check_model(
                     model.kind == ModelKind::Stt || !speech,
                     "extra",
-                    "language, threads, max_file_mb and max_audio_minutes belong to speech models",
+                    "language, threads, the limits, split_on_word and max_segment_chars belong to speech models",
                 )?;
                 check_model(
                     extra.language.as_ref().is_none_or(|l| {
@@ -1167,6 +1220,13 @@ impl Config {
                         && extra.max_audio_minutes.is_none_or(|m| m > 0),
                     "extra",
                     "threads are 1 to 256, the limits are greater than zero",
+                )?;
+                check_model(
+                    extra
+                        .max_segment_chars
+                        .is_none_or(|c| c == 0 || (20..=400).contains(&c)),
+                    "extra.max_segment_chars",
+                    "The segment length is 0 (the program's own) or 20 to 400 characters",
                 )?;
                 let component = |name: &Option<String>| {
                     name.as_ref().is_none_or(|n| {

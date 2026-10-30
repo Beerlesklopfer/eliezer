@@ -49,6 +49,8 @@ fn model(dir: &Path, mode: &str) -> SpeechModel {
         file,
         language: "de".into(),
         threads: Some(3),
+        split_on_word: true,
+        max_segment_chars: 0,
     }
 }
 
@@ -106,6 +108,8 @@ fn the_arguments_are_a_fixed_list_without_conversion() {
         file: "/m/a b/$(x).bin".into(),
         language: "de".into(),
         threads: Some(4),
+        split_on_word: true,
+        max_segment_chars: 0,
     };
     let strings = |cpu, settings: &ProgramSettings| -> Vec<String> {
         arguments(&model, 24800, Path::new("/run/x y"), settings, cpu)
@@ -158,14 +162,22 @@ fn the_form_carries_the_text_only_as_fields() {
     let mut request = request();
     request.prompt = Some(hostile.into());
     request.temperature = Some(0.2);
-    let fields = inference_fields(&request);
+    let fields = inference_fields(&request, true, 0);
     assert!(fields.contains(&("response_format", "verbose_json".to_owned())));
     assert!(
         fields.contains(&("split_on_word", "true".to_owned())),
         "a segment must not end inside a word"
     );
+    assert!(
+        !fields.iter().any(|(name, _)| *name == "max_len"),
+        "0 leaves the program's own wrapping"
+    );
     assert!(fields.contains(&("language", "de".to_owned())));
     assert!(fields.contains(&("temperature", "0.2".to_owned())));
+    // the settings change the fields
+    let fields = inference_fields(&request, false, 120);
+    assert!(fields.contains(&("split_on_word", "false".to_owned())));
+    assert!(fields.contains(&("max_len", "120".to_owned())));
     let body = multipart_body("XYZ", &fields, b"RIFFdata");
     let text = String::from_utf8_lossy(&body);
     assert!(text.starts_with("--XYZ\r\n"));
@@ -427,4 +439,27 @@ async fn instances_use_their_own_ports_and_the_range_is_respected() {
     );
     b.stop(&first).await.unwrap();
     b.stop(&second).await.unwrap();
+}
+
+#[tokio::test]
+async fn the_segment_settings_of_the_model_reach_the_program() {
+    let t = Temp::new();
+    let mut custom = model(&t.0, "ok");
+    custom.split_on_word = false;
+    custom.max_segment_chars = 90;
+    let b = backend(custom, ports(1));
+    let running = b.start(&spec(DevicePolicy::Gpu)).await.unwrap();
+    b.transcribe(&running, request()).await.unwrap();
+    let sent = recorded(&t.0, "request");
+    assert!(sent.contains("name=\"split_on_word\"\r\n\r\nfalse\r\n"));
+    assert!(sent.contains("name=\"max_len\"\r\n\r\n90\r\n"));
+    b.stop(&running).await.unwrap();
+}
+
+#[tokio::test]
+async fn the_stop_grace_time_is_a_setting() {
+    let t = Temp::new();
+    let b = backend(model(&t.0, "ok"), ports(1)).with_stop_grace(Duration::from_secs(2));
+    let running = b.start(&spec(DevicePolicy::Gpu)).await.unwrap();
+    b.stop(&running).await.unwrap();
 }

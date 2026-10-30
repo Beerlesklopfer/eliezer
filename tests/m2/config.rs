@@ -568,6 +568,16 @@ fn a_speech_model_needs_the_whisper_backend_a_memory_figure_and_sane_settings() 
         ),
         (600, 5, 100, 120)
     );
+    assert!(speech.split_on_word);
+    assert_eq!(speech.max_segment_chars, 0);
+    assert_eq!(
+        (
+            speech.load_timeout_secs,
+            speech.request_timeout_secs,
+            speech.stop_grace_secs
+        ),
+        (300, 3600, 15)
+    );
     assert!(speech.flash_attn.is_none() && speech.gpu_device.is_none());
     assert!(
         Config::parse(&speech_model(
@@ -584,10 +594,23 @@ fn a_speech_model_needs_the_whisper_backend_a_memory_figure_and_sane_settings() 
         ("extra={threads=1000}\n", "extra"),
         ("extra={max_file_mb=0}\n", "extra"),
         ("extra={max_audio_minutes=0}\n", "extra"),
+        ("extra={max_segment_chars=19}\n", "extra.max_segment_chars"),
+        ("extra={max_segment_chars=401}\n", "extra.max_segment_chars"),
     ] {
         let error = Config::parse(&speech_model(extra)).unwrap_err().to_string();
         assert!(error.contains(field), "{extra}: {error}");
     }
+    // the per-model segment settings
+    let custom = Config::parse(&speech_model(
+        "extra={split_on_word=false,max_segment_chars=120}\n",
+    ))
+    .unwrap();
+    let extra = custom.model[0].extra.as_ref().unwrap();
+    assert_eq!(
+        (extra.split_on_word, extra.max_segment_chars),
+        (Some(false), Some(120))
+    );
+    assert!(Config::parse(&speech_model("extra={max_segment_chars=0}\n")).is_ok());
     // the speech settings belong to speech models
     let music = format!(
         "{SPEECH_BASE}[[model]]\nkey=\"m\"\nbackend=\"audiocpp\"\nkind=\"music\"\nsource={{file=\"/var/lib/eliezer/models/music\"}}\nvram_gb=10.0\nextra={{language=\"de\"}}\n"
@@ -660,7 +683,7 @@ fn the_whisper_backend_section_is_checked() {
             &format!("port_range=[24800,24809]\n{line}"),
         )
     };
-    assert!(Config::parse(&with("flash_attn=true\ngpu_device=1\nchunk_secs=300\noverlap_secs=10\nmax_file_mb=500\nmax_audio_minutes=240\nlibrary_path=[\"/opt/rocm/lib\"]")).is_ok());
+    assert!(Config::parse(&with("flash_attn=true\ngpu_device=1\nchunk_secs=300\noverlap_secs=10\nsplit_on_word=false\nmax_segment_chars=100\nload_timeout_secs=600\nrequest_timeout_secs=7200\nstop_grace_secs=30\nmax_file_mb=500\nmax_audio_minutes=240\nlibrary_path=[\"/opt/rocm/lib\"]")).is_ok());
     for (line, field) in [
         ("chunk_secs=10", "chunk_secs"),
         ("chunk_secs=4000", "chunk_secs"),
@@ -668,6 +691,14 @@ fn the_whisper_backend_section_is_checked() {
         ("overlap_secs=61", "overlap_secs"),
         ("max_file_mb=0", "max_file_mb"),
         ("max_audio_minutes=0", "max_file_mb"),
+        ("max_segment_chars=10", "max_segment_chars"),
+        ("max_segment_chars=500", "max_segment_chars"),
+        ("load_timeout_secs=0", "load_timeout_secs"),
+        ("load_timeout_secs=4000", "load_timeout_secs"),
+        ("request_timeout_secs=0", "request_timeout_secs"),
+        ("request_timeout_secs=90000", "request_timeout_secs"),
+        ("stop_grace_secs=0", "stop_grace_secs"),
+        ("stop_grace_secs=301", "stop_grace_secs"),
         ("unknown=1", "unknown"),
     ] {
         let error = Config::parse(&with(line)).unwrap_err().to_string();
