@@ -15,3 +15,7 @@ rubato.workspace = true
 [[test]]
 name = "speech"
 path = "../../tests/m8/speech.rs"
+
+[[test]]
+name = "passages"
+path = "../../tests/m9/passages.rs"
