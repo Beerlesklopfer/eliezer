@@ -196,12 +196,12 @@ backend = "audiocpp"
 kind = "tts"
 source = { file = "/var/lib/eliezer/models/audio-cpp/audio.cpp-gguf/Chatterbox-GGUF/chatterbox-q8_0.gguf" }
 vram_gb = 4.0
-extra = { family = "chatterbox", language = "de", default_voice = "mama", tts_options = { exaggeration = 0.5, temperature = 0.8 } }
+extra = { family = "chatterbox", language = "de", requires_voice = true, default_voice = "mama", tts_options = { exaggeration = 0.5, temperature = 0.8 } }
 ```
 
 `extra` of a speech synthesis model: `family` (`chatterbox`, the default, or `cosyvoice3`), `language` (a language code such as `de`,
 not `auto`; used when a request names none; without it the program's own default, English, applies), `speed` (0.25 to 4, used when a
-request names none; the family must support it), `default_voice` (a voice name used when a request names none), `max_input_chars`,
+request names none; the family must support it), `default_voice` (a voice name used when a request names none), `requires_voice` (bool, default false: the model has no speaker of its own, so a request that names no voice and has no `default_voice` is refused with `400 invalid_request` before anything is read, plain or streamed: `The model "KEY" needs a voice: pass "voice" (see GET /v1/audio/voices) or set extra.default_voice in the model's configuration.`, with a hint to add a voice when the library is empty; precedence: request voice, then `default_voice`, then none), `max_input_chars`,
 `max_passage_chars`, `pause_ms` and `paragraph_pause_ms` (like the settings of the section, for this model) and `tts_options`
 (numbers for the request options of the family, from a list per family: Chatterbox `exaggeration`, `guidance_scale`, `temperature`,
 `repetition_penalty`, `min_p`, `top_p`, `flow_guidance_scale`, `max_tokens`, `text_chunk_size`; CosyVoice3 `text_chunk_size`,
@@ -395,7 +395,7 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
   left out when exactly one music or speech synthesis model is configured. The length is a budget: the song can end earlier.
   The same endpoint chooses by the kind of the model: for a model with `kind = "tts"` (`type: "tts"`, `capabilities.speech_synthesis`
   and `voice_cloning`) the JSON is `model`, `input` (the text, at most `max_input_chars`, else `413`), `voice` (a name from
-  `GET /v1/audio/voices`; empty or missing is `extra.default_voice`, else the model's own speaker; an unknown or invalid name is `400`),
+  `GET /v1/audio/voices`; empty or missing is `extra.default_voice`, else the model's own speaker; an unknown or invalid name is `400`; a model with `requires_voice` and no voice is `400` too),
   `response_format` (`wav`, the default, or `pcm`; no encoder for mp3 or flac is in the service, sox or ffmpeg do that), `stream`
   (true or false, default false), and optionally `speed`, `language` (a code) and `seed` (0 to 4294967295). The service cuts the text into passages at sentence boundaries (blank lines separate paragraphs; a
   number or a single letter before a full stop and a lower-case word after a sentence mark do not end a sentence; longer sentences are

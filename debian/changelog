@@ -39,6 +39,8 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     after the first bytes aborts the connection (no closing chunk). The answer without `stream` is unchanged. No encoder for mp3
     or flac: sox and ffmpeg do that. New `eliezer speak` (text from `--text`, `--file` or stdin; audio to stdout, a file or a
     named pipe) and `eliezer voices`, `voices add NAME FILE`, `voices rm NAME`. No new dependency.
+  * Add `extra.requires_voice` for speech synthesis models without a speaker of their own (Chatterbox): a request without a voice
+    is a 400 with a hint instead of a 502. The message of an error answer of `audiocpp_server` is logged (cleaned and cut).
   * A picture request that fails no longer takes the model down: a request the program refused is answered with 400,
     and a picture that could not be drawn marks the model as crashed only when its program no longer answers.
     Before, any failure marked the model failed, which dropped it and the jobs other requests had running on it.

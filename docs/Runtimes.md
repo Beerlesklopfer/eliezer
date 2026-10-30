@@ -312,3 +312,11 @@ Not verified (needs a model and the binary):
 What the tests cover instead: `tests/m7/fake_audio_server.rs` answers the request as described above (the model entry, `voice_ref` and
 the options are recorded); `tests/m7/audiocpp.rs` checks the configuration file, the request body and the error mapping;
 `tests/m9/tts_api.rs` checks the endpoints with the fake backend.
+
+**Live check, 2026-10-31** (real `audiocpp_server` with `chatterbox-q8_0.gguf`): the `.gguf` file is accepted as the model `path`, the
+model loads, and `GET /v1/models` reports the family with `task: tts`. **Chatterbox needs a reference voice**: a request without
+`voice_ref` fails with HTTP 500 `{"error":{"message":"Chatterbox prepare requires speaker reference audio","type":"server_error"}}`.
+The service therefore has `extra.requires_voice` (set for Chatterbox in the example configuration) and answers such a request with a 400
+before it reads anything. The message of any error answer of the program is written to the log at WARN (`error.message`, control
+characters removed, cut to 300 characters, never the request text). It is not put into the API answer: the error types of the service are
+unit values without a detail field, and a program message could leak internals.
