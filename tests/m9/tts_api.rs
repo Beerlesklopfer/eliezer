@@ -58,6 +58,22 @@ struct Recording {
     songs: Mutex<Vec<MusicRequest>>,
     /// The nth passage fails with this error.
     fail_at: Mutex<Option<(usize, BackendError)>>,
+    /// The nth passage waits for a permit of this semaphore before it is read.
+    gate: Mutex<Option<(usize, Arc<tokio::sync::Semaphore>)>>,
+    /// From the nth passage on the answers have this sample rate.
+    rate_at: Mutex<Option<(usize, u32)>>,
+    /// Passages that were read to the end, and passages whose request was dropped while it ran.
+    finished: AtomicU64,
+    cancelled: Arc<AtomicU64>,
+}
+/// Counts a request that is dropped before it is finished.
+struct CancelGuard(Arc<AtomicU64>, bool);
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        if !self.1 {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 }
 impl Backend for Recording {
     fn start<'a>(&'a self, spec: &'a LoadSpec) -> BackendFuture<'a, Running> {
@@ -99,7 +115,34 @@ impl Backend for Recording {
         {
             return Box::pin(async move { Err(error) });
         }
-        self.inner.speak(running, request)
+        let gate = match &*self.gate.lock().unwrap() {
+            Some((at, gate)) if *at == index => Some(gate.clone()),
+            _ => None,
+        };
+        let rate = match *self.rate_at.lock().unwrap() {
+            Some((at, rate)) if index >= at => Some(rate),
+            _ => None,
+        };
+        let cancelled = self.cancelled.clone();
+        let inner = self.inner.speak(running, request);
+        Box::pin(async move {
+            let mut guard = CancelGuard(cancelled, false);
+            if let Some(gate) = gate {
+                // A closed semaphore never happens in the tests; a permit is not given back.
+                gate.acquire().await.unwrap().forget();
+            }
+            let wav = inner.await;
+            guard.1 = true;
+            self.finished.fetch_add(1, Ordering::SeqCst);
+            match (wav, rate) {
+                (Ok(wav), Some(rate)) => {
+                    let mut pcm = eliezer_speech::pcm::read_wav(&wav).unwrap();
+                    pcm.rate = rate;
+                    Ok(eliezer_speech::pcm::write_wav(&pcm))
+                }
+                (wav, _) => wav,
+            }
+        })
     }
 }
 
@@ -176,6 +219,10 @@ fn setup(text: &str, keys: Vec<String>) -> (Router, Arc<Recording>) {
         passages: Mutex::default(),
         songs: Mutex::default(),
         fail_at: Mutex::default(),
+        gate: Mutex::default(),
+        rate_at: Mutex::default(),
+        finished: AtomicU64::new(0),
+        cancelled: Arc::default(),
     });
     let names: Vec<String> = config.model.iter().map(|m| m.key.clone()).collect();
     let supervisor = Supervisor::spawn(
@@ -1038,4 +1085,418 @@ async fn the_voice_endpoints_need_the_api_key_like_the_other_modifying_endpoints
     // reading aloud needs it as well
     let answer = speak(&app, json!({"model": "reader", "input": "Hallo."})).await;
     assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
+}
+
+// ---- streaming -------------------------------------------------------------------------------------------------
+
+const FOUR: &str = "Der erste Satz ist hier drin. Der zweite Satz ist hier drin. Der dritte Satz ist hier drin.\n\nAbsatz zwei, nur ein kurzer Satz.";
+/// Bytes of one fake passage (16 bit samples).
+const PASSAGE_BYTES: usize = PASSAGE_SAMPLES * 2;
+/// 4 passages, two pauses of 100 ms and a paragraph pause of 300 ms at 8 kHz, in bytes.
+const FOUR_BYTES: usize = 4 * PASSAGE_BYTES + (2 * 800 + 2400) * 2;
+
+/// The answer as it arrives: the head of the response and its body as a stream of data frames.
+struct Streamed {
+    status: StatusCode,
+    headers: axum::http::HeaderMap,
+    body: axum::body::BodyDataStream,
+}
+impl Streamed {
+    fn header(&self, name: &str) -> &str {
+        self.headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+    }
+    /// The next frame; `None` at the end, `Some(Err)` when the transfer was aborted.
+    async fn next(&mut self) -> Option<Result<axum::body::Bytes, axum::Error>> {
+        use futures_core::Stream;
+        std::future::poll_fn(|cx| std::pin::Pin::new(&mut self.body).poll_next(cx)).await
+    }
+    /// Everything up to the end; `Err` with the bytes before it when the transfer was aborted.
+    async fn rest(&mut self) -> Result<Vec<u8>, Vec<u8>> {
+        let mut bytes = Vec::new();
+        while let Some(frame) = self.next().await {
+            match frame {
+                Ok(frame) => bytes.extend_from_slice(&frame),
+                Err(_) => return Err(bytes),
+            }
+        }
+        Ok(bytes)
+    }
+}
+async fn open(app: &Router, body: Value) -> Streamed {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/audio/speech")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (head, body) = response.into_parts();
+    Streamed {
+        status: head.status,
+        headers: head.headers,
+        body: body.into_data_stream(),
+    }
+}
+/// Waits until `done` holds; the tests have no fixed sleeps, only this bounded wait for a task to notice a change.
+async fn until(done: impl Fn() -> bool) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !done() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the condition did not become true");
+}
+
+#[tokio::test]
+async fn a_streamed_wav_has_an_open_length_and_the_samples_of_the_whole_answer() {
+    let t = Temp::new();
+    let (app, _) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    let whole = speak(&app, json!({"model": "reader", "input": FOUR})).await;
+    let mut streamed = open(
+        &app,
+        json!({"model": "reader", "input": FOUR, "stream": true}),
+    )
+    .await;
+    assert_eq!(streamed.status, StatusCode::OK);
+    assert_eq!(streamed.header("content-type"), "audio/wav");
+    // no length: a chunked body
+    assert_eq!(streamed.header("content-length"), "");
+    assert_eq!(streamed.header("x-audio-sample-rate"), "8000");
+    assert_eq!(streamed.header("x-audio-channels"), "1");
+    assert_eq!(streamed.header("x-audio-bits"), "16");
+    let bytes = streamed.rest().await.unwrap();
+    assert_eq!(bytes.len(), 44 + FOUR_BYTES);
+    assert_eq!(&bytes[..4], b"RIFF");
+    assert_eq!(&bytes[4..8], &[0xFF; 4]);
+    assert_eq!(&bytes[8..16], b"WAVEfmt ");
+    assert_eq!(&bytes[22..24], &1_u16.to_le_bytes());
+    assert_eq!(&bytes[24..28], &8000_u32.to_le_bytes());
+    assert_eq!(&bytes[28..32], &16000_u32.to_le_bytes());
+    assert_eq!(&bytes[36..40], b"data");
+    assert_eq!(&bytes[40..44], &[0xFF; 4]);
+    // the same audio as the non-streamed answer, apart from the two sizes
+    assert_eq!(&bytes[44..], &whole.bytes[44..]);
+    let pcm = eliezer_speech::pcm::read_wav(&bytes).unwrap();
+    assert_eq!(pcm.rate, 8000);
+    assert_eq!(pcm.samples.len() * 2, FOUR_BYTES);
+}
+
+#[tokio::test]
+async fn a_streamed_pcm_answer_is_raw_samples_with_the_format_in_headers() {
+    let t = Temp::new();
+    let (app, _) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    let whole = speak(&app, json!({"model": "reader", "input": FOUR})).await;
+    let mut streamed = open(
+        &app,
+        json!({"model": "reader", "input": FOUR, "stream": true, "response_format": "pcm"}),
+    )
+    .await;
+    assert_eq!(streamed.status, StatusCode::OK);
+    assert_eq!(streamed.header("content-type"), "audio/pcm");
+    assert_eq!(streamed.header("x-audio-sample-rate"), "8000");
+    assert_eq!(streamed.header("x-audio-channels"), "1");
+    assert_eq!(streamed.header("x-audio-bits"), "16");
+    let bytes = streamed.rest().await.unwrap();
+    // no header of any kind: exactly the samples of the WAV answer
+    assert_eq!(bytes, whole.bytes[44..]);
+}
+
+#[tokio::test]
+async fn pcm_without_stream_is_one_complete_body() {
+    let t = Temp::new();
+    let (app, _) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    let whole = speak(&app, json!({"model": "reader", "input": FOUR})).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/audio/speech")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"model": "reader", "input": FOUR, "response_format": "pcm"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let h = |name: &str| response.headers()[name].to_str().unwrap().to_owned();
+    assert_eq!(h("content-type"), "audio/pcm");
+    assert_eq!(h("content-length"), FOUR_BYTES.to_string());
+    assert_eq!(h("x-audio-sample-rate"), "8000");
+    assert_eq!(h("x-audio-channels"), "1");
+    assert_eq!(h("x-audio-bits"), "16");
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    assert_eq!(bytes.as_ref(), &whole.bytes[44..]);
+}
+
+#[tokio::test]
+async fn the_stream_and_format_fields_are_checked() {
+    let t = Temp::new();
+    let (app, _) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    for body in [
+        json!({"model": "reader", "input": "Hallo.", "stream": "yes"}),
+        json!({"model": "reader", "input": "Hallo.", "response_format": "mp3"}),
+        json!({"model": "reader", "input": "Hallo.", "stream": true, "response_format": "flac"}),
+    ] {
+        let answer = speak(&app, body).await;
+        assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{}", answer.text());
+    }
+    // `stream: false` and a missing field are the plain answer, and the limits still apply when streaming
+    let answer = speak(
+        &app,
+        json!({"model": "reader", "input": "Hallo.", "stream": false}),
+    )
+    .await;
+    assert_eq!(answer.kind, "audio/wav");
+    assert_eq!(
+        eliezer_speech::pcm::read_wav(&answer.bytes).unwrap().rate,
+        8000
+    );
+    let text = base(&t.voices(), "max_input_chars=10") + READER;
+    let (app, backend) = setup(&text, vec![]);
+    let answer = speak(
+        &app,
+        json!({"model": "reader", "input": "Dieser Text ist zu lang.", "stream": true}),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(backend.passages.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_first_bytes_are_sent_before_the_last_passage_is_read() {
+    let t = Temp::new();
+    let (app, backend) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    // the last of the four passages waits until the test lets it go
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    *backend.gate.lock().unwrap() = Some((3, gate.clone()));
+    let mut streamed = open(
+        &app,
+        json!({"model": "reader", "input": FOUR, "stream": true}),
+    )
+    .await;
+    assert_eq!(streamed.status, StatusCode::OK);
+    let first = streamed.next().await.unwrap().unwrap();
+    // header, the first passage and the pause after it
+    assert_eq!(first.len(), 44 + PASSAGE_BYTES + 1600);
+    assert!(backend.finished.load(Ordering::SeqCst) < 4);
+    // the last passage is not read before it is allowed to
+    until(|| backend.passages.lock().unwrap().len() == 4).await;
+    assert_eq!(backend.finished.load(Ordering::SeqCst), 3);
+    gate.add_permits(1);
+    let rest = streamed.rest().await.unwrap();
+    assert_eq!(first.len() + rest.len(), 44 + FOUR_BYTES);
+    assert_eq!(backend.finished.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
+async fn a_client_that_goes_away_stops_the_passages_that_follow() {
+    let t = Temp::new();
+    let (app, backend) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    let sentences: Vec<String> = (0..60)
+        .map(|n| format!("Satz Nummer {n} steht hier."))
+        .collect();
+    // the third passage never finishes by itself
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    *backend.gate.lock().unwrap() = Some((2, gate.clone()));
+    let mut streamed = open(
+        &app,
+        json!({"model": "reader", "input": sentences.join(" "), "stream": true}),
+    )
+    .await;
+    assert!(streamed.next().await.unwrap().is_ok());
+    until(|| backend.passages.lock().unwrap().len() == 3).await;
+    drop(streamed);
+    // the running request is dropped, not waited for
+    until(|| backend.cancelled.load(Ordering::SeqCst) == 1).await;
+    gate.add_permits(100);
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(backend.passages.lock().unwrap().len(), 3);
+    // the model is free again for the next job
+    let answer = speak(&app, json!({"model": "reader", "input": "Noch ein Satz."})).await;
+    assert_eq!(answer.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn an_error_after_the_first_bytes_aborts_the_transfer() {
+    let t = Temp::new();
+    let (app, backend) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    *backend.fail_at.lock().unwrap() = Some((2, BackendError::InvalidRequest));
+    let mut streamed = open(
+        &app,
+        json!({"model": "reader", "input": FOUR, "stream": true}),
+    )
+    .await;
+    // the status is out before the failure is known
+    assert_eq!(streamed.status, StatusCode::OK);
+    let bytes = streamed.rest().await.unwrap_err();
+    // what was read before the failure was sent, nothing after it
+    assert_eq!(bytes.len(), 44 + 2 * (PASSAGE_BYTES + 1600));
+    assert_eq!(backend.passages.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn an_error_in_the_first_passage_is_an_ordinary_error_answer() {
+    let t = Temp::new();
+    let (app, backend) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    *backend.fail_at.lock().unwrap() = Some((0, BackendError::Crashed));
+    let answer = speak(
+        &app,
+        json!({"model": "reader", "input": FOUR, "stream": true}),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(answer.json()["error"]["type"], "backend_error");
+}
+
+#[tokio::test]
+async fn the_sample_rate_is_the_one_of_the_first_passage() {
+    let t = Temp::new();
+    let (app, backend) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    // every passage answers at 16 kHz: the stream, its header and the pauses follow that rate (100 ms = 1600 frames)
+    *backend.rate_at.lock().unwrap() = Some((0, 16000));
+    let mut streamed = open(
+        &app,
+        json!({"model": "reader", "input": FOUR, "stream": true}),
+    )
+    .await;
+    assert_eq!(streamed.header("x-audio-sample-rate"), "16000");
+    let bytes = streamed.rest().await.unwrap();
+    assert_eq!(&bytes[24..28], &16000_u32.to_le_bytes());
+    assert_eq!(&bytes[28..32], &32000_u32.to_le_bytes());
+    assert_eq!(bytes.len(), 44 + 4 * PASSAGE_BYTES + (2 * 1600 + 4800) * 2);
+}
+
+#[tokio::test]
+async fn a_passage_with_another_sample_rate_ends_the_stream_instead_of_being_converted() {
+    let t = Temp::new();
+    let (app, backend) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    *backend.rate_at.lock().unwrap() = Some((1, 16000));
+    let mut streamed = open(
+        &app,
+        json!({"model": "reader", "input": FOUR, "stream": true, "response_format": "pcm"}),
+    )
+    .await;
+    assert_eq!(streamed.header("x-audio-sample-rate"), "8000");
+    let bytes = streamed.rest().await.unwrap_err();
+    // only the first passage and its pause got through
+    assert_eq!(bytes.len(), PASSAGE_BYTES + 1600);
+    // the same mix is refused in the plain answer too (its second passage is the first one that differs)
+    let next = backend.passages.lock().unwrap().len();
+    *backend.rate_at.lock().unwrap() = Some((next + 1, 16000));
+    let answer = speak(&app, json!({"model": "reader", "input": FOUR})).await;
+    assert_eq!(answer.status, StatusCode::BAD_GATEWAY);
+}
+
+// ---- streaming over a real connection --------------------------------------------------------------------------
+
+/// Serves the router on a loopback port and returns the address.
+async fn serve(app: Router) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    addr
+}
+async fn connect(addr: std::net::SocketAddr, body: &Value) -> tokio::net::TcpStream {
+    use tokio::io::AsyncWriteExt;
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let body = body.to_string();
+    let request = format!(
+        "POST /v1/audio/speech HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    socket.write_all(request.as_bytes()).await.unwrap();
+    socket
+}
+async fn read_to_end(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = Vec::new();
+    let _ = socket.read_to_end(&mut bytes).await;
+    bytes
+}
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[tokio::test]
+async fn a_stream_is_chunked_and_ends_with_the_closing_chunk() {
+    let t = Temp::new();
+    let (app, _) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    let addr = serve(app).await;
+    let mut socket = connect(
+        addr,
+        &json!({"model": "reader", "input": FOUR, "stream": true, "response_format": "pcm"}),
+    )
+    .await;
+    let bytes = read_to_end(&mut socket).await;
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(400)]).to_lowercase();
+    assert!(head.starts_with("http/1.1 200"), "{head}");
+    assert!(head.contains("transfer-encoding: chunked"), "{head}");
+    assert!(!head.contains("content-length"), "{head}");
+    assert!(head.contains("x-audio-sample-rate: 8000"), "{head}");
+    assert!(bytes.ends_with(b"0\r\n\r\n"));
+}
+
+#[tokio::test]
+async fn a_failed_stream_closes_the_connection_without_the_closing_chunk() {
+    let t = Temp::new();
+    let (app, backend) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    *backend.fail_at.lock().unwrap() = Some((2, BackendError::InvalidRequest));
+    let addr = serve(app).await;
+    let mut socket = connect(
+        addr,
+        &json!({"model": "reader", "input": FOUR, "stream": true, "response_format": "pcm"}),
+    )
+    .await;
+    let bytes = read_to_end(&mut socket).await;
+    assert!(bytes.starts_with(b"HTTP/1.1 200"));
+    assert!(contains(&bytes, b"\r\n\r\n"));
+    // the client sees a transfer that did not finish properly
+    assert!(!bytes.ends_with(b"0\r\n\r\n"));
+}
+
+#[tokio::test]
+async fn a_closed_connection_stops_the_synthesis() {
+    use tokio::io::AsyncReadExt;
+    let t = Temp::new();
+    let (app, backend) = setup(&(base(&t.voices(), "") + READER), vec![]);
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    *backend.gate.lock().unwrap() = Some((1, gate.clone()));
+    let addr = serve(app).await;
+    let mut socket = connect(
+        addr,
+        &json!({"model": "reader", "input": FOUR, "stream": true, "response_format": "pcm"}),
+    )
+    .await;
+    // wait for the first audio, then hang up while the second passage is being read
+    let mut seen = Vec::new();
+    while !contains(&seen, &[0, 0]) || seen.len() < PASSAGE_BYTES {
+        let mut block = [0_u8; 4096];
+        let n = socket.read(&mut block).await.unwrap();
+        assert!(n > 0, "the stream ended early");
+        seen.extend_from_slice(&block[..n]);
+    }
+    until(|| backend.passages.lock().unwrap().len() == 2).await;
+    drop(socket);
+    until(|| backend.cancelled.load(Ordering::SeqCst) == 1).await;
+    gate.add_permits(10);
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(backend.passages.lock().unwrap().len(), 2);
 }
