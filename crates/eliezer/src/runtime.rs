@@ -85,9 +85,9 @@ fn models(config: &Config) -> Vec<Model> {
                 bytes,
                 priority: m.priority,
                 pinned: m.pinned,
-                // Pictures and music are heavy jobs of a program of their own: they take the GPU one at a time.
+                // Pictures, music and synthesized speech are heavy jobs of a program of their own: they take the GPU one at a time.
                 // Speech recognition does too, unless the model is set to the CPU (whisper.cpp can run there).
-                image: matches!(m.kind, ModelKind::Image | ModelKind::Music)
+                image: matches!(m.kind, ModelKind::Image | ModelKind::Music | ModelKind::Tts)
                     || (m.kind == ModelKind::Stt
                         && m.device != eliezer_core::config::DevicePolicy::Cpu),
                 in_flight: 0,
@@ -154,7 +154,10 @@ impl Runtimes {
             None => Arc::new(NoBackend),
         };
         let audiocpp = config.backend.audiocpp.as_ref().map(|audio| {
-            tracing::info!(event = "runtime", "Music models are served by audio.cpp");
+            tracing::info!(
+                event = "runtime",
+                "Music and speech synthesis models are served by audio.cpp"
+            );
             Arc::new(
                 eliezer_audiocpp::AudiocppBackend::new(
                     audio.program.clone(),
@@ -213,10 +216,12 @@ impl Runtimes {
             sdcpp.set_models(images);
         }
         let songs = audiocpp_models(config);
+        let readers = audiocpp_tts_models(config);
         self.router
-            .set_audio_models(songs.keys().cloned().collect());
+            .set_audio_models(songs.keys().chain(readers.keys()).cloned().collect());
         if let Some(audiocpp) = &self.audiocpp {
             audiocpp.set_models(songs);
+            audiocpp.set_tts_models(readers);
         }
         let speech = whispercpp_models(config);
         self.router
@@ -325,6 +330,34 @@ fn audiocpp_models(
                     ),
                     steps: extra.and_then(|e| e.steps),
                     guidance: extra.and_then(|e| e.cfg_scale),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// The speech synthesis models of the configuration with the file and settings the child process needs, by key.
+fn audiocpp_tts_models(
+    config: &Config,
+) -> std::collections::HashMap<String, eliezer_audiocpp::TtsModel> {
+    config
+        .model
+        .iter()
+        .filter(|m| {
+            m.backend == eliezer_core::config::BackendKind::Audiocpp && m.kind == ModelKind::Tts
+        })
+        .filter_map(|m| {
+            let extra = m.extra.as_ref();
+            Some((
+                m.key.clone(),
+                eliezer_audiocpp::TtsModel {
+                    file: m.source.file.clone()?,
+                    family: extra
+                        .and_then(|e| e.family.clone())
+                        .unwrap_or_else(|| eliezer_core::config::TTS_FAMILIES[0].to_owned()),
+                    options: extra
+                        .and_then(|e| e.tts_options.clone())
+                        .unwrap_or_default(),
                 },
             ))
         })

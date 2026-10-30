@@ -153,7 +153,7 @@ pub fn estimate_parts(
     }
     if matches!(
         model.kind,
-        ModelKind::Image | ModelKind::Music | ModelKind::Stt
+        ModelKind::Image | ModelKind::Music | ModelKind::Stt | ModelKind::Tts
     ) {
         return Err(MemoryError::MissingWeights);
     }

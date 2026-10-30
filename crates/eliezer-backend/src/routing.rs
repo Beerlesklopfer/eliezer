@@ -5,7 +5,7 @@
 
 use crate::{
     Backend, BackendFuture, ChatRequest, Chunk, EmbedRequest, Embeddings, ImageRequest, LoadSpec,
-    MusicRequest, Running, Transcription, TranscriptionRequest,
+    MusicRequest, Running, SpeechRequest, Transcription, TranscriptionRequest,
 };
 use std::{
     collections::HashSet,
@@ -168,5 +168,12 @@ impl Backend for RoutingBackend {
         request: TranscriptionRequest,
     ) -> BackendFuture<'a, Transcription> {
         self.of(running).transcribe(running, request)
+    }
+    fn speak<'a>(
+        &'a self,
+        running: &'a Running,
+        request: SpeechRequest,
+    ) -> BackendFuture<'a, Vec<u8>> {
+        self.of(running).speak(running, request)
     }
 }

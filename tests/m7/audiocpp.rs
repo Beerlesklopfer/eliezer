@@ -1,5 +1,10 @@
-use eliezer_audiocpp::{AudiocppBackend, GENERATION_BASE, MusicModel, arguments, speech_body};
-use eliezer_backend::{Backend, BackendError, ChatRequest, LoadSpec, MusicRequest};
+use eliezer_audiocpp::{
+    AudiocppBackend, GENERATION_BASE, MAX_PROGRAM_MESSAGE_CHARS, MusicModel, TtsModel, arguments,
+    program_message, speak_body, speech_body,
+};
+use eliezer_backend::{
+    Backend, BackendError, ChatRequest, LoadSpec, MusicRequest, SpeechRequest, VoiceSample,
+};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -397,4 +402,212 @@ async fn instances_use_their_own_ports_and_the_range_is_respected() {
     backend.stop(&first).await.unwrap();
     let second = backend.start(&spec("two")).await.unwrap();
     backend.stop(&second).await.unwrap();
+}
+
+fn tts_model(dir: &Path, mode: &str) -> TtsModel {
+    std::fs::write(dir.join("chatterbox-q8_0.gguf"), "x").unwrap();
+    std::fs::write(dir.join("config.json"), format!("{mode}\n")).unwrap();
+    TtsModel {
+        file: dir.join("chatterbox-q8_0.gguf"),
+        family: "chatterbox".into(),
+        options: std::collections::BTreeMap::from([
+            ("exaggeration".to_owned(), 0.6),
+            ("max_tokens".to_owned(), 400.0),
+        ]),
+    }
+}
+fn passage(text: &str) -> SpeechRequest {
+    SpeechRequest {
+        model: "reader".into(),
+        text: text.into(),
+        voice: None,
+        language: None,
+        speed: None,
+        seed: None,
+    }
+}
+
+#[test]
+fn the_speech_body_carries_the_text_and_the_voice_reference_as_json_only() {
+    let hostile = "Er sagte: \"$(touch x); `id`\" \\ ' \n";
+    let mut request = passage(hostile);
+    request.language = Some("de".into());
+    request.speed = Some(1.25);
+    request.seed = Some(42);
+    request.voice = Some(VoiceSample {
+        path: PathBuf::from("/var/lib/eliezer/models/voices/mama.wav"),
+        transcript: Some("Es war einmal.".into()),
+    });
+    let body = speak_body("reader", &request).unwrap();
+    assert_eq!(body["model"], "reader");
+    assert_eq!(body["input"], hostile);
+    assert_eq!(body["language"], "de");
+    assert_eq!(body["speed"], 1.25);
+    assert_eq!(body["seed"], 42);
+    assert_eq!(body["response_format"], "wav");
+    assert_eq!(body["voice_ref"]["type"], "path");
+    assert_eq!(
+        body["voice_ref"]["path"],
+        "/var/lib/eliezer/models/voices/mama.wav"
+    );
+    assert_eq!(body["reference_text"], "Es war einmal.");
+    // nothing optional is sent when it is not set
+    let plain = speak_body("reader", &passage("Hallo.")).unwrap();
+    for name in ["language", "speed", "seed", "voice_ref", "reference_text"] {
+        assert!(plain.get(name).is_none(), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn a_speech_model_is_started_with_its_file_family_and_options_and_reads_a_passage() {
+    let t = Temp::new();
+    let range = ports(2);
+    let b = AudiocppBackend::with_timeouts(
+        FAKE.into(),
+        range,
+        "hip",
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    );
+    b.set_tts_models(HashMap::from([(
+        "reader".to_owned(),
+        tts_model(&t.0, "ok"),
+    )]));
+    let running = b.start(&spec("reader")).await.unwrap();
+    let mut request = passage("Es war einmal.");
+    request.voice = Some(VoiceSample {
+        path: t.0.join("mama.wav"),
+        transcript: None,
+    });
+    let wav = b.speak(&running, request).await.unwrap();
+    assert!(wav.starts_with(b"RIFF") && &wav[8..12] == b"WAVE");
+    let sent: serde_json::Value = serde_json::from_str(&recorded(&t.0, "request")).unwrap();
+    assert_eq!(sent["input"], "Es war einmal.");
+    assert_eq!(
+        sent["voice_ref"]["path"],
+        t.0.join("mama.wav").display().to_string()
+    );
+    let config: serde_json::Value = serde_json::from_str(&recorded(&t.0, "config")).unwrap();
+    let entry = &config["models"][0];
+    assert_eq!(entry["id"], "reader");
+    assert_eq!(entry["family"], "chatterbox");
+    assert_eq!(entry["task"], "tts");
+    assert_eq!(entry["mode"], "offline");
+    assert_eq!(
+        entry["path"],
+        t.0.join("chatterbox-q8_0.gguf").display().to_string()
+    );
+    assert_eq!(entry["default_request_options"]["exaggeration"], 0.6);
+    // a whole number is sent as an integer
+    assert_eq!(entry["default_request_options"]["max_tokens"], 400);
+    assert!(entry["default_request_options"]["max_tokens"].is_i64());
+    // a speech model does not compose
+    assert_eq!(
+        b.music(&running, song("la", "pop")).await,
+        Err(BackendError::InvalidRequest)
+    );
+    b.stop(&running).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_speech_model_without_its_file_and_empty_text_are_refused() {
+    let t = Temp::new();
+    let b = AudiocppBackend::with_timeouts(
+        FAKE.into(),
+        ports(2),
+        "hip",
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    );
+    let mut model = tts_model(&t.0, "ok");
+    model.file = t.0.join("missing.gguf");
+    b.set_tts_models(HashMap::from([("reader".to_owned(), model)]));
+    assert_eq!(
+        b.start(&spec("reader")).await.err(),
+        Some(BackendError::ModelFile)
+    );
+    // an unknown model
+    assert_eq!(
+        b.start(&spec("nobody")).await.err(),
+        Some(BackendError::Unavailable)
+    );
+    b.set_tts_models(HashMap::from([(
+        "reader".to_owned(),
+        tts_model(&t.0, "ok"),
+    )]));
+    let running = b.start(&spec("reader")).await.unwrap();
+    assert_eq!(
+        b.speak(&running, passage("   ")).await,
+        Err(BackendError::InvalidRequest)
+    );
+    b.stop(&running).await.unwrap();
+}
+
+#[tokio::test]
+async fn answers_that_are_no_reading_are_mapped_to_errors() {
+    for (mode, expected) in [
+        ("error-500", BackendError::Crashed),
+        ("bad-request", BackendError::InvalidRequest),
+        ("not-wav", BackendError::Crashed),
+    ] {
+        let t = Temp::new();
+        let b = AudiocppBackend::with_timeouts(
+            FAKE.into(),
+            ports(2),
+            "hip",
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        );
+        b.set_tts_models(HashMap::from([(
+            "reader".to_owned(),
+            tts_model(&t.0, mode),
+        )]));
+        let running = b.start(&spec("reader")).await.unwrap();
+        assert_eq!(
+            b.speak(&running, passage("Hallo.")).await,
+            Err(expected),
+            "{mode}"
+        );
+        b.stop(&running).await.unwrap();
+    }
+}
+
+#[test]
+fn the_message_of_the_program_is_cleaned_and_cut_for_the_log() {
+    let body = br#"{"error":{"message":"Chatterbox prepare requires speaker reference audio","type":"server_error"}}"#;
+    assert_eq!(
+        program_message(body).as_deref(),
+        Some("Chatterbox prepare requires speaker reference audio")
+    );
+    // control characters (a forged log line) are removed, text around them stays
+    let hostile = serde_json::json!({"error": {"message": "bad\n\u{1b}[31mred\r\tx\0 end"}});
+    assert_eq!(
+        program_message(hostile.to_string().as_bytes()).as_deref(),
+        Some("bad[31mredx end")
+    );
+    // cut to the named maximum
+    let long =
+        serde_json::json!({"error": {"message": "ä".repeat(MAX_PROGRAM_MESSAGE_CHARS + 50)}});
+    let cut = program_message(long.to_string().as_bytes()).unwrap();
+    assert_eq!(cut.chars().count(), MAX_PROGRAM_MESSAGE_CHARS + 3);
+    assert!(cut.ends_with("..."));
+    let exact = serde_json::json!({"error": {"message": "x".repeat(MAX_PROGRAM_MESSAGE_CHARS)}});
+    assert_eq!(
+        program_message(exact.to_string().as_bytes()).unwrap().len(),
+        MAX_PROGRAM_MESSAGE_CHARS
+    );
+    // a plain string error, and bodies without a message
+    assert_eq!(
+        program_message(br#"{"error":"boom"}"#).as_deref(),
+        Some("boom")
+    );
+    for none in [
+        &b""[..],
+        b"not json",
+        b"{}",
+        br#"{"error":{"message":"  \n "}}"#,
+        br#"{"error":{"message":5}}"#,
+    ] {
+        assert_eq!(program_message(none), None);
+    }
 }

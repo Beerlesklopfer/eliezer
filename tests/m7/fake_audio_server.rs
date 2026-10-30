@@ -11,6 +11,8 @@
 //!   `bad-request`        answers every request with 400
 //!   `not-wav`            answers 200 with something that is not a WAV file
 //!
+//! A model whose `path` is a file (a speech synthesis GGUF) uses the directory of the file as its package directory.
+//!
 //! In the package directory it writes `fake.args` (one argument per line), `fake.config` (the configuration file),
 //! `fake.env` (the names of the environment variables it got), `fake.ldpath` and `fake.request` (the last request body).
 
@@ -129,7 +131,12 @@ fn main() {
     let Ok(config) = serde_json::from_str::<serde_json::Value>(&text) else {
         std::process::exit(2);
     };
-    let package = PathBuf::from(config["models"][0]["path"].as_str().unwrap_or_default());
+    let path = PathBuf::from(config["models"][0]["path"].as_str().unwrap_or_default());
+    let package = if path.is_file() {
+        path.parent().map(PathBuf::from).unwrap_or(path)
+    } else {
+        path
+    };
     let id = config["models"][0]["id"]
         .as_str()
         .unwrap_or("music")

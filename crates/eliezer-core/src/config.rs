@@ -2,7 +2,7 @@
 use serde::Deserialize;
 use serde_path_to_error::Segment;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     net::SocketAddr,
     path::{Component, Path, PathBuf},
@@ -252,7 +252,7 @@ impl Default for EmbeddedBackendConfig {
         }
     }
 }
-/// The audio.cpp server for music models: one `audiocpp_server` child process per loaded model.
+/// The audio.cpp server for music and speech synthesis models: one `audiocpp_server` child process per loaded model.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudiocppConfig {
@@ -263,6 +263,64 @@ pub struct AudiocppConfig {
     /// The compute backend of the program: `hip` (AMD, the default), `cuda`, `vulkan` or `cpu`.
     #[serde(default = "compute_default")]
     pub compute: String,
+    /// Speech synthesis: the directory with the voice samples (`<name>.wav`, optionally `<name>.txt`, the words spoken
+    /// in the sample). Default: `voices` inside `storage.models_dir`. Never taken from a request.
+    pub voices_dir: Option<PathBuf>,
+    /// Speech synthesis: the longest text of one request in characters; a model can set its own.
+    #[serde(default = "max_input_chars_default")]
+    pub max_input_chars: u32,
+    /// Speech synthesis: a text is cut into passages of at most this many characters (at sentence boundaries) that are
+    /// synthesized one after the other; a model can set its own.
+    #[serde(default = "max_passage_chars_default")]
+    pub max_passage_chars: u32,
+    /// Speech synthesis: the pause between two passages of a paragraph (milliseconds); a model can set its own.
+    #[serde(default = "pause_ms_default")]
+    pub pause_ms: u32,
+    /// Speech synthesis: the pause after the last passage of a paragraph (milliseconds); a model can set its own.
+    #[serde(default = "paragraph_pause_ms_default")]
+    pub paragraph_pause_ms: u32,
+    /// Voice upload: the size limit of the uploaded file in MB.
+    #[serde(default = "voice_max_file_mb_default")]
+    pub voice_max_file_mb: u32,
+    /// Voice upload: the length limit of the recording in seconds.
+    #[serde(default = "voice_max_seconds_default")]
+    pub voice_max_seconds: u32,
+    /// Voice upload: the longest voice name in characters.
+    #[serde(default = "voice_name_max_chars_default")]
+    pub voice_name_max_chars: u32,
+    /// Voice upload: the sample rate (Hz) the samples are stored at (mono, 16 bit).
+    #[serde(default = "voice_sample_rate_default")]
+    pub voice_sample_rate: u32,
+    /// Voice upload: the largest number of voices in the directory.
+    #[serde(default = "max_voices_default")]
+    pub max_voices: u32,
+}
+fn max_input_chars_default() -> u32 {
+    100_000
+}
+fn max_passage_chars_default() -> u32 {
+    400
+}
+fn pause_ms_default() -> u32 {
+    400
+}
+fn paragraph_pause_ms_default() -> u32 {
+    800
+}
+fn voice_max_file_mb_default() -> u32 {
+    20
+}
+fn voice_max_seconds_default() -> u32 {
+    120
+}
+fn voice_name_max_chars_default() -> u32 {
+    64
+}
+fn voice_sample_rate_default() -> u32 {
+    24_000
+}
+fn max_voices_default() -> u32 {
+    100
 }
 /// The whisper.cpp server for speech recognition: one `whisper-server` child process per loaded model.
 #[derive(Debug, Deserialize)]
@@ -400,6 +458,8 @@ pub enum ModelKind {
     Music,
     /// Speech recognition (`POST /v1/audio/transcriptions`); served by whisper.cpp.
     Stt,
+    /// Speech synthesis with voice cloning (`POST /v1/audio/speech`); served by audio.cpp.
+    Tts,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -457,6 +517,43 @@ pub const SAMPLING_METHODS: &[&str] = &[
 pub const MUSIC_LANGUAGE_MODEL: &str = "language_model_q4_0.gguf";
 pub const MUSIC_RVQ_DEPTH_DECODER: &str = "rvq_depth_decoder_q8_0.gguf";
 pub const MUSIC_FLOW_TRANSFORMER: &str = "transformer_q4_0.gguf";
+/// The model families of audio.cpp that `kind = "tts"` models may name in `extra.family` (the first is the default).
+/// Both clone a voice from a reference recording.
+pub const TTS_FAMILIES: [&str; 2] = ["chatterbox", "cosyvoice3"];
+/// The numeric request options of a speech family that `extra.tts_options` may set (checked against the `model_specs`
+/// of audio.cpp at the pinned commit, docs/Runtimes.md).
+pub fn tts_option_names(family: &str) -> &'static [&'static str] {
+    match family {
+        "chatterbox" => &[
+            "exaggeration",
+            "guidance_scale",
+            "temperature",
+            "repetition_penalty",
+            "min_p",
+            "top_p",
+            "flow_guidance_scale",
+            "max_tokens",
+            "text_chunk_size",
+        ],
+        "cosyvoice3" => &[
+            "text_chunk_size",
+            "max_tokens",
+            "min_tokens",
+            "top_k",
+            "num_inference_steps",
+        ],
+        _ => &[],
+    }
+}
+/// A voice name: letters and digits of ASCII, `-` and `_`, from 1 to `max_chars` characters. The name is a file name
+/// stem, so nothing else may pass.
+pub fn valid_voice_name(name: &str, max_chars: u32) -> bool {
+    !name.is_empty()
+        && name.len() <= max_chars as usize
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
 /// The parts of a music package that every mix needs.
 pub const MUSIC_FIXED_COMPONENTS: [&str; 2] = ["condition_encoder.gguf", "vocoder.gguf"];
 
@@ -486,7 +583,8 @@ pub struct ExtraConfig {
     pub flow_transformer: Option<String>,
     /// Music models: the length drawn when a request does not name one (seconds, 1 to 300; default 30).
     pub duration_sec: Option<u32>,
-    /// Speech models: the language used when a request names none (`auto` detects it; default `auto`).
+    /// Speech models: the language used when a request names none (`auto` detects it; default `auto`). Speech
+    /// synthesis models: a language code (no `auto`); without one the program's own default (English) applies.
     pub language: Option<String>,
     /// Speech models: threads of the program (its own default without).
     pub threads: Option<u32>,
@@ -498,6 +596,23 @@ pub struct ExtraConfig {
     pub split_on_word: Option<bool>,
     /// Speech models: `max_len` of the program, 0 or 20 to 400 (default: `backend.whispercpp.max_segment_chars`).
     pub max_segment_chars: Option<u32>,
+    /// Speech synthesis models: the audio.cpp family (one of [`TTS_FAMILIES`]; default the first).
+    pub family: Option<String>,
+    /// Speech synthesis models: the speaking rate when a request names none (0.25 to 4; the model must support it).
+    pub speed: Option<f64>,
+    /// Speech synthesis models: like `backend.audiocpp.max_input_chars`, `max_passage_chars`, `pause_ms` and
+    /// `paragraph_pause_ms`, for this model.
+    pub max_input_chars: Option<u32>,
+    pub max_passage_chars: Option<u32>,
+    pub pause_ms: Option<u32>,
+    pub paragraph_pause_ms: Option<u32>,
+    /// Speech synthesis models: the voice (a name in the voice directory) used when a request names none.
+    pub default_voice: Option<String>,
+    /// Speech synthesis models: the model has no speaker of its own, so a request without a voice (and without
+    /// `default_voice`) is refused with 400 before anything is read (default: false).
+    pub requires_voice: Option<bool>,
+    /// Speech synthesis models: numeric request options of the family (see [`tts_option_names`]).
+    pub tts_options: Option<BTreeMap<String, f64>>,
 }
 
 /// The caller also resolves existing symbolic links within paths that do not exist yet.
@@ -524,7 +639,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp whispercpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec language threads max_file_mb max_audio_minutes flash_attn gpu_device chunk_secs overlap_secs split_on_word max_segment_chars load_timeout_secs request_timeout_secs stop_grace_secs";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp whispercpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec language threads max_file_mb max_audio_minutes flash_attn gpu_device chunk_secs overlap_secs split_on_word max_segment_chars load_timeout_secs request_timeout_secs stop_grace_secs voices_dir max_input_chars max_passage_chars pause_ms paragraph_pause_ms voice_max_file_mb voice_max_seconds voice_name_max_chars voice_sample_rate max_voices family speed default_voice requires_voice tts_options";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -660,6 +775,15 @@ fn field_line(input: &str, field: &str) -> usize {
 }
 
 impl Config {
+    /// The directory with the voice samples: `backend.audiocpp.voices_dir`, else `voices` inside the model store.
+    pub fn voices_dir(&self) -> PathBuf {
+        self.backend
+            .audiocpp
+            .as_ref()
+            .and_then(|a| a.voices_dir.clone())
+            .unwrap_or_else(|| self.storage.models_dir.join("voices"))
+    }
+
     /// Problems with the files and directories the configuration names, for warnings (the
     /// configuration itself is fine): a model store or model file that was moved, deleted or made
     /// unreadable. Not an error, because the files may come back and the rest keeps working.
@@ -943,6 +1067,51 @@ impl Config {
                 "The compute backend is hip, cuda, vulkan or cpu",
             )?;
         }
+        if let Some(audio) = &self.backend.audiocpp {
+            if let Some(dir) = &audio.voices_dir {
+                check(
+                    clean_absolute(dir),
+                    "backend.audiocpp.voices_dir",
+                    "Absolute directory without parent components required",
+                )?;
+            }
+            check(
+                (1..=400_000).contains(&audio.max_input_chars),
+                "backend.audiocpp.max_input_chars",
+                "The text limit is 1 to 400000 characters",
+            )?;
+            check(
+                (40..=4000).contains(&audio.max_passage_chars),
+                "backend.audiocpp.max_passage_chars",
+                "A passage is 40 to 4000 characters long",
+            )?;
+            check(
+                audio.pause_ms <= 10_000 && audio.paragraph_pause_ms <= 10_000,
+                "backend.audiocpp.pause_ms",
+                "A pause is at most 10000 milliseconds",
+            )?;
+            check(
+                (1..=500).contains(&audio.voice_max_file_mb)
+                    && (1..=600).contains(&audio.voice_max_seconds),
+                "backend.audiocpp.voice_max_file_mb",
+                "The voice upload limits are 1 to 500 MB and 1 to 600 seconds",
+            )?;
+            check(
+                (1..=100).contains(&audio.voice_name_max_chars),
+                "backend.audiocpp.voice_name_max_chars",
+                "A voice name is 1 to 100 characters long",
+            )?;
+            check(
+                (8000..=48_000).contains(&audio.voice_sample_rate),
+                "backend.audiocpp.voice_sample_rate",
+                "The sample rate of the voices is 8000 to 48000 Hz",
+            )?;
+            check(
+                (1..=10_000).contains(&audio.max_voices),
+                "backend.audiocpp.max_voices",
+                "The number of voices is 1 to 10000",
+            )?;
+        }
         if let (Some(images), Some(music)) = (&self.backend.sdcpp, &self.backend.audiocpp) {
             check(
                 images.port_range[1] < music.port_range[0]
@@ -1161,7 +1330,10 @@ impl Config {
                 "vision",
                 "A llamacpp model reads images exactly when it has source.projector (set both)",
             )?;
-            let generation = matches!(model.kind, ModelKind::Image | ModelKind::Music);
+            let generation = matches!(
+                model.kind,
+                ModelKind::Image | ModelKind::Music | ModelKind::Tts
+            );
             // Speech recognition needs a measured size too (it is placed by it), but may run on the CPU.
             check_model(
                 (!generation && model.kind != ModelKind::Stt) || model.vram_gb.is_some(),
@@ -1171,7 +1343,7 @@ impl Config {
             check_model(
                 !generation || model.device != DevicePolicy::Cpu,
                 "device",
-                "Image and music models need the GPU; generation on the CPU is not supported",
+                "Image, music and speech synthesis models need the GPU; generation on the CPU is not supported",
             )?;
             check_model(
                 (model.backend == BackendKind::Sdcpp) == (model.kind == ModelKind::Image),
@@ -1179,9 +1351,10 @@ impl Config {
                 "Image models require sdcpp; sdcpp serves only image models",
             )?;
             check_model(
-                (model.backend == BackendKind::Audiocpp) == (model.kind == ModelKind::Music),
+                (model.backend == BackendKind::Audiocpp)
+                    == matches!(model.kind, ModelKind::Music | ModelKind::Tts),
                 "kind",
-                "Music models require audiocpp; audiocpp serves only music models",
+                "Music and speech synthesis models require audiocpp; audiocpp serves only these",
             )?;
             check_model(
                 (model.backend == BackendKind::Whispercpp) == (model.kind == ModelKind::Stt),
@@ -1193,8 +1366,74 @@ impl Config {
                 "source.file",
                 "A speech model names its ggml file in source.file (download it with `eliezer download`)",
             )?;
+            check_model(
+                model.kind != ModelKind::Tts || model.source.file.is_some(),
+                "source.file",
+                "A speech synthesis model names its GGUF file in source.file (download it with `eliezer download`)",
+            )?;
             if let Some(extra) = &model.extra {
-                let speech = extra.language.is_some()
+                let synthesis = extra.family.is_some()
+                    || extra.speed.is_some()
+                    || extra.max_input_chars.is_some()
+                    || extra.max_passage_chars.is_some()
+                    || extra.pause_ms.is_some()
+                    || extra.paragraph_pause_ms.is_some()
+                    || extra.default_voice.is_some()
+                    || extra.requires_voice.is_some()
+                    || extra.tts_options.is_some();
+                check_model(
+                    model.kind == ModelKind::Tts || !synthesis,
+                    "extra",
+                    "family, speed, the passage and pause settings, default_voice and tts_options belong to speech synthesis models",
+                )?;
+                if model.kind == ModelKind::Tts {
+                    let family = extra.family.as_deref().unwrap_or(TTS_FAMILIES[0]);
+                    check_model(
+                        TTS_FAMILIES.contains(&family),
+                        "extra.family",
+                        "Unknown speech synthesis family (chatterbox or cosyvoice3)",
+                    )?;
+                    check_model(
+                        extra.language.as_ref().is_none_or(|l| l != "auto"),
+                        "extra.language",
+                        "A speech synthesis model needs a language code such as de, not auto",
+                    )?;
+                    check_model(
+                        extra.speed.is_none_or(|s| (0.25..=4.0).contains(&s)),
+                        "extra.speed",
+                        "The speed is between 0.25 and 4",
+                    )?;
+                    check_model(
+                        extra
+                            .max_input_chars
+                            .is_none_or(|n| (1..=400_000).contains(&n))
+                            && extra
+                                .max_passage_chars
+                                .is_none_or(|n| (40..=4000).contains(&n))
+                            && extra.pause_ms.is_none_or(|n| n <= 10_000)
+                            && extra.paragraph_pause_ms.is_none_or(|n| n <= 10_000),
+                        "extra",
+                        "Text limit 1 to 400000, passage 40 to 4000 characters, pauses at most 10000 milliseconds",
+                    )?;
+                    check_model(
+                        extra
+                            .default_voice
+                            .as_ref()
+                            .is_none_or(|v| valid_voice_name(v, 100)),
+                        "extra.default_voice",
+                        "A voice name has letters, digits, - and _ only",
+                    )?;
+                    let allowed = tts_option_names(family);
+                    check_model(
+                        extra.tts_options.as_ref().is_none_or(|o| {
+                            o.iter()
+                                .all(|(k, v)| allowed.contains(&k.as_str()) && v.is_finite())
+                        }),
+                        "extra.tts_options",
+                        "Unknown or non-numeric option of the speech synthesis family",
+                    )?;
+                }
+                let speech = (extra.language.is_some() && model.kind != ModelKind::Tts)
                     || extra.threads.is_some()
                     || extra.max_file_mb.is_some()
                     || extra.max_audio_minutes.is_some()

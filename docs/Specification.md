@@ -109,11 +109,22 @@ program = "/usr/libexec/x86_64-linux-gnu/eliezer/sd-server"
 port_range = [24600, 24609]
 library_path = ["/usr/lib/x86_64-linux-gnu/eliezer", "/opt/rocm/lib/llvm/lib"]   # optional: libraries of the program (it has no run path)
 
-[backend.audiocpp]                     # optional: music models through audio.cpp (a child process per loaded model)
+[backend.audiocpp]                     # optional: music and speech synthesis models through audio.cpp (a child process per loaded model)
 program = "/usr/libexec/x86_64-linux-gnu/eliezer/audiocpp_server"
 port_range = [24700, 24709]            # must not overlap port_range of sdcpp or the service port
 compute = "hip"                        # "hip" (default) | "cuda" | "vulkan" | "cpu": the compute backend of the program
 # library_path = [...]                 # as for sdcpp
+# Speech synthesis (kind = "tts"); every value is a setting, a model can set its own for the first five (extra.*):
+# voices_dir = "/var/lib/eliezer/models/voices"   # the voice samples; default: "voices" inside storage.models_dir
+# max_input_chars = 100000             # the longest text of one request (1 to 400000) -> 413 above
+# max_passage_chars = 400              # a text is cut into passages of at most this many characters (40 to 4000), at sentence boundaries
+# pause_ms = 400                       # silence between two passages of a paragraph (0 to 10000)
+# paragraph_pause_ms = 800             # silence after the last passage of a paragraph
+# voice_max_file_mb = 20               # upload limits of a voice sample: size, length (seconds), name length, the stored sample rate, count
+# voice_max_seconds = 120
+# voice_name_max_chars = 64
+# voice_sample_rate = 24000
+# max_voices = 100
 
 [backend.whispercpp]                   # optional: speech recognition through whisper.cpp (a child process per loaded model)
 program = "/usr/libexec/x86_64-linux-gnu/eliezer/whisper-server"
@@ -135,7 +146,7 @@ stop_grace_secs = 15                   # how long the program gets to end after 
 key = "qwen/qwen3-coder-30b"           # name used by MultiGPT
 backend = "mistralrs"
 source = { hf = "Qwen/Qwen3-Coder-30B-A3B-Instruct", revision = "main" }  # or { file = "/path/model.gguf" }
-kind = "llm"                           # "llm" | "embedding" | "image" | "music" | "stt"
+kind = "llm"                           # "llm" | "embedding" | "image" | "music" | "stt" | "tts"
 priority = 10
 max_context = 131072
 default_context = 32768
@@ -173,6 +184,40 @@ extra = { duration_sec = 30, steps = 30, cfg_scale = 1.7 }
 package; default `language_model_q4_0.gguf`, `rvq_depth_decoder_q8_0.gguf`, `transformer_q4_0.gguf`), `duration_sec` (1 to 300,
 the length drawn when a request names none; default 30), `steps` (flow matching steps) and `cfg_scale` (flow guidance scale).
 `size_bytes` of the model list is the sum of the five component files that are in use.
+
+A speech synthesis model (`kind = "tts"`, `backend = "audiocpp"`) names the GGUF file of an audio.cpp family in `source.file` (download
+it with `eliezer download audio-cpp/audio.cpp-gguf Chatterbox-GGUF/chatterbox-q8_0.gguf`, the repository must be on `huggingface.allow`)
+and needs `vram_gb` and the GPU. It clones the voice of a sample from the voice directory:
+
+```toml
+[[model]]
+key = "reader-de"
+backend = "audiocpp"
+kind = "tts"
+source = { file = "/var/lib/eliezer/models/audio-cpp/audio.cpp-gguf/Chatterbox-GGUF/chatterbox-q8_0.gguf" }
+vram_gb = 4.0
+extra = { family = "chatterbox", language = "de", requires_voice = true, default_voice = "mama", tts_options = { exaggeration = 0.5, temperature = 0.8 } }
+```
+
+`extra` of a speech synthesis model: `family` (`chatterbox`, the default, or `cosyvoice3`), `language` (a language code such as `de`,
+not `auto`; used when a request names none; without it the program's own default, English, applies), `speed` (0.25 to 4, used when a
+request names none; the family must support it), `default_voice` (a voice name used when a request names none), `requires_voice` (bool, default false: the model has no speaker of its own, so a request that names no voice and has no `default_voice` is refused with `400 invalid_request` before anything is read, plain or streamed: `The model "KEY" needs a voice: pass "voice" (see GET /v1/audio/voices) or set extra.default_voice in the model's configuration.`, with a hint to add a voice when the library is empty; precedence: request voice, then `default_voice`, then none), `max_input_chars`,
+`max_passage_chars`, `pause_ms` and `paragraph_pause_ms` (like the settings of the section, for this model) and `tts_options`
+(numbers for the request options of the family, from a list per family: Chatterbox `exaggeration`, `guidance_scale`, `temperature`,
+`repetition_penalty`, `min_p`, `top_p`, `flow_guidance_scale`, `max_tokens`, `text_chunk_size`; CosyVoice3 `text_chunk_size`,
+`max_tokens`, `min_tokens`, `top_k`, `num_inference_steps`). The families are the ones checked against the source of audio.cpp
+(docs/Runtimes.md); a family is added to the list only after its spec was read.
+
+**Voices.** A voice is the file `<voices_dir>/<name>.wav` (mono, 16 bit) and optionally `<name>.txt` (the words spoken in the sample,
+which CosyVoice3 needs). `name` is a file name stem: letters and digits of ASCII, `-` and `_`, at most `voice_name_max_chars`. The
+directory has mode 0700 and belongs to the service user. The reference recordings are private: no endpoint serves a sample or a
+path, nothing of a sample is logged, and the program is given the path of a file of this directory only after the name of a request
+was found in the directory's listing (a request never carries a path). The administrator puts the samples there, by hand or through
+`POST /v1/audio/voices` (a modifying endpoint, protected by the API keys like the others). **Consent, profiles, labelling of the output and
+deleting audiobooks that were made with a voice are not Eliezer's business**: they live in the application that calls it (David); Eliezer only
+holds the files that were put there and executes.
+
+A speech model takes the GPU like a picture or a song (one job at a time).
 
 A speech model (`kind = "stt"`, `backend = "whispercpp"`) names the ggml file of whisper.cpp in `source.file` (a Hugging Face
 source is not accepted: download the file with `eliezer download ORG/REPO FILE`, the repository must be on the `huggingface.allow`
@@ -347,7 +392,38 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
   lyrics, `instructions` = the description of the music (genre, mood, vocals, instruments), `duration_sec` (1 to 300),
   `seed`, `response_format = "wav"`) for models with `kind = "music"` (`capabilities.music_generation`); the answer is the WAV
   file (`audio/wav`, 16 bit, stereo; 44.1 kHz as measured with audio.cpp). Lyrics may carry section tags such as `[verse]` and `[chorus]`. `model` can be
-  left out when exactly one music model is configured. The length is a budget: the song can end earlier.
+  left out when exactly one music or speech synthesis model is configured. The length is a budget: the song can end earlier.
+  The same endpoint chooses by the kind of the model: for a model with `kind = "tts"` (`type: "tts"`, `capabilities.speech_synthesis`
+  and `voice_cloning`) the JSON is `model`, `input` (the text, at most `max_input_chars`, else `413`), `voice` (a name from
+  `GET /v1/audio/voices`; empty or missing is `extra.default_voice`, else the model's own speaker; an unknown or invalid name is `400`; a model with `requires_voice` and no voice is `400` too),
+  `response_format` (`wav`, the default, or `pcm`; no encoder for mp3 or flac is in the service, sox or ffmpeg do that), `stream`
+  (true or false, default false), and optionally `speed`, `language` (a code) and `seed` (0 to 4294967295). The service cuts the text into passages at sentence boundaries (blank lines separate paragraphs; a
+  number or a single letter before a full stop and a lower-case word after a sentence mark do not end a sentence; longer sentences are
+  cut at commas, then between words), reads them one after the other with the loaded model, and joins the audio with `pause_ms` (and
+  `paragraph_pause_ms` after a paragraph), so a chapter works. The answer is one WAV file. A passage that fails fails the request.
+  - `pcm` is raw signed 16 bit little-endian samples (`audio/pcm`, as the `pcm` of OpenAI) without any header; the format is in the
+    response headers `X-Audio-Sample-Rate` (the rate of the first passage's WAV from audio.cpp, not an assumed value),
+    `X-Audio-Channels` and `X-Audio-Bits` (`16`). Without `stream` the whole body comes in one piece with a `Content-Length`.
+  - `stream = true` sends the answer while it is made, with chunked transfer encoding (`Transfer-Encoding: chunked`, no
+    `Content-Length`): the first passage is read before the status is sent (so an error in it is an ordinary error answer, for
+    example `502`), then its audio goes out at once and the later passages follow as they are read. The pauses (`pause_ms`,
+    `paragraph_pause_ms`) are written as silence after the passage they follow. At most two finished chunks wait for a slow reader, so
+    the synthesis does not run far ahead of a player. `wav` is then a WAV file of open length: RIFF and data sizes are `0xFFFFFFFF`,
+    which sox, ffmpeg and mpv read until the end of the stream. `input` limits, passage size and pauses are the same settings as
+    without a stream; the non-streamed answer is unchanged.
+  - The sample rate and the channel count are those of the first passage. A later passage with another rate or channel count ends the
+    stream with an error instead of being resampled: one model has one output rate, so a change means that the speech program
+    misbehaves, and converting would hide that (the non-streamed answer refuses such a mix with `502` as well).
+  - A client that closes the connection stops the synthesis, also in the middle of a passage (the request to audio.cpp is dropped), so
+    the passages that follow are not read and the GPU is free again. An error in passage N after the first bytes were sent cannot be
+    reported (the status is out, a chunked body has no place for an error): it is logged and the service aborts the connection
+    without the closing chunk, so the client sees a failed transfer (curl: error 18, `eliezer speak`: exit 1) and not a file that
+    looks complete. A client must treat a stream that ends without the closing chunk as failed.
+- `GET /v1/audio/voices`: `{"voices": ["mama", "papa"]}`, the names only. `POST /v1/audio/voices` (multipart: `name`, `file` in any
+  format the service decodes, optional `transcript`, optional `replace=true`): the file is decoded and stored as a mono 16 bit WAV at
+  `voice_sample_rate`; `201` (`200` when replaced), `400` for a bad name or a file that is not audio, `409` when the name exists
+  without `replace=true` or `max_voices` is reached, `413` for a file or recording over the limits. `DELETE /v1/audio/voices/{name}`
+  removes the sample and its transcript (`404` for an unknown name). Without `[backend.audiocpp]` these are `404`.
 - `POST /v1/audio/transcriptions` (speech to text, OpenAI shape, `multipart/form-data`) for models with `kind = "stt"`
   (`type: "stt"` and `capabilities.transcription` in the model list):
   - Fields: `file` (the audio, required), `model` (can be left out when exactly one speech model is configured), `language`
@@ -397,7 +473,21 @@ The `eliezer` binary is also a client of the running service (synchronous HTTP/1
 | `run MODEL [PROMPT]` | `POST /v1/chat/completions` (SSE) | tokens as they arrive; reasoning dimmed (stderr when piped); `--stats` |
 | `search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]` | `GET /api/v1/hub/search` | candidate repositories on Hugging Face; nothing is downloaded |
 | `inspect ORG/REPO` | `GET /api/v1/hub/models/{org}/{repo}` | files, quantizations, backend support and fit of one repository |
+| `speak [--model KEY] [--voice NAME] [--language CODE] [--speed F] [--seed N] [--format wav\|pcm] [--text TEXT \| --file FILE] [--out PATH\|-] [--replace]` | `GET /api/v1/models`, `POST /v1/audio/speech` (`stream = true`) | the audio, while it is made |
+| `voices`, `voices add NAME FILE [--replace] [--transcript TEXT]`, `voices rm NAME` | `GET`/`POST /v1/audio/voices`, `DELETE /v1/audio/voices/{name}` | the voice names, one per line |
 | `help` | – | overview |
+
+`speak` reads the text from `--text`, `--file` or standard input (the limit `max_input_chars` is the service's: it answers `413`) and
+uses `--model` or the only `tts` model of the service (none or several: exit 2). The audio goes to standard output (also with
+`--out -`; chunk by chunk as it arrives, nothing else on stdout, messages on stderr) so that `sox`, `ffmpeg` or `play` can take it
+over: `eliezer speak --file kapitel.txt | sox -t wav - -t mp3 kapitel.mp3`. Without `--out` and with a terminal as stdout it
+refuses (exit 2); `--out -` writes anyway. `--out PATH` writes a regular file as `PATH.part` and renames it when the stream is
+complete (a WAV gets its real sizes then), refuses an existing file without `--replace` (exit 2) and removes the `.part` file when the
+stream fails or on Ctrl-C; a named pipe (found by its file type) is opened for writing when the service has accepted the request and
+is written block by block, without `.part` and rename; a missing path is created as a regular file. A broken pipe (the reader quit,
+for example `head -c`) ends quietly with exit 0 after the connection is closed, which stops the synthesis. A stream that ends
+without the closing chunk is exit 1. `voices add` uploads the recording as the endpoint expects it; the library is the
+service's (names only, no paths). Eliezer writes `wav` and `pcm` only; mp3 and flac are made by sox or ffmpeg.
 
 Global options: `--host URL` (else `ELIEZER_HOST`, else `server.listen` of the configuration with
 `0.0.0.0` read as `127.0.0.1`, else `http://127.0.0.1:1234`), `--key-file PATH` (else
@@ -607,6 +697,12 @@ trait Backend: Send + Sync {
   (section 7, item 4; language models then run on the CPU, section 7a). A request that fails does not take the model down while
   its program still answers (the same holds for image models): `400` for what the program refuses, `502` for a song it could not
   compose; only a program that no longer answers marks the model failed.
+- **audiocpp, speech synthesis:** the same program and the same way of starting it, with another model entry: `id`, the family of
+  `extra.family`, `path` = the GGUF file, `task = "tts"`, `mode = "offline"`, `busy_timeout_ms = 0` and the numbers of `extra.tts_options` as
+  `default_request_options`. A passage becomes `POST /v1/audio/speech` with `input`, `response_format = "wav"`, `language`, `speed` and
+  `seed` when set, and the voice as `voice_ref = {"type": "path", "path": FILE}` (the file of the voice directory) plus `reference_text`
+  (the content of `<name>.txt`) when there is one. Text goes into JSON strings only. The answer must be a 16 bit PCM WAV file; all
+  passages of a request must have one sample rate and channel count. Interface read from the source, not yet run: docs/Runtimes.md.
 - **whispercpp (M8):** Child process `whisper-server` (whisper.cpp, `[backend.whispercpp] program`) for each loaded speech model on a free
   loopback port of `port_range`. The service starts it without a shell, with a cleared environment (the same short list of
   inherited variables as audio.cpp) and a private run directory (mode 0700, working directory of the child and the program's

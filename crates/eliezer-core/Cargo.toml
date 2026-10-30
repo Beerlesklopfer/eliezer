@@ -31,3 +31,7 @@ path = "../../tests/m4/import.rs"
 [[test]]
 name = "keys"
 path = "../../tests/m4/keys.rs"
+
+[[test]]
+name = "tts_config"
+path = "../../tests/m9/config.rs"

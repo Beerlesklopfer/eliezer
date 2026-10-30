@@ -1,7 +1,7 @@
-//! Music models through audio.cpp. Each loaded model is one `audiocpp_server` child process on a loopback port,
-//! started with a configuration file that this backend writes (a private directory, removed when the model is
-//! unloaded); the service talks to it over HTTP (`GET /v1/models` shows that the model is loaded,
-//! `POST /v1/audio/speech` composes a song).
+//! Music and speech synthesis models through audio.cpp. Each loaded model is one `audiocpp_server` child process on a
+//! loopback port, started with a configuration file that this backend writes (a private directory, removed when the
+//! model is unloaded); the service talks to it over HTTP (`GET /v1/models` shows that the model is loaded,
+//! `POST /v1/audio/speech` composes a song or reads a passage aloud).
 //!
 //! Interfaces as probed on 2026-10-20 (docs/Runtimes.md).
 //!
@@ -11,6 +11,7 @@
 
 use eliezer_backend::{
     Backend, BackendError, BackendFuture, ChatRequest, Chunk, LoadSpec, MusicRequest, Running,
+    SpeechRequest,
 };
 use std::{
     collections::HashMap,
@@ -57,6 +58,17 @@ pub struct MusicModel {
     pub guidance: Option<f64>,
 }
 
+/// What the configuration says about one speech synthesis model.
+#[derive(Debug, Clone)]
+pub struct TtsModel {
+    /// The GGUF file of the model.
+    pub file: PathBuf,
+    /// The family of audio.cpp (`chatterbox`, `cosyvoice3`).
+    pub family: String,
+    /// Numeric request options of the family that apply to every request (`extra.tts_options`).
+    pub options: std::collections::BTreeMap<String, f64>,
+}
+
 struct Instance {
     port: u16,
     child: AsyncMutex<Child>,
@@ -71,6 +83,7 @@ pub struct AudiocppBackend {
     compute: String,
     library_path: Vec<PathBuf>,
     models: RwLock<HashMap<String, MusicModel>>,
+    tts_models: RwLock<HashMap<String, TtsModel>>,
     instances: Mutex<HashMap<u64, Arc<Instance>>>,
     next_generation: AtomicU64,
     http: reqwest::Client,
@@ -106,6 +119,7 @@ impl AudiocppBackend {
             compute: compute.to_owned(),
             library_path: Vec::new(),
             models: RwLock::new(HashMap::new()),
+            tts_models: RwLock::new(HashMap::new()),
             instances: Mutex::new(HashMap::new()),
             next_generation: AtomicU64::new(GENERATION_BASE),
             // The children are on this machine: never through a proxy of the environment.
@@ -129,6 +143,21 @@ impl AudiocppBackend {
         match self.models.write() {
             Ok(mut guard) => *guard = models,
             Err(poisoned) => *poisoned.into_inner() = models,
+        }
+    }
+
+    /// The speech synthesis models of the configuration, by key (at start and on every reload).
+    pub fn set_tts_models(&self, models: HashMap<String, TtsModel>) {
+        match self.tts_models.write() {
+            Ok(mut guard) => *guard = models,
+            Err(poisoned) => *poisoned.into_inner() = models,
+        }
+    }
+
+    fn tts_model(&self, key: &str) -> Option<TtsModel> {
+        match self.tts_models.read() {
+            Ok(guard) => guard.get(key).cloned(),
+            Err(poisoned) => poisoned.into_inner().get(key).cloned(),
         }
     }
 
@@ -156,6 +185,31 @@ impl AudiocppBackend {
         (self.ports.0..=self.ports.1).find(|port| {
             !used.contains(port) && std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok()
         })
+    }
+}
+
+/// The longest program message (characters) that goes into the log.
+pub const MAX_PROGRAM_MESSAGE_CHARS: usize = 300;
+
+/// The `error.message` of an error answer of the program, for the log: control characters removed, cut to
+/// [`MAX_PROGRAM_MESSAGE_CHARS`] characters (with `...` when cut). `None` when the body has no such text. The request
+/// text is never part of it.
+pub fn program_message(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let text = value["error"]["message"]
+        .as_str()
+        .or_else(|| value["error"].as_str())?;
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let clean = clean.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    if clean.chars().count() > MAX_PROGRAM_MESSAGE_CHARS {
+        let mut cut: String = clean.chars().take(MAX_PROGRAM_MESSAGE_CHARS).collect();
+        cut.push_str("...");
+        Some(cut)
+    } else {
+        Some(clean.to_owned())
     }
 }
 
@@ -205,6 +259,76 @@ pub fn server_config(model: &MusicModel, port: u16, compute: &str, id: &str) -> 
             "default_request_options": defaults,
         }],
     })
+}
+
+/// The configuration file of an `audiocpp_server` with one speech synthesis model. The family is one of a fixed list
+/// (checked with the configuration), the options are numbers of a list of names.
+pub fn tts_server_config(
+    model: &TtsModel,
+    port: u16,
+    compute: &str,
+    id: &str,
+) -> serde_json::Value {
+    let mut defaults = serde_json::Map::new();
+    for (name, value) in &model.options {
+        defaults.insert(name.clone(), number(*value));
+    }
+    serde_json::json!({
+        "host": "127.0.0.1",
+        "port": port,
+        "backend": compute,
+        "device": 0,
+        "lazy_load": false,
+        "max_loaded_models": 1,
+        "ui": false,
+        "ui_management": false,
+        "busy_timeout_ms": 0,
+        "models": [{
+            "id": id,
+            "family": model.family,
+            "path": model.file,
+            "task": "tts",
+            "mode": "offline",
+            "busy_timeout_ms": 0,
+            "default_request_options": defaults,
+        }],
+    })
+}
+
+/// A whole number as an integer, anything else as a float.
+fn number(value: f64) -> serde_json::Value {
+    if value.fract() == 0.0 && value.abs() < 9.0e15 {
+        serde_json::json!(value as i64)
+    } else {
+        serde_json::json!(value)
+    }
+}
+
+/// The body of `POST /v1/audio/speech` for a passage: the text, the language, the speaking rate and the seed, and the
+/// voice sample as a reference file of the service's own voice directory (the program runs on this machine as the same
+/// user; the path is built by the service from a checked name, never taken from a request).
+pub fn speak_body(id: &str, request: &SpeechRequest) -> Option<serde_json::Value> {
+    let mut body = serde_json::json!({
+        "model": id,
+        "input": request.text,
+        "response_format": "wav",
+    });
+    if let Some(language) = &request.language {
+        body["language"] = serde_json::json!(language);
+    }
+    if let Some(speed) = request.speed {
+        body["speed"] = serde_json::json!(speed);
+    }
+    if let Some(seed) = request.seed {
+        body["seed"] = serde_json::json!(seed);
+    }
+    if let Some(voice) = &request.voice {
+        body["voice_ref"] = serde_json::json!({"type": "path", "path": voice.path.to_str()?});
+        if let Some(transcript) = &voice.transcript {
+            body["reference_text"] = serde_json::json!(transcript);
+        }
+    }
+    Some(body)
 }
 
 /// The arguments of `audiocpp_server`: only the configuration file and the log switch.
@@ -282,35 +406,54 @@ fn write_config(config: &serde_json::Value, port: u16) -> std::io::Result<PathBu
 impl Backend for AudiocppBackend {
     fn start<'a>(&'a self, spec: &'a LoadSpec) -> BackendFuture<'a, Running> {
         Box::pin(async move {
-            let model = self.model(&spec.model).ok_or(BackendError::Unavailable)?;
-            let components = [
-                &model.language_model,
-                &model.rvq_depth_decoder,
-                &model.flow_transformer,
-            ];
-            if !components.iter().all(|name| plain_name(name)) {
-                tracing::warn!(model = %spec.model, "A component name of the music model is not a plain file name");
-                return Err(BackendError::ModelFile);
-            }
-            let fixed = ["config.json", "condition_encoder.gguf", "vocoder.gguf"];
-            let missing = components
-                .iter()
-                .map(|n| n.as_str())
-                .chain(fixed)
-                .any(|name| {
-                    !std::fs::metadata(model.package.join(name)).is_ok_and(|m| m.is_file())
-                });
-            if missing {
-                tracing::warn!(model = %spec.model, "A file of the music package cannot be read");
-                return Err(BackendError::ModelFile);
-            }
+            let (config_for, label): (Box<dyn Fn(u16) -> serde_json::Value + Send>, &str) =
+                if let Some(model) = self.model(&spec.model) {
+                    let components = [
+                        &model.language_model,
+                        &model.rvq_depth_decoder,
+                        &model.flow_transformer,
+                    ];
+                    if !components.iter().all(|name| plain_name(name)) {
+                        tracing::warn!(model = %spec.model, "A component name of the music model is not a plain file name");
+                        return Err(BackendError::ModelFile);
+                    }
+                    let fixed = ["config.json", "condition_encoder.gguf", "vocoder.gguf"];
+                    let missing = components
+                        .iter()
+                        .map(|n| n.as_str())
+                        .chain(fixed)
+                        .any(|name| {
+                            !std::fs::metadata(model.package.join(name)).is_ok_and(|m| m.is_file())
+                        });
+                    if missing {
+                        tracing::warn!(model = %spec.model, "A file of the music package cannot be read");
+                        return Err(BackendError::ModelFile);
+                    }
+                    let (compute, id) = (self.compute.clone(), spec.model.clone());
+                    (
+                        Box::new(move |port| server_config(&model, port, &compute, &id)),
+                        "Music",
+                    )
+                } else if let Some(model) = self.tts_model(&spec.model) {
+                    if !std::fs::metadata(&model.file).is_ok_and(|m| m.is_file()) {
+                        tracing::warn!(model = %spec.model, "The file of the speech synthesis model cannot be read");
+                        return Err(BackendError::ModelFile);
+                    }
+                    let (compute, id) = (self.compute.clone(), spec.model.clone());
+                    (
+                        Box::new(move |port| tts_server_config(&model, port, &compute, &id)),
+                        "Speech synthesis",
+                    )
+                } else {
+                    return Err(BackendError::Unavailable);
+                };
             let port = self.free_port().ok_or_else(|| {
                 tracing::error!(model = %spec.model, "No free port in backend.audiocpp.port_range");
                 BackendError::Unavailable
             })?;
-            let config = server_config(&model, port, &self.compute, &spec.model);
+            let config = config_for(port);
             let directory = write_config(&config, port).map_err(|error| {
-                tracing::error!(model = %spec.model, kind = ?error.kind(), "The configuration of the music server cannot be written");
+                tracing::error!(model = %spec.model, kind = ?error.kind(), "The configuration of the audio server cannot be written");
                 BackendError::Unavailable
             })?;
             let mut command = Command::new(&self.program);
@@ -392,7 +535,7 @@ impl Backend for AudiocppBackend {
                     }
                 }
             });
-            tracing::info!(event = "audiocpp_server_ready", model = %spec.model, port, "Music model loaded");
+            tracing::info!(event = "audiocpp_server_ready", model = %spec.model, port, "{label} model loaded");
             Ok(running)
         })
     }
@@ -439,49 +582,87 @@ impl Backend for AudiocppBackend {
             let instance = self
                 .instance(running.generation)
                 .ok_or(BackendError::Crashed)?;
-            if request.lyrics.trim().is_empty() || request.description.trim().is_empty() {
+            if request.lyrics.trim().is_empty()
+                || request.description.trim().is_empty()
+                || self.model(&running.spec.model).is_none()
+            {
                 return Err(BackendError::InvalidRequest);
             }
             let body = speech_body(&running.spec.model, &request);
-            let response = self
-                .http
-                .post(format!(
-                    "http://127.0.0.1:{}/v1/audio/speech",
-                    instance.port
-                ))
-                .timeout(self.request_timeout)
-                .header("Content-Type", "application/json")
-                .body(body.to_string())
-                .send()
+            self.post_speech(running, &instance, body, "compose the song")
                 .await
-                .map_err(|_| {
-                    // No answer: most likely the program died.
-                    running.alive_flag().store(false, Ordering::Release);
-                    BackendError::Crashed
-                })?;
-            let status = response.status();
-            let bytes = response.bytes().await.map_err(|_| BackendError::Crashed)?;
-            if status.is_client_error() {
+        })
+    }
+    fn speak<'a>(
+        &'a self,
+        running: &'a Running,
+        request: SpeechRequest,
+    ) -> BackendFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            let instance = self
+                .instance(running.generation)
+                .ok_or(BackendError::Crashed)?;
+            if request.text.trim().is_empty() || self.tts_model(&running.spec.model).is_none() {
                 return Err(BackendError::InvalidRequest);
             }
-            if !status.is_success() {
-                tracing::warn!(
-                    status = status.as_u16(),
-                    "audiocpp_server could not compose the song"
-                );
-                return Err(BackendError::Crashed);
-            }
-            // The answer must be a WAV file; anything else (an error body with status 200) is a failure.
-            if bytes.len() < 44 || !bytes.starts_with(b"RIFF") || &bytes[8..12] != b"WAVE" {
-                tracing::warn!("audiocpp_server answered without a WAV file");
-                return Err(BackendError::Crashed);
-            }
-            Ok(bytes.to_vec())
+            let body =
+                speak_body(&running.spec.model, &request).ok_or(BackendError::InvalidRequest)?;
+            self.post_speech(running, &instance, body, "read the passage")
+                .await
         })
     }
 }
 
 impl AudiocppBackend {
+    /// `POST /v1/audio/speech`: the answer must be a WAV file.
+    async fn post_speech(
+        &self,
+        running: &Running,
+        instance: &Instance,
+        body: serde_json::Value,
+        what: &str,
+    ) -> Result<Vec<u8>, BackendError> {
+        let response = self
+            .http
+            .post(format!(
+                "http://127.0.0.1:{}/v1/audio/speech",
+                instance.port
+            ))
+            .timeout(self.request_timeout)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|_| {
+                // No answer: most likely the program died.
+                running.alive_flag().store(false, Ordering::Release);
+                BackendError::Crashed
+            })?;
+        let status = response.status();
+        let bytes = response.bytes().await.map_err(|_| BackendError::Crashed)?;
+        if !status.is_success() {
+            // The program's own reason, for the log only: the error types of the service carry no detail, so an
+            // answer to a client cannot hold it without changing them all.
+            let reason = program_message(&bytes).unwrap_or_default();
+            tracing::warn!(
+                status = status.as_u16(),
+                reason = %reason,
+                "audiocpp_server could not {what}"
+            );
+            return Err(if status.is_client_error() {
+                BackendError::InvalidRequest
+            } else {
+                BackendError::Crashed
+            });
+        }
+        // The answer must be a WAV file; anything else (an error body with status 200) is a failure.
+        if bytes.len() < 44 || !bytes.starts_with(b"RIFF") || &bytes[8..12] != b"WAVE" {
+            tracing::warn!("audiocpp_server answered without a WAV file");
+            return Err(BackendError::Crashed);
+        }
+        Ok(bytes.to_vec())
+    }
+
     /// Does the program list its model as loaded?
     async fn loaded(&self, url: &str) -> bool {
         let Ok(response) = self

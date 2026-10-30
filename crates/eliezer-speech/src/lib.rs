@@ -1,7 +1,11 @@
 //! What the service does with the audio of a transcription request before and after the speech program sees it:
 //! decode any uploaded file to 16 kHz mono 16 bit samples (pure Rust: symphonia decodes, rubato resamples), cut a long
 //! recording into overlapping pieces, wrap a piece as a WAV file, join the transcripts of the pieces by time and
-//! write them as plain text, SRT or WebVTT.
+//! write them as plain text, SRT or WebVTT. For speech synthesis: decode a voice sample to any rate, cut a text into
+//! passages at sentence boundaries ([`passages`]) and join the audio of the passages with pauses ([`pcm`]).
+
+pub mod passages;
+pub mod pcm;
 
 use eliezer_backend::{TranscribedSegment, Transcription};
 use rubato::{FftFixedIn, Resampler};
@@ -31,6 +35,12 @@ pub enum DecodeError {
 /// 16 kHz. Decoding stops with [`DecodeError::TooLong`] as soon as the result would be longer than `max_seconds`, so
 /// a hostile file cannot fill the memory.
 pub fn decode(bytes: Vec<u8>, max_seconds: u64) -> Result<Vec<i16>, DecodeError> {
+    decode_at(bytes, max_seconds, SAMPLE_RATE)
+}
+
+/// Like [`decode`], with the result at `rate` Hz (a voice sample is stored at the rate of the speech model).
+pub fn decode_at(bytes: Vec<u8>, max_seconds: u64, rate: u32) -> Result<Vec<i16>, DecodeError> {
+    let target = rate;
     let source = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
     let probed = symphonia::default::get_probe()
         .format(
@@ -52,7 +62,7 @@ pub fn decode(bytes: Vec<u8>, max_seconds: u64) -> Result<Vec<i16>, DecodeError>
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|_| DecodeError::NotAudio)?;
     let limit =
-        usize::try_from(max_seconds.saturating_mul(u64::from(SAMPLE_RATE))).unwrap_or(usize::MAX);
+        usize::try_from(max_seconds.saturating_mul(u64::from(target))).unwrap_or(usize::MAX);
     let mut out: Vec<i16> = Vec::new();
     let mut resampler: Option<Resampling> = None;
     let mut buffer: Option<SampleBuffer<f32>> = None;
@@ -89,11 +99,12 @@ pub fn decode(bytes: Vec<u8>, max_seconds: u64) -> Result<Vec<i16>, DecodeError>
             .chunks_exact(channels)
             .map(|frame| frame.iter().sum::<f32>() / channels as f32)
             .collect();
-        if source_rate == SAMPLE_RATE {
+        if source_rate == target {
             push(&mut out, &mono);
         } else {
             if resampler.is_none() {
-                resampler = Some(Resampling::new(source_rate).ok_or(DecodeError::NotAudio)?);
+                resampler =
+                    Some(Resampling::new(source_rate, target).ok_or(DecodeError::NotAudio)?);
             }
             if let Some(r) = resampler.as_mut() {
                 r.feed(&mono, &mut out);
@@ -129,8 +140,8 @@ struct Resampling {
     pending: Vec<f32>,
 }
 impl Resampling {
-    fn new(rate: u32) -> Option<Self> {
-        let inner = FftFixedIn::<f32>::new(rate as usize, SAMPLE_RATE as usize, 1024, 2, 1).ok()?;
+    fn new(rate: u32, target: u32) -> Option<Self> {
+        let inner = FftFixedIn::<f32>::new(rate as usize, target as usize, 1024, 2, 1).ok()?;
         Some(Self {
             inner,
             pending: Vec::new(),
@@ -164,6 +175,11 @@ impl Resampling {
 
 /// A WAV file (16 kHz, mono, 16 bit) of the samples.
 pub fn wav(samples: &[i16]) -> Vec<u8> {
+    wav_at(samples, SAMPLE_RATE)
+}
+
+/// A WAV file (mono, 16 bit) of the samples at `rate` Hz.
+pub fn wav_at(samples: &[i16], rate: u32) -> Vec<u8> {
     let data = (samples.len() * 2) as u32;
     let mut out = Vec::with_capacity(44 + samples.len() * 2);
     out.extend_from_slice(b"RIFF");
@@ -172,8 +188,8 @@ pub fn wav(samples: &[i16]) -> Vec<u8> {
     out.extend_from_slice(&16_u32.to_le_bytes());
     out.extend_from_slice(&1_u16.to_le_bytes());
     out.extend_from_slice(&1_u16.to_le_bytes());
-    out.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-    out.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
     out.extend_from_slice(&2_u16.to_le_bytes());
     out.extend_from_slice(&16_u16.to_le_bytes());
     out.extend_from_slice(b"data");
