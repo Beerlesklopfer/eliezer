@@ -153,7 +153,7 @@ condition encoder and vocoder 0.3 GB; 8.4 GB in all).
   loudness (checked by the sample values; not listened to). Stopping the service leaves no `audiocpp_server` process and no directory behind.
 
 
-## whisper.cpp `whisper-server` (read 2026-10-30, not run)
+## whisper.cpp `whisper-server` (read and run 2026-10-30/31, tag v1.9.5)
 
 MIT licensed, ggml based. The program is not installed on this machine and was not built, so nothing below was run against
 the real binary. What was **verified** is what the source of `examples/server/server.cpp` and its README on the `master` branch of
@@ -210,7 +210,21 @@ Build (from the README of whisper.cpp and the CMake options of ggml; not run her
 (needs the Vulkan headers and `glslc`), `cmake -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1100` for AMD with HIP (older revisions
 call the option `GGML_HIPBLAS`; ROCm development files are needed, the same as for audio.cpp), `-DGGML_CUDA=1` for NVIDIA, none
 of them for the CPU. Then `cmake --build build -j --config Release --target whisper-server`; the binary is `build/bin/whisper-server`.
-A `scripts/build-whispercpp.sh` like the one for audio.cpp, and bundling the program in the ROCm package, are not written yet.
+`scripts/build-whispercpp.sh` builds the tag v1.9.5 (`d2a764c`) with HIP for the installed card into `target/whispercpp` (the same way as
+`scripts/build-audiocpp.sh`; nothing is installed). Bundling the program in the ROCm package is not written yet.
+
+**Live check, 2026-10-30** (workstation with a Radeon RX 7900 XTX, gfx1100, ROCm; model `cstr/whisper-large-v3-turbo-german-ggml`,
+`ggml-model-q5_0.bin`, fetched by `eliezer download`): the program takes the 16 kHz mono 16 bit WAV of the service and finds the card
+(`ggml_cuda_init: found 1 ROCm devices`). A German sermon of 53 min 48 s (MP3, 48 kHz mono, 42.8 MB) was transcribed through
+`POST /v1/audio/transcriptions` in **49 s** (about 66 times real time) in 6 pieces of 10 minutes with a 5 s overlap: 1058 segments,
+8133 words, times monotonic, no gap over 25 s, no repeated segments, the joins at 600/1200/1800 s without a lost or doubled sentence,
+the Swiss spelling of the speaker kept ("Füsse", "Grösse"). Not measured: the memory of the program, and the word error rate (no
+reference text).
+
+**Finding:** with `response_format=verbose_json` the program turns the token times on and then wraps every segment after about 60
+characters on a token boundary, which cut words in two ("Füs" / "se."; with `json` the text is whole). The service joins the segments with a
+space, so the words reached the text as "Füs se", "bed ienen", "harmon isch". The service now always sends `split_on_word=true`
+(`inference_fields`, tested in `tests/m8/whispercpp.rs`); the segments then end between words.
 
 What the tests cover instead: `tests/m8/fake_whisper_server.rs` is a stand-in that speaks the interface as described above
 (arguments, `/health`, the multipart form, `verbose_json`); `tests/m8/whispercpp.rs` checks the arguments, the environment, the

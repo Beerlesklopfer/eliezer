@@ -160,6 +160,10 @@ fn the_form_carries_the_text_only_as_fields() {
     request.temperature = Some(0.2);
     let fields = inference_fields(&request);
     assert!(fields.contains(&("response_format", "verbose_json".to_owned())));
+    assert!(
+        fields.contains(&("split_on_word", "true".to_owned())),
+        "a segment must not end inside a word"
+    );
     assert!(fields.contains(&("language", "de".to_owned())));
     assert!(fields.contains(&("temperature", "0.2".to_owned())));
     let body = multipart_body("XYZ", &fields, b"RIFFdata");

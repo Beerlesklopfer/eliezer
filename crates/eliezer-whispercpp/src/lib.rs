@@ -234,10 +234,15 @@ pub fn multipart_body(boundary: &str, fields: &[(&str, String)], file: &[u8]) ->
 
 /// The text fields of `POST /inference` for a request. `verbose_json` is asked for in every case: the service builds
 /// its own `json`, `text`, `srt` and `vtt` from the segments, so it needs their times.
+///
+/// `split_on_word` is on in every case: with `verbose_json` the program turns the token times on, and then it wraps
+/// every segment after about 60 characters on a token boundary, which cuts words in two ("Füs" and "se.", measured with
+/// whisper.cpp v1.9.5 on 2026-10-30). The service joins the segments with a space, so a cut word would reach the text.
 pub fn inference_fields(request: &TranscriptionRequest) -> Vec<(&'static str, String)> {
     let mut fields = vec![
         ("response_format", "verbose_json".to_owned()),
         ("no_language_probabilities", "true".to_owned()),
+        ("split_on_word", "true".to_owned()),
     ];
     if let Some(language) = &request.language {
         fields.push(("language", language.clone()));
