@@ -122,6 +122,11 @@ chunk_secs = 600                       # a long recording is cut into pieces of 
 overlap_secs = 5                       # ... that overlap by this much (0 to 60, less than half a piece)
 max_file_mb = 100                      # upload limit; a model can set its own (extra.max_file_mb)
 max_audio_minutes = 120                # length limit of a recording; a model can set its own (extra.max_audio_minutes)
+split_on_word = true                   # segments end between words; a model can set its own (extra.split_on_word)
+max_segment_chars = 0                  # 0 = the program's own wrapping, else 20 to 400 (max_len); extra.max_segment_chars per model
+load_timeout_secs = 300                # how long a model may take to load (1 to 3600)
+request_timeout_secs = 3600            # how long one piece of a recording may take (1 to 86400)
+stop_grace_secs = 15                   # how long the program gets to end after the stop, before it is killed (1 to 300)
 # flash_attn = true                    # optional: --flash-attn / --no-flash-attn; without it the program's default applies
 # gpu_device = 0                       # optional: --device
 # library_path = [...]                 # as for sdcpp
@@ -186,8 +191,10 @@ extra = { language = "de", threads = 8, max_file_mb = 200, max_audio_minutes = 1
 
 `extra` of a speech model: `language` (a lowercase language code such as `de`, or `auto` to detect it; the language used when a
 request names none; default `auto`), `threads` (1 to 256; the program's default without), `max_file_mb` and `max_audio_minutes`
-(the limits of an upload and of a recording; default: the values of `[backend.whispercpp]`, which default to 100 and 120). The
-limits, the length of a piece and the overlap are always settings, never constants. Recommended models (the choice is made by a
+(the limits of an upload and of a recording; default: the values of `[backend.whispercpp]`, which default to 100 and 120),
+`split_on_word` (default `true`: segments end between words; with `false` the program may cut a word in two at its 60 character
+wrap) and `max_segment_chars` (0 = the program's own wrapping, else 20 to 400, sent as `max_len`); both default to the values of the
+section. The limits, the length of a piece and the overlap are always settings, never constants. Recommended models (the choice is made by a
 listening test with real recordings, counting word errors, names and speed): first
 `cstr/whisper-large-v3-turbo-german-ggml`, file `ggml-model-q5_0.bin` (Apache-2.0), for German speech such as sermons; alternatives
 `primeline/whisper-large-v3-turbo-german` (convert to ggml, or use a ggml build of it) and `openai/whisper-large-v3-turbo`
@@ -606,10 +613,10 @@ trait Backend: Send + Sync {
   `--public` folder, removed when the model is unloaded), with the fixed arguments `--model FILE --host 127.0.0.1 --port N
   --language L --public DIR`, plus `--threads N` (`extra.threads`), `--no-gpu` for a model placed on the CPU, or else `--device N`
   and `--flash-attn`/`--no-flash-attn` (the settings of the section). `--convert` (which starts ffmpeg) is never used. The model counts
-  as loaded when `GET /health` answers 200 (the program opens its port only after the model is loaded; load time out 300 s). A
+  as loaded when `GET /health` answers 200 (the program opens its port only after the model is loaded; load time out `load_timeout_secs`, default 300 s; one piece may take `request_timeout_secs`, default 3600 s; a stopped child gets `stop_grace_secs`, default 15 s, before it is killed). A
   piece becomes `POST /inference`, a `multipart/form-data` body with the 16 kHz mono WAV as `file` and the fields
   `response_format = verbose_json` (the service builds every other format itself from the segments), `language`, `prompt`,
-  `temperature` and `no_language_probabilities`. Request text is only ever a form field. The answer must hold `segments` with
+  `temperature`, `no_language_probabilities`, `split_on_word` (setting, default true) and `max_len` (only when `max_segment_chars` is above 0). Request text is only ever a form field. The answer must hold `segments` with
   `start`, `end` (seconds) and `text`. `400` of the program is a request it refused (`400`); other failures and answers
   without segments are `502`; a program that no longer answers marks the model failed. The program serializes requests itself.
 - **fake:** Test bench: configurable load time, VRAM demand, responses, crashes; basis of all tests.

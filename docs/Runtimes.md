@@ -223,8 +223,10 @@ reference text).
 
 **Finding:** with `response_format=verbose_json` the program turns the token times on and then wraps every segment after about 60
 characters on a token boundary, which cut words in two ("Füs" / "se."; with `json` the text is whole). The service joins the segments with a
-space, so the words reached the text as "Füs se", "bed ienen", "harmon isch". The service now always sends `split_on_word=true`
-(`inference_fields`, tested in `tests/m8/whispercpp.rs`); the segments then end between words.
+space, so the words reached the text as "Füs se", "bed ienen", "harmon isch". The service therefore sends `split_on_word` from the setting
+`backend.whispercpp.split_on_word` (default `true`, per model `extra.split_on_word`; `inference_fields`, tested in
+`tests/m8/whispercpp.rs`), so the segments end between words; `max_segment_chars` (default 0) additionally sends `max_len` for a
+shorter or longer wrap.
 
 What the tests cover instead: `tests/m8/fake_whisper_server.rs` is a stand-in that speaks the interface as described above
 (arguments, `/health`, the multipart form, `verbose_json`); `tests/m8/whispercpp.rs` checks the arguments, the environment, the

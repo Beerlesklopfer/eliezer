@@ -79,6 +79,11 @@ port_range = [24600, 24609]
 # overlap_secs = 5                     # ... that overlap by this much
 # max_file_mb = 100                    # limits of an upload; a model can set its own
 # max_audio_minutes = 120
+# split_on_word = true                 # segments end between words (false lets the program cut words in two); per model too
+# max_segment_chars = 0                # 0 = the program's own wrapping; 20 to 400 wraps segments after that many characters
+# load_timeout_secs = 300              # how long a model may take to load (1 to 3600)
+# request_timeout_secs = 3600          # how long one piece of a recording may take (1 to 86400)
+# stop_grace_secs = 15                 # how long the program gets to end after the stop, before it is killed (1 to 300)
 # flash_attn = true                    # optional: --flash-attn / --no-flash-attn
 # gpu_device = 0                       # optional: --device
 #
@@ -89,7 +94,7 @@ port_range = [24600, 24609]
 # source = { file = "/var/lib/eliezer/models/cstr/whisper-large-v3-turbo-german-ggml/ggml-model-q5_0.bin" }
 # vram_gb = 2.0
 # device = "auto"                      # "cpu" runs it on the processor without taking the GPU slot
-# extra = { language = "de", threads = 8, max_file_mb = 200, max_audio_minutes = 180 }
+# extra = { language = "de", threads = 8, max_file_mb = 200, max_audio_minutes = 180 }   # also split_on_word and max_segment_chars
 
 [[model]]
 key = "qwen/qwen3-coder-30b"
