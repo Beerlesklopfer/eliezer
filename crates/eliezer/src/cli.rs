@@ -344,6 +344,10 @@ fn parse(words: &[String], spec: &Spec) -> Res<Parsed> {
             return usage_err(format!("Unknown option {name}"));
         }
     }
+    // Asking for help needs none of the arguments of the command.
+    if out.flags.contains("--help") {
+        return Ok(out);
+    }
     let (min, max) = spec.positional;
     if out.positional.len() < min {
         return usage_err("An argument is missing; see `eliezer help`");

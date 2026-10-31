@@ -743,6 +743,22 @@ fn help_of_a_command_shows_that_command_only() {
             "{text}"
         );
     }
+    // a command that needs arguments shows its help without them
+    for command in [
+        "load",
+        "show",
+        "get",
+        "download",
+        "inspect",
+        "rm",
+        "transcribe",
+    ] {
+        let o = with_host(&fake, &[command, "--help"]).output().unwrap();
+        assert_eq!(code(&o), 0, "{command}: {}", err(&o));
+        let text = String::from_utf8_lossy(&o.stdout).into_owned();
+        assert!(text.trim_start().starts_with(command), "{command}: {text}");
+        assert!(!text.contains("Exit codes"), "{command}: {text}");
+    }
     let o = with_host(&fake, &["help", "nonsense"]).output().unwrap();
     assert_eq!(code(&o), 2, "{}", err(&o));
 }
