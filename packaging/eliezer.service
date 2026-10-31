@@ -1,0 +1,30 @@
+[Unit]
+Description=Eliezer – manager for local models
+After=network.target
+
+[Service]
+Type=simple
+User=eliezer
+Group=eliezer
+SupplementaryGroups=video render
+ExecStart=/usr/local/bin/eliezer --config /etc/eliezer/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=35
+# No StateDirectory=: with /var/lib/eliezer as a symbolic link to another disk or directory systemd
+# fails at start ("Failed at step STATE_DIRECTORY ... Too many levels of symbolic links"). The
+# package creates /var/lib/eliezer instead (a link or a mount there is left alone).
+RuntimeDirectory=eliezer
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+# /home stays visible but read-only, so a model store under /home can be read without extra setup.
+# The service writes only below /var/lib/eliezer and /run/eliezer; a store under /home that it
+# must write to (downloads) needs ReadWritePaths in a drop-in (see the examples).
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=-/var/lib/eliezer /run/eliezer
+
+[Install]
+WantedBy=multi-user.target

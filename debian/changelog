@@ -1,0 +1,247 @@
+eliezer (0.6.0) UNRELEASED; urgency=low
+
+  * Set the package version to 0.6.0, as requested.
+  * Bundle only the GPU kernel files of the target architecture (`AMDGPU_TARGETS`, the installed card by default; `BUNDLE_ALL_ARCHS=1`
+    keeps all): the ROCm package is 1.05 GB (1.76 GB unpacked) instead of 2.99 GB (6.8 GB) for `gfx1100`, so it installs on a root
+    file system with a few GB free. Bundle `whisper-server` (built statically, license text included) and take the model families of
+    `audiocpp_server` from `AUDIOCPP_MODELS`. No model is part of the package. INSTALL.MD says how to turn on the speech kinds.
+  * Flush a partial download before it is dropped: a stream that broke could leave a `.part` file that was still growing, and the next try
+    resumed at the wrong length (checksum error). The container build installs `make` and `g++` for the MP3 encoder and the manifests no
+    longer override `default-features` of a workspace dependency (cargo 1.88 refuses that).
+  * Add `eliezer speak --format mp3` (alias `say`): the command encodes the WAV stream of the service to MP3 with LAME
+    (`mp3lame-encoder`, 96 kbit/s) while the audio arrives. New dependency, LGPL-3.0, listed in docs/wiki/Dependencies.md.
+  * Add `eliezer transcribe PATH... --out DIR`: transcribes audio files (or directories, with `--recursive`) one after the other
+    through `POST /v1/audio/transcriptions` and writes `txt`, `srt`, `vtt` and `json` outputs built from one `verbose_json`
+    answer. Existing outputs are kept (resumable), outputs are written atomically, `--dry-run`, `--limit`, `--replace`,
+    `--prompt-file` and `--timeout-secs` are supported; a failing file does not stop the run.
+  * Prioritize diffusion models on the GPU: add `[cpu] ram_budget_gb` and a per-model
+    `device = "auto" | "gpu" | "cpu"` (also a `device` field of the load request). While an image model
+    loads, is loaded or is waiting, language models left to `auto` run on the CPU (llama.cpp with no GPU
+    layers) instead of evicting it, and they fall back to the CPU when the GPU is too small. The planner
+    works per memory pool, a 409 on the CPU names `[cpu] ram_budget_gb`, `/api/v1/status` and `eliezer ps`
+    show the device and the CPU memory. Without a RAM budget nothing changes.
+  * Add `DELETE /api/v1/models/pins/{org}/{repo}` and `eliezer rm ORG/REPO`: delete a repository fetched with
+    `eliezer get`/`download`; refused while a download runs or a configured model uses its files. Only
+    directories with a pin file are touched.
+  * Add `POST /v1/images/edits` (multipart, one to four pictures, as in the OpenAI API) for image models with the new
+    `extra.image_edit = true`, and `capabilities.image_edit` in the model list. The pictures are checked (type by first
+    bytes, 20 MB each, at most four) and handed to `sd-server` as reference pictures. Checked live with FLUX.2 klein 4B:
+    a fox edited blue in 27 s at 1024x1024. New dependency: axum feature `multipart` (crate `multer`).
+  * Add music models (MiniMax Music 3): `kind = "music"` with `backend = "audiocpp"` (new `[backend.audiocpp]` with `program`,
+    `port_range`, `compute`, `library_path`), served by `audiocpp_server` of audio.cpp as a child process per loaded model, and
+    `POST /v1/audio/speech` (lyrics as `input`, the description as `instructions`, WAV as the answer) with
+    `capabilities.music_generation`. The package directory is `source.file`; `extra` takes `language_model`, `rvq_depth_decoder`,
+    `flow_transformer`, `duration_sec`, `steps` and `cfg_scale`. `scripts/build-audiocpp.sh` builds the program (pinned commit,
+    HIP); `scripts/build-deb.sh rocm` bundles it as `/usr/libexec/<triplet>/eliezer/audiocpp_server`. Checked live on the Radeon RX
+    7900 XTX: a 20 s song in 1 min 20 s (including the load), a 30 s song in 2 min 32 s.
+  * Add speech recognition: `kind = "stt"` with `backend = "whispercpp"` (new `[backend.whispercpp]`), served by `whisper-server` of
+    whisper.cpp as a child process per loaded model, and `POST /v1/audio/transcriptions` (OpenAI shape; `json`, `text`,
+    `verbose_json`, `srt`, `vtt`) with `type: "stt"` and `capabilities.transcription`. The service decodes MP3, M4A/AAC, Ogg, FLAC and
+    WAV itself, cuts long recordings into overlapping pieces and joins the segments; limits and piece length are settings.
+    New dependencies: `symphonia` 0.5.5 and `rubato` 0.16.2 (pure Rust). The program itself was not run yet (docs/Runtimes.md).
+  * Add speech synthesis with voice cloning: `kind = "tts"` (served by the existing audiocpp backend, family `chatterbox` or
+    `cosyvoice3` in `extra.family`), `POST /v1/audio/speech` chooses by the kind of the model (the music request is unchanged),
+    cuts the text into passages at sentence boundaries and joins the audio with configurable pauses. Voices are files in
+    `[backend.audiocpp] voices_dir` (default `voices` in the model store, mode 0700, never served): `GET`/`POST /v1/audio/voices`
+    and `DELETE /v1/audio/voices/{name}`. `scripts/build-audiocpp.sh` takes the model set from `AUDIOCPP_MODELS`. The program was
+    not run with a speech model yet (docs/Runtimes.md). No new dependency.
+  * Stream speech synthesis: `POST /v1/audio/speech` of a `tts` model takes `"stream": true` and `response_format` `pcm` (raw
+    signed 16 bit little-endian samples, rate in the header `X-Audio-Sample-Rate`, plus `X-Audio-Channels` and `X-Audio-Bits`)
+    or `wav` (open length, sizes 0xFFFFFFFF, for sox, ffmpeg and mpv). The body is chunked; the first passage is sent as soon as
+    it is read, the pauses are silence in between. A client that goes away stops the synthesis of the next passages; an error
+    after the first bytes aborts the connection (no closing chunk). The answer without `stream` is unchanged. No encoder for mp3
+    or flac: sox and ffmpeg do that. New `eliezer speak` (text from `--text`, `--file` or stdin; audio to stdout, a file or a
+    named pipe) and `eliezer voices`, `voices add NAME FILE`, `voices rm NAME`. No new dependency.
+  * Add `extra.requires_voice` for speech synthesis models without a speaker of their own (Chatterbox): a request without a voice
+    is a 400 with a hint instead of a 502. The message of an error answer of `audiocpp_server` is logged (cleaned and cut).
+  * A picture request that fails no longer takes the model down: a request the program refused is answered with 400,
+    and a picture that could not be drawn marks the model as crashed only when its program no longer answers.
+    Before, any failure marked the model failed, which dropped it and the jobs other requests had running on it.
+  * Add `extra.tokenizer` (path of an external `tokenizer.json`, passed to `sd-server` as `--tokenizer`) for MOSS-Image, which
+    needs the Qwen3.5 vocabulary. Checked live with MOSS-Image-SFT Q8_0.
+  * A command without its required arguments prints its usage (the template of the help text) with exit code 2, for
+    example `eliezer download`.
+  * `eliezer status` and `eliezer ps` list downloads that run or wait, with percent and bytes.
+  * Show the download progress of `eliezer get`/`download` in one line rewritten in place on a terminal; in a
+    pipe the line still changes only in steps of 5 %.
+  * Add `POST /api/v1/models/estimate`: the memory Eliezer calculates for a model, context and parallelism,
+    with its parts (weights, KV cache, overhead), the fit in the GPU and CPU pools and the largest
+    context that fits, so MultiGPT can show Eliezer's figures instead of its own size-based guess.
+  * Suggest the `reasoning` options of a model from its chat template when importing: effort levels for
+    gpt-oss, on/off for Qwen and Gemma 4 (with the template's own default), both for Qwen3.8 (`xhigh` default).
+    Without the line the model list reports no `capabilities.reasoning` and MultiGPT cannot offer thinking levels.
+  * Describe vision models in the configuration: `source.projector` (the mmproj file), `vision = true` and
+    `projector_gb`; the memory estimate counts the projector, and `--import`/`--suggest` pair a model with the
+    projector in its directory. Reading images in the llama.cpp runtime is the next step and is not part of this change.
+  * Add the search of Hugging Face (M5-00): `GET /api/v1/hub/search` and `GET /api/v1/hub/models/{org}/{repo}`,
+    `eliezer search` and `eliezer inspect`. They list candidates with license, quantizations, file sizes, backend
+    support and the fit in the GPU and RAM budgets. Nothing is downloaded and no token is sent;
+    `[huggingface] search = false` switches it off. New crate `eliezer-hub` with `reqwest` (rustls).
+  * Read images with the llama.cpp runtime: a model with `source.projector` accepts `image_url` parts (base64 `data:`
+    URIs only, never links) in the OpenAI and the Anthropic dialect. Checked on a Radeon RX 7900 XTX with olmOCR 2 7B,
+    Qwen3.8 27B and Gemma 4 26B, which all read back the numbers on a drawn page. A model without projector refuses
+    images with 400. The micro-batch steps down (2048, 1024, 512) until the context of a vision model can be created.
+  * Keep only the window of sliding-window layers in the cache (`swa_full` off), as the memory estimate assumes:
+    Gemma 4 at 32 768 tokens took 25.4 GB of VRAM instead of 19.7 GB. Prefix reuse and parallel requests still pass
+    the live check on Gemma 4 and gpt-oss.
+  * Translate the German leftovers in the Anthropic error messages.
+  * Fetch models from Hugging Face (M5-01 to M5-03): `POST /api/v1/models/download`, `eliezer get ORG/REPO` (picks the
+    best quantization that fits, with the vision projector) and `eliezer download ORG/REPO FILE...`. Only repositories
+    on `[huggingface] allow` are fetched; files go to `<models_dir>/<Organisation>/<Repository>/`, are resumed after an
+    interruption, checked against the listed SHA-256 and size and renamed only when they match. Each repository
+    directory records a pin (commit, sizes, hashes); `eliezer pins [--verify]` and `GET /api/v1/models/pins` report
+    deviations, and the service logs them at start. `cache_limit_gb` is enforced (507), gated repositories answer
+    403 with a license notice. The token comes from `huggingface.token_file` (0600, otherwise not used) or `HF_TOKEN`
+    and never appears in arguments, logs or messages; `scripts/check-secrets.sh` checks that. New dependency `sha2`.
+  * Accept a system prompt for models whose chat template rejects the system role (Mistral 7B v0.3 answered 400 "does
+    not fit the context window" to a system plus user message): the text goes in front of the first user message,
+    checked live on Mistral in both dialects. Name a missing configuration section or field in the error message.
+    A file download is no longer cut off by the 15 s limit of metadata requests (found with the first real download).
+  * Serve image models with stable-diffusion.cpp (M6): each loaded model is an `sd-server` child process on a loopback
+    port (`[backend.sdcpp]`), started without a shell, with a cleared environment and arguments from the configuration;
+    `/v1/images/generations` returns PNG images. New model settings `extra.steps`, `extra.cfg_scale`,
+    `extra.sampling_method` and `extra.offload_to_cpu`. A router sends models to llama.cpp or stable-diffusion.cpp. Checked
+    live with Qwen Image 2.1 (a photographic fox in 13 s at 512x512, 80 s at 1024x1024) and the GPU priority: Mistral
+    ran on the CPU while the image model held the GPU. `[backend.sdcpp] library_path` names the directories with the
+    libraries the program needs (it has no run path). The ROCm package contains `sd-server` (built by `scripts/build-sdcpp.sh`) in
+    the multiarch libexec directory `/usr/libexec/<triplet>/eliezer/` (run path `$ORIGIN/../../../lib/<triplet>/eliezer`
+    to the libraries in the private directory, also `libomp`), so `[backend.sdcpp] program` is
+    `/usr/libexec/x86_64-linux-gnu/eliezer/sd-server` and no library path is needed.
+  * The estimate of a model with a fixed figure (`vram_gb` or a measurement, as for image models) puts the figure in
+    `weights_bytes`, so the parts add up to the total (MultiGPT showed 0.0 GB for Qwen Image from the empty parts).
+  * Add a prompt helper for image models: `extra.prompt_helper` names a language model that writes a detailed English description
+    from a short wish before the picture is drawn (on the CPU when a RAM budget exists, so the image model keeps the GPU).
+    `enhance_prompt` in the request switches it, the answer has `prompt_enhanced` and `revised_prompt`; a helper that fails
+    leaves the original prompt in use. Checked live with Qwen3-VL-8B-Instruct (fetched with `eliezer get`, Q4_K_M, also reads
+    images through its projector; about 10 tokens/s on the CPU, a description in 6 s) and Qwen Image 2.1.
+  * Take wildcards in the download allowlist: `*` stands for any run of characters in the organisation or in the repository name
+    (`*/Qwen3-VL*`, `mradermacher/*GGUF`); `*/*` is refused. `**/Qwen*` works as a pattern now instead of stopping a reload.
+  * Never pass a refusal of the prompt helper on as the prompt: a stock model sometimes answers a wish with "I cannot ..." (in the
+    language of the wish). Refusals, questions, German or overlong answers count as `declined`, the original prompt is drawn and the
+    answer says `"prompt_helper": "declined"` (`used`, `off`, `failed` otherwise).
+  * Draw a new picture for every image request: `sd-server` started with its default seed 42 and returned the same picture for
+    the same prompt every time (found when two identical requests gave identical files). It starts with `--seed -1` now, and
+    `/v1/images/generations` takes an optional `seed` for repeatable results. Checked live: without a seed two requests differ,
+    with seed 7 twice they are identical.
+  * Report `capabilities.image_generation: true` for image models and `capabilities.ocr: true` for models marked `ocr = true`
+    in the configuration (a text recognition model needs `vision`; `--import` and `--suggest` set it for vision models whose
+    name says OCR) in the model list, so MultiGPT can map the capability instead of guessing; `eliezer ls` shows `image`
+    and `ocr`.
+  * Show a size for models without `size_gb` (the size of their files; an image model counts its text encoder and VAE too) and no
+    context window for image models in the model list and `eliezer ls`.
+  * Accept the histories chat programs send to models with a strict chat template (Mistral): the same role twice in a row, an
+    assistant turn first, a system message in the middle, tool calls and results. They are reshaped (joined turns, tool turns as
+    plain text, the system text in front of the first user turn) when the template refuses them; before, they answered 400. Checked
+    live on Mistral with seven shapes that failed.
+  * Keep the command line client tests independent of the user's own ~/.config/eliezer/api_key.
+  * Update the installation example to eliezer_0.6.0-1_amd64.deb.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Tue, 20 Oct 2026 02:17:18 +0200
+
+eliezer (0.5.0) UNRELEASED; urgency=low
+
+  * Set the package version to 0.5.0 for apt upgrades, as requested.
+  * Bundle ROCm userspace libraries, HIP runtime compiler and GPU kernel assets
+    in /usr/lib/<multiarch-triplet>/eliezer with relative library search paths,
+    third-party license notices and a manifest. Check the package without host
+    ROCm mounts; document Debian build-library availability and ABI differences.
+  * Update the installation example to eliezer_0.5.0-1_amd64.deb.
+    M5 model acquisition is still pending; the Candle ROCm experiment remains
+    on its separate branch and is not included in this package.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 22:46:28 +0200
+
+eliezer (0.4.0) UNRELEASED; urgency=low
+
+  * Add the embedded llama.cpp runtime (features rocm, vulkan, cuda and cpu; without one the
+    service cannot load models). It serves chat with streaming, parallel sequences in one batch,
+    reuse of a shared prompt prefix, stop sequences, JSON-schema output and embeddings. Checked on
+    a Radeon RX 7900 XTX with Mistral 7B, olmOCR 2 7B, gpt-oss 20B, Gemma 4 26B, Qwen3.8 27B and
+    Qwen3 Coder 30B: loading takes 2 to 10 s, 109 to 166 tokens/s (Qwen3.8: 36), and unloading
+    returns the model memory (a constant 0.2 to 0.45 GB of ROCm runtime stays, it does not grow).
+  * Render the chat template of each model (Jinja, from the GGUF) and parse its output into text,
+    reasoning and tool calls: Qwen XML, Harmony (gpt-oss), Gemma 4 and think tags. Stop sequences
+    apply to the visible answer only, and the end token of a Harmony tool call reaches the parser.
+  * Add `eliezer --import DIR` with `server.run_user` and `server.run_group`: move GGUF files into
+    the model store, hand them to the service account and enter the language and embedding models
+    into the configuration. The result is validated like a service start, written atomically with a
+    backup, and a broken model list does not block the import. Image models are moved and only
+    noted, vision projectors get no entry, and entries that point at the wrong kind of file are
+    reported. Options: --copy, --dry-run, --no-config and --suggest FILE.
+  * Read the memory layout from the GGUF header, including per-layer head counts stored as int32,
+    sliding-window patterns (Gemma 4) and linear-attention layers with their state (Qwen3.8). The
+    estimate of these models was two to three times too high, so the planner refused them (HTTP
+    409).
+  * Add API key management: `eliezer --new-key [--name N] [--save]` creates an OpenAI-style key
+    (sk- and 256 random bits), enters the key file in the configuration, shows the key once and
+    can save a copy in ~/.config/eliezer/api_key; `--list-keys` shows the keys masked and whether
+    a Hugging Face token is set; `--revoke-key NAME` removes one; `--set-hf-token` stores the
+    token from standard input, ~/.config/eliezer/hf_key, the default Hugging Face token file or a
+    hidden prompt. The service compares
+    keys in constant time and answers a wrong or missing key with 401 and code invalid_api_key.
+  * Add a command line client to the eliezer binary (ls, ps, status, show, load, unload, run, help)
+    in the style of ollama and lms, with --host, --key-file, --json, ELIEZER_TIMEOUT_SECS and exit
+    codes 0 to 3. It names the systemd state when nothing answers, says when a server accepts but
+    does not answer, and warns when the VRAM budget is far below the card.
+  * Send a Server header on every response; the client refuses other programs on the port.
+  * Report a model file that was moved or deleted: warnings in --check-config, at start and on
+    reload, and HTTP 502 model_file instead of a generic backend error when it is loaded. Name the
+    section of a misplaced configuration field, and the address and reason when binding fails.
+  * Fix the systemd unit for a state directory or model store that is a symbolic link, a mount or
+    under /home: drop StateDirectory= (systemd refuses a link there), create /var/lib/eliezer in the
+    package, and make /home read-only instead of hidden. A drop-in example is installed.
+  * Build the Debian package with cargo-deb, one variant per GPU API (a plain build contains the
+    ROCm runtime), with the ROCm libraries found through an rpath. Check install, start, reload,
+    reinstall, removal and a symlinked state directory in a clean container (tests/deb).
+  * Add manual GPU checks (tests/m4: live-check.py, vram-cycles.py, layouts.py) and record Burn and
+    Candle (AMD support) under tests/runtime.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 21:30:44 +0200
+
+eliezer (0.3.0) UNRELEASED; urgency=low
+
+  * Calculate the VRAM requirement per architecture type and schedule loading, eviction,
+    pinning, batching and idle handling via a state machine with a clock trait.
+  * Measure GPU usage uniformly via a trait (NVML, sysfs, nvidia-smi, rocm-smi) with vendor
+    detection, timeout and fallback to bookkeeping.
+  * Add the backend trait, a fake backend and the supervisor task.
+  * Provide the management API, the OpenAI and Anthropic interfaces with unbuffered SSE,
+    authentication and a uniform error format, plus /v1/completions, /v1/embeddings and
+    /v1/images/generations.
+  * Report queue, queue length and last use per model in /api/v1/status.
+  * Apply a changed configuration and key file on SIGHUP: add and remove models, unload removed
+    ones when idle, keep loaded models.
+  * Integrate the supervisor, the key file (0600) and the GPU measurement into the service program.
+  * Verify the model list in a contract test against a real LM Studio response.
+  * Test the documented cases over HTTP, including chat/image alternation, request cancellation,
+    GPU measurement failures and an end-to-end configuration reload.
+  * Write the documentation, messages and comments in English and give the documents English names.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 19:00:00 +0200
+
+eliezer (0.2.0) UNRELEASED; urgency=low
+
+  * Create the Rust workspace with five crates and GPL-3.0-only license.
+  * Check TOML configurations strictly, with line and field information.
+  * Restrict model paths, including symlinks, to the central store.
+  * Add CLI, readiness endpoint, logging and signal handling.
+  * Set up Linux CI, systemd unit and container build with Rust 1.88.
+  * Also check the container build in GitHub CI (image build without push).
+  * Provide Compose variants for bind mount, model volume and GPU devices.
+  * Document installation and permissions in INSTALL.MD and checks under tests/m2.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 17:55:32 +0200
+
+eliezer (0.1.0) UNRELEASED; urgency=low
+
+  * Complete M1 as a feasibility study on AMD Radeon RX 7900 XTX.
+  * Review current runtime sources and document missing AMD features
+    of mistral.rs and Candle; confirm llama.cpp with ROCm as a fallback.
+  * Demonstrate model loading, token output, two sequences and reloading;
+    document the remaining cold VRAM residue and the restart path.
+  * Build stable-diffusion.cpp with HIP and test Qwen Image 2.1 over HTTP.
+  * Test chat-image-chat directly and with llama-swap; continue with the custom build.
+  * Bundle test programs, guides and measurement logs under tests/.
+  * Document minimum hardware, permissions, model store and Compose requirements.
+
+ -- Jörg Bernau <Joerg.Bernau@web.de>  Mon, 19 Oct 2026 17:29:30 +0200

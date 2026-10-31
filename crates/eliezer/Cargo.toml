@@ -1,0 +1,123 @@
+[package]
+name = "eliezer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Manager for local AI models on a scarce GPU"
+publish.workspace = true
+autotests = false
+
+[features]
+default = []
+# Embedded llama.cpp runtime; pick the GPU API at build time. Without any of these the service
+# starts but cannot load models.
+llamacpp = ["dep:eliezer-llamacpp", "eliezer-llamacpp/engine"]
+rocm = ["llamacpp", "eliezer-llamacpp/rocm"]
+vulkan = ["llamacpp", "eliezer-llamacpp/vulkan"]
+cuda = ["llamacpp", "eliezer-llamacpp/cuda"]
+cpu = ["llamacpp", "eliezer-llamacpp/cpu"]
+
+[dependencies]
+eliezer-core.workspace = true
+eliezer-api.workspace = true
+eliezer-speech.workspace = true
+mp3lame-encoder.workspace = true
+eliezer-backend.workspace = true
+eliezer-gpu.workspace = true
+# The real client for huggingface.co (the feature `http` of the crate, off in the workspace default).
+eliezer-hub = { workspace = true, features = ["http"] }
+eliezer-sdcpp.workspace = true
+eliezer-audiocpp.workspace = true
+eliezer-whispercpp.workspace = true
+eliezer-llamacpp = { workspace = true, optional = true }
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# JSON bodies of the command line client (already part of the dependency tree).
+serde_json.workspace = true
+
+[[test]]
+name = "cli"
+path = "../../tests/m2/cli.rs"
+
+[[test]]
+name = "reload"
+path = "../../tests/m3/reload.rs"
+
+[package.metadata.deb]
+name = "eliezer"
+maintainer = "Jörg Bernau <Joerg.Bernau@web.de>"
+copyright = "2026, Jörg Bernau"
+license-file = ["../../LICENSE", "0"]
+changelog = "../../debian/changelog"
+section = "utils"
+priority = "optional"
+# A package without a model runtime cannot load models, so a plain `cargo deb` builds the ROCm
+# package (AMD is the main target). Other GPU APIs: `cargo deb --variant vulkan|cuda|cpu`.
+features = ["rocm"]
+depends = "adduser, libc6 (>= 2.39), libgcc-s1, libstdc++6, libelf1t64, libnuma1, zlib1g, libzstd1"
+extended-description = """\
+Eliezer replaces LM Studio as the model server of MultiGPT. It loads chat, vision, \
+embedding and image models on demand, unloads them when idle and lets them take turns \
+on one GPU (NVIDIA or AMD). It serves OpenAI- and Anthropic-compatible HTTP interfaces \
+and a management API.
+
+This package contains the service, a systemd unit and a default configuration without \
+models. The ROCm variant bundles its GPU runtime libraries and kernel assets in a private multiarch directory."""
+maintainer-scripts = "../../packaging/deb"
+systemd-units = { unit-scripts = "../../target/deb-assets", enable = false, start = false }
+assets = [
+    ["target/release/eliezer", "usr/bin/", "755"],
+    ["../../packaging/config.default.toml", "etc/eliezer/config.toml", "644"],
+    ["../../packaging/config.example.toml", "usr/share/doc/eliezer/examples/", "644"],
+    ["../../packaging/eliezer-models-in-home.conf.example", "usr/share/doc/eliezer/examples/", "644"],
+    ["../../README.md", "usr/share/doc/eliezer/", "644"],
+    ["../../INSTALL.MD", "usr/share/doc/eliezer/", "644"],
+    ["../../packaging/deb/README.Debian", "usr/share/doc/eliezer/", "644"],
+]
+
+[[test]]
+name = "import_cli"
+path = "../../tests/m4/import_cli.rs"
+
+# One package per GPU API: `cargo deb --variant rocm` (see scripts/build-deb.sh). The plain build
+# has no model runtime.
+# AMD's ROCm libraries come from AMD's own installer (/opt/rocm, found through an rpath), not from
+# Debian, so dpkg-shlibdeps cannot resolve them and the system libraries are listed by hand.
+[package.metadata.deb.variants.rocm]
+features = ["rocm"]
+depends = "adduser, libc6 (>= 2.39), libgcc-s1, libstdc++6, libelf1t64, libnuma1, zlib1g, libzstd1"
+
+[package.metadata.deb.variants.vulkan]
+features = ["vulkan"]
+depends = "$auto, adduser, libstdc++6"
+
+[package.metadata.deb.variants.cuda]
+features = ["cuda"]
+depends = "$auto, adduser, libstdc++6"
+
+[package.metadata.deb.variants.cpu]
+features = ["cpu"]
+depends = "$auto, adduser, libstdc++6"
+
+[[test]]
+name = "cli_client"
+path = "../../tests/m4/cli_client.rs"
+
+[[test]]
+name = "keys_cli"
+path = "../../tests/m4/keys_cli.rs"
+
+[[test]]
+name = "check_secrets"
+path = "../../tests/m5/check_secrets.rs"
+
+[[test]]
+name = "speak_cli"
+path = "../../tests/m9/speak_cli.rs"
+
+[[test]]
+name = "transcribe_cli"
+path = "../../tests/m4/transcribe_cli.rs"

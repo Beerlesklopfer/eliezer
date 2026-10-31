@@ -1,0 +1,17 @@
+[package]
+name = "eliezer-gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+eliezer-core.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+nvml-wrapper.workspace = true
+
+[[test]]
+name = "probe"
+path = "../../tests/m3/probe.rs"

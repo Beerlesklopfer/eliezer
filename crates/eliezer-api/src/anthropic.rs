@@ -1,0 +1,159 @@
+//! Pure translation of the Messages interface.
+use serde_json::{Value, json};
+
+pub fn request(input: &Value, options: &[String]) -> Result<Value, &'static str> {
+    if !input["max_tokens"].as_u64().is_some_and(|n| n > 0) {
+        return Err("max_tokens must be positive");
+    }
+    let mut messages = Vec::new();
+    if let Some(system) = input.get("system") {
+        let text = if let Some(text) = system.as_str() {
+            text.to_owned()
+        } else {
+            system
+                .as_array()
+                .ok_or("Invalid system text")?
+                .iter()
+                .map(|b| b["text"].as_str().ok_or("Invalid system block"))
+                .collect::<Result<Vec<_>, _>>()?
+                .join("\n")
+        };
+        messages.push(json!({"role":"system","content":text}));
+    }
+    for message in input["messages"].as_array().ok_or("Messages are missing")? {
+        let role = message["role"]
+            .as_str()
+            .filter(|v| ["user", "assistant"].contains(v))
+            .ok_or("Invalid message role")?;
+        if let Some(text) = message["content"].as_str() {
+            messages.push(json!({"role":role,"content":text}));
+            continue;
+        }
+        let mut content = Vec::new();
+        let mut calls = Vec::new();
+        let mut results = Vec::new();
+        for block in message["content"]
+            .as_array()
+            .ok_or("Invalid message content")?
+        {
+            match block["type"].as_str() {
+                Some("text") => content.push(json!({"type":"text","text":block["text"].as_str().ok_or("Text is missing")?})),
+                Some("image") => {
+                    let source = &block["source"];
+                    if source["type"] != "base64" { return Err("Only base64 images are supported"); }
+                    let mime = source["media_type"].as_str().filter(|v| ["image/png","image/jpeg","image/gif","image/webp"].contains(v)).ok_or("Invalid image format")?;
+                    let data = source["data"].as_str().ok_or("Image data is missing")?;
+                    content.push(json!({"type":"image_url","image_url":{"url":format!("data:{mime};base64,{data}")}}));
+                }
+                Some("tool_use") => calls.push(json!({"id":block["id"].as_str().ok_or("Tool id is missing")?,"type":"function",
+                    "function":{"name":block["name"].as_str().ok_or("Tool name is missing")?,"arguments":block["input"].to_string()}})),
+                Some("tool_result") => results.push(json!({"role":"tool","tool_call_id":block["tool_use_id"].as_str().ok_or("Tool id is missing")?,
+                    "content": if let Some(text) = block["content"].as_str() { Value::String(text.into()) } else { block["content"].clone() }})),
+                Some("thinking") => {},
+                _ => return Err("This content block is not supported"),
+            }
+        }
+        if !content.is_empty() || !calls.is_empty() {
+            let mut m = json!({"role":role,"content":content});
+            if !calls.is_empty() {
+                m["tool_calls"] = json!(calls);
+            }
+            messages.push(m);
+        }
+        messages.extend(results);
+    }
+    let mut output =
+        json!({"model":input["model"],"messages":messages,"max_tokens":input["max_tokens"]});
+    for key in ["temperature", "top_p", "stream"] {
+        if let Some(value) = input.get(key) {
+            output[key] = value.clone();
+        }
+    }
+    if let Some(stops) = input.get("stop_sequences") {
+        output["stop"] = stops.clone();
+    }
+    if let Some(tools) = input.get("tools") {
+        output["tools"] = Value::Array(tools.as_array().ok_or("Invalid tools")?.iter().map(|t| {
+            if t.get("type").is_some() { return Err("Server-side tools are not supported"); }
+            Ok(json!({"type":"function","function":{"name":t["name"].as_str().ok_or("Tool name is missing")?,"description":t["description"],"parameters":t["input_schema"]}}))
+        }).collect::<Result<Vec<_>, _>>()?);
+    }
+    if let Some(choice) = input.get("tool_choice") {
+        output["tool_choice"] = match choice["type"].as_str() {
+            Some("auto") => json!("auto"),
+            Some("any") => json!("required"),
+            Some("none") => json!("none"),
+            Some("tool") => {
+                json!({"type":"function","function":{"name":choice["name"].as_str().ok_or("Tool name is missing")?}})
+            }
+            _ => return Err("Invalid tool choice"),
+        };
+    }
+    if let Some(thinking) = input.get("thinking") {
+        let target = match thinking["type"].as_str() {
+            Some("disabled") => "none",
+            Some("enabled") => match thinking["budget_tokens"]
+                .as_u64()
+                .filter(|n| *n > 0)
+                .ok_or("Thinking budget is missing")?
+            {
+                0..=1024 => "low",
+                1025..=8192 => "medium",
+                _ => "high",
+            },
+            _ => return Err("Invalid reasoning option"),
+        };
+        let ranks = ["none", "minimal", "low", "medium", "high", "xhigh"];
+        let rank = ranks.iter().position(|s| *s == target).unwrap_or(0);
+        let selected = options
+            .iter()
+            .filter_map(|o| {
+                ranks
+                    .iter()
+                    .position(|s| s == o)
+                    .map(|r| (r.abs_diff(rank), r, o))
+            })
+            .min_by_key(|(distance, rank, _)| (*distance, *rank))
+            .map(|(_, _, o)| o)
+            .ok_or("Model does not support reasoning options")?;
+        output["reasoning_effort"] = json!(selected);
+    }
+    Ok(output)
+}
+pub fn stop_reason(reason: &str) -> &'static str {
+    match reason {
+        "length" => "max_tokens",
+        "tool_calls" => "tool_use",
+        "stop_sequence" => "stop_sequence",
+        _ => "end_turn",
+    }
+}
+pub fn response(openai: &Value) -> Result<Value, &'static str> {
+    let choice = &openai["choices"][0];
+    let message = &choice["message"];
+    let mut content = Vec::new();
+    if let Some(text) = message["reasoning_content"].as_str() {
+        content.push(json!({"type":"thinking","thinking":text}));
+    }
+    if let Some(text) = message["content"].as_str()
+        && !text.is_empty()
+    {
+        content.push(json!({"type":"text","text":text}));
+    }
+    if let Some(calls) = message["tool_calls"].as_array() {
+        for call in calls {
+            let arguments: Value = serde_json::from_str(
+                call["function"]["arguments"]
+                    .as_str()
+                    .ok_or("Tool arguments are missing")?,
+            )
+            .map_err(|_| "Invalid tool arguments")?;
+            content.push(json!({"type":"tool_use","id":call["id"],"name":call["function"]["name"],"input":arguments}));
+        }
+    }
+    Ok(
+        json!({"id":openai["id"],"type":"message","role":"assistant","model":openai["model"],"content":content,
+        "stop_reason":stop_reason(choice["finish_reason"].as_str().unwrap_or("stop")),"stop_sequence":null,
+        "usage":{"input_tokens":openai["usage"]["prompt_tokens"],"output_tokens":openai["usage"]["completion_tokens"]}}),
+    )
+}

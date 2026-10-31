@@ -1,0 +1,6 @@
+# Rootless Podman: map the host user to the container identity.
+x-podman:
+  in_pod: false
+services:
+  eliezer:
+    userns_mode: "keep-id:uid=10001,gid=10001"

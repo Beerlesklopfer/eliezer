@@ -1,0 +1,21 @@
+Eliezer for Debian
+==================
+
+The package installs the service but does not enable or start it, because it
+needs your decision first:
+
+ 1. Review /etc/eliezer/config.toml (listen address, GPU budget, models).
+    Check it with: eliezer --check-config /etc/eliezer/config.toml
+ 2. Enable authentication if the address is reachable from other machines
+    (api_keys_file, see the comment in the file).
+ 3. Start it: systemctl enable --now eliezer
+
+The service runs as the system user "eliezer" with the supplementary groups
+"video" and "render" for GPU access. State and models live in /var/lib/eliezer;
+removing the package keeps that directory and the user.
+Configuration changes are applied with "systemctl reload eliezer".
+
+The ROCm package includes its userspace GPU libraries and kernel assets in
+/usr/lib/x86_64-linux-gnu/eliezer/. It does not require /opt/rocm on the target.
+The AMD kernel driver and access to /dev/kfd and /dev/dri are still required.
+Third-party notices and bundled-libraries.json are under /usr/share/doc/eliezer/.

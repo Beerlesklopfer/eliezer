@@ -1,0 +1,14 @@
+{
+  "bind": {
+    "healthz": "ok",
+    "recreated": true,
+    "model_persisted": true,
+    "state_persisted": true
+  },
+  "volume": {
+    "healthz": "ok",
+    "recreated": true,
+    "model_persisted": true,
+    "state_persisted": true
+  }
+}

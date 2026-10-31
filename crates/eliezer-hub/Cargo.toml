@@ -1,0 +1,27 @@
+[package]
+name = "eliezer-hub"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Search of Hugging Face for model candidates; never downloads"
+
+[dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
+sha2.workspace = true
+reqwest = { workspace = true, optional = true }
+
+[features]
+default = ["http"]
+# The real client for huggingface.co; without it only the interface and the test bench exist.
+http = ["dep:reqwest"]
+
+[[test]]
+name = "hub"
+path = "../../tests/m5/hub.rs"
+
+[[test]]
+name = "download"
+path = "../../tests/m5/download.rs"

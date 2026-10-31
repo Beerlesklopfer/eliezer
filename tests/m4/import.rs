@@ -1,0 +1,927 @@
+//! `eliezer --import`: planning, moving, copying, ownership and the GGUF header reader.
+use eliezer_core::{config::Config, import::*};
+use std::{
+    fs,
+    os::unix::fs::{MetadataExt, PermissionsExt, symlink},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+static NEXT: AtomicU64 = AtomicU64::new(0);
+struct Temp(PathBuf);
+impl Temp {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "eliezer-import-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        Self(fs::canonicalize(path).unwrap())
+    }
+    fn file(&self, relative: &str, content: &[u8]) -> PathBuf {
+        let path = self.0.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, content).unwrap();
+        path
+    }
+}
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+const PASSWD: &str = "root:x:0:0:root:/root:/bin/bash\n# comment\nbroken line\neliezer:x:122:140:Eliezer:/var/lib/eliezer:/usr/sbin/nologin\nbad:x:abc:1:x:/:/bin/sh\n";
+const GROUP: &str = "root:x:0:\nrender:x:105:eliezer\nmodels:x:777:\nodd:x:notanumber:\n";
+
+#[test]
+fn account_lookup_and_owner_resolution() {
+    assert_eq!(lookup_user(PASSWD, "eliezer"), Some((122, 140)));
+    assert_eq!(lookup_user(PASSWD, "bad"), None, "malformed uid");
+    assert_eq!(lookup_user(PASSWD, "nobody"), None);
+    assert_eq!(lookup_group(GROUP, "render"), Some(105));
+    assert_eq!(lookup_group(GROUP, "odd"), None);
+    let owner = |user, group| resolve_owner(PASSWD, GROUP, user, group).unwrap();
+    assert_eq!(owner(None, None), None);
+    assert_eq!(
+        owner(Some("eliezer"), None),
+        Some(Owner {
+            uid: Some(122),
+            gid: Some(140)
+        }),
+        "a user alone gets its primary group"
+    );
+    assert_eq!(
+        owner(Some("eliezer"), Some("models")),
+        Some(Owner {
+            uid: Some(122),
+            gid: Some(777)
+        }),
+        "an explicit group wins"
+    );
+    assert_eq!(
+        owner(None, Some("render")),
+        Some(Owner {
+            uid: None,
+            gid: Some(105)
+        }),
+        "a group alone leaves the owner alone"
+    );
+    assert!(
+        resolve_owner(PASSWD, GROUP, Some("ghost"), None)
+            .unwrap_err()
+            .contains("ghost")
+    );
+    assert!(
+        resolve_owner(PASSWD, GROUP, None, Some("ghosts"))
+            .unwrap_err()
+            .contains("ghosts")
+    );
+}
+
+#[test]
+fn owner_is_resolved_on_the_running_system() {
+    // root exists everywhere, with uid 0 and gid 0
+    assert_eq!(
+        resolve_owner_system(Some("root"), Some("root")).unwrap(),
+        Some(Owner {
+            uid: Some(0),
+            gid: Some(0)
+        })
+    );
+    assert_eq!(
+        resolve_owner_system(Some("root"), None).unwrap(),
+        Some(Owner {
+            uid: Some(0),
+            gid: Some(0)
+        }),
+        "primary group from the passwd entry"
+    );
+    assert_eq!(resolve_owner_system(None, None).unwrap(), None);
+    assert!(resolve_owner_system(Some("no-such-user-xyz"), None).is_err());
+    assert!(resolve_owner_system(None, Some("no-such-group-xyz")).is_err());
+    // a name that looks like an option is just an unknown account
+    assert!(resolve_owner_system(Some("-s"), None).is_err());
+}
+
+#[test]
+fn plan_finds_only_regular_gguf_files_and_keeps_the_structure() {
+    let t = Temp::new();
+    t.file("src/community/Qwen/model-Q4.gguf", b"aaaa");
+    t.file("src/community/Qwen/mmproj-F16.gguf", b"bb");
+    t.file("src/UPPER/Model.GGUF", b"cc");
+    t.file("src/community/Qwen/readme.md", b"text");
+    t.file("src/community/Qwen/weights.bin", b"bin");
+    symlink(t.0.join("src/UPPER/Model.GGUF"), t.0.join("src/link.gguf")).unwrap();
+    t.file("store/community/Qwen/mmproj-F16.gguf", b"already here");
+    let planned = plan(&t.0.join("src"), &t.0.join("store")).unwrap();
+    let targets: Vec<_> = planned
+        .items
+        .iter()
+        .map(|i| i.target.strip_prefix(t.0.join("store")).unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        targets,
+        vec![
+            PathBuf::from("UPPER/Model.GGUF"),
+            PathBuf::from("community/Qwen/model-Q4.gguf")
+        ]
+    );
+    assert_eq!(planned.items.iter().map(|i| i.size).sum::<u64>(), 6);
+    assert!(
+        planned
+            .skipped
+            .iter()
+            .any(|(p, s)| p.ends_with("mmproj-F16.gguf") && *s == Skip::Exists)
+    );
+    assert!(
+        planned
+            .skipped
+            .iter()
+            .any(|(p, s)| p.ends_with("link.gguf") && *s == Skip::NotRegular)
+    );
+}
+
+#[test]
+fn plan_refuses_unusable_sources() {
+    let t = Temp::new();
+    t.file("src/a.gguf", b"x");
+    assert!(plan(&t.0.join("missing"), &t.0.join("store")).is_err());
+    assert!(
+        plan(&t.0.join("src/a.gguf"), &t.0.join("store")).is_err(),
+        "a file is not a directory"
+    );
+    assert!(
+        plan(&t.0.join("src"), &t.0.join("src/store")).is_err(),
+        "store inside the source"
+    );
+    assert!(
+        plan(&t.0.join("src"), &t.0).is_err(),
+        "source inside the store"
+    );
+    // a store that does not exist yet is fine
+    assert_eq!(
+        plan(&t.0.join("src"), &t.0.join("new/deeper/store"))
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn move_hands_the_file_over_and_never_overwrites() {
+    let t = Temp::new();
+    let source = t.file("src/a/b/model.gguf", b"model bytes");
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::create_dir_all(t.0.join("store")).unwrap();
+    let owner = owner_of(&t.0);
+    let planned = plan(&t.0.join("src"), &t.0.join("store")).unwrap();
+    let how = execute_item(&planned.items[0], Mode::Move, owner).unwrap();
+    assert_eq!(how, How::Renamed);
+    let target = t.0.join("store/a/b/model.gguf");
+    assert_eq!(fs::read(&target).unwrap(), b"model bytes");
+    assert!(!source.exists());
+    let meta = fs::metadata(&target).unwrap();
+    assert_eq!(meta.permissions().mode() & 0o777, 0o644);
+    assert_eq!(Some(meta.uid()), owner.unwrap().uid);
+    for dir in ["store/a", "store/a/b"] {
+        assert_eq!(
+            fs::metadata(t.0.join(dir)).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+    // the target appears between planning and moving: it is reported, not overwritten
+    let source = t.file("src2/model.gguf", b"new");
+    let planned = plan(&t.0.join("src2"), &t.0.join("store2")).unwrap();
+    t.file("store2/model.gguf", b"precious");
+    assert!(execute_item(&planned.items[0], Mode::Move, owner).is_err());
+    assert_eq!(
+        fs::read(t.0.join("store2/model.gguf")).unwrap(),
+        b"precious"
+    );
+    assert!(source.exists(), "the source stays when the move is refused");
+}
+
+#[test]
+fn copy_keeps_the_source_and_leaves_no_partial_file() {
+    let t = Temp::new();
+    let source = t.file("src/m.gguf", &vec![7_u8; 100_000]);
+    let planned = plan(&t.0.join("src"), &t.0.join("store")).unwrap();
+    let how = execute_item(&planned.items[0], Mode::Copy, None).unwrap();
+    assert_eq!(how, How::Copied);
+    assert_eq!(
+        fs::read(&source).unwrap(),
+        fs::read(t.0.join("store/m.gguf")).unwrap()
+    );
+    assert!(!t.0.join("store/m.gguf.partial").exists());
+}
+
+// --- GGUF header ---------------------------------------------------------------------------
+
+fn text(out: &mut Vec<u8>, s: &str) {
+    out.extend((s.len() as u64).to_le_bytes());
+    out.extend(s.as_bytes());
+}
+fn kv_u32(out: &mut Vec<u8>, key: &str, value: u32) {
+    text(out, key);
+    out.extend(4_u32.to_le_bytes());
+    out.extend(value.to_le_bytes());
+}
+fn kv_text(out: &mut Vec<u8>, key: &str, value: &str) {
+    text(out, key);
+    out.extend(8_u32.to_le_bytes());
+    text(out, value);
+}
+/// A small but realistic header: strings, numbers, a vocabulary array to skip, per-layer head counts.
+fn gguf(arch: &str, extra: impl Fn(&mut Vec<u8>) -> u64) -> Vec<u8> {
+    let mut body = Vec::new();
+    kv_text(&mut body, "general.architecture", arch);
+    kv_text(&mut body, "general.name", "Test Model 7B");
+    kv_u32(&mut body, &format!("{arch}.context_length"), 32768);
+    kv_u32(&mut body, &format!("{arch}.block_count"), 32);
+    kv_u32(&mut body, &format!("{arch}.attention.head_count"), 32);
+    kv_u32(&mut body, &format!("{arch}.embedding_length"), 4096);
+    // tokenizer vocabulary: an array of strings that must be skipped
+    text(&mut body, "tokenizer.ggml.tokens");
+    body.extend(9_u32.to_le_bytes());
+    body.extend(8_u32.to_le_bytes());
+    body.extend(3_u64.to_le_bytes());
+    for token in ["<s>", "hello", "wörld"] {
+        text(&mut body, token);
+    }
+    let extra_count = extra(&mut body);
+    let mut file = b"GGUF".to_vec();
+    file.extend(3_u32.to_le_bytes());
+    file.extend(0_u64.to_le_bytes());
+    file.extend((7 + extra_count).to_le_bytes());
+    file.extend(body);
+    file
+}
+
+#[test]
+fn gguf_header_is_read_without_the_tensor_data() {
+    let t = Temp::new();
+    let path = t.file(
+        "m.gguf",
+        &gguf("llama", |out| {
+            kv_u32(out, "llama.attention.head_count_kv", 8);
+            1
+        }),
+    );
+    let info = read_gguf(&path).unwrap();
+    assert_eq!(info.architecture, "llama");
+    assert_eq!(info.name.as_deref(), Some("Test Model 7B"));
+    assert_eq!(info.context_length, Some(32768));
+    assert_eq!(info.layers, Some(32));
+    assert_eq!(info.kv_heads, Some(8));
+    assert_eq!(
+        info.head_dim,
+        Some(128),
+        "embedding length / heads when no key length is given"
+    );
+    assert!(!info.hybrid);
+}
+
+#[test]
+fn gguf_per_layer_arrays_and_hybrid_markers() {
+    let t = Temp::new();
+    let path = t.file(
+        "m.gguf",
+        &gguf("gemma4", |out| {
+            // per-layer KV head counts: 4 values, the largest counts
+            text(out, "gemma4.attention.head_count_kv");
+            out.extend(9_u32.to_le_bytes());
+            out.extend(4_u32.to_le_bytes());
+            out.extend(4_u64.to_le_bytes());
+            for n in [2_u32, 8, 2, 8] {
+                out.extend(n.to_le_bytes());
+            }
+            kv_u32(out, "gemma4.attention.sliding_window", 1024);
+            kv_u32(out, "gemma4.attention.key_length", 256);
+            3
+        }),
+    );
+    let info = read_gguf(&path).unwrap();
+    assert_eq!(info.kv_heads, Some(8));
+    assert_eq!(info.head_dim, Some(256));
+    assert!(info.hybrid);
+    let suggestion = suggest(
+        Path::new("/var/lib/eliezer/models/x/Gemma-4_Q4.gguf"),
+        16_800_000_000,
+        Some(&info),
+    );
+    assert!(
+        suggestion.contains("announced but not understood"),
+        "{suggestion}"
+    );
+}
+
+#[test]
+fn broken_headers_are_errors_not_panics() {
+    let t = Temp::new();
+    assert!(matches!(
+        read_gguf(&t.file("a.gguf", b"NOPE")),
+        Err(GgufError::NotGguf)
+    ));
+    assert!(read_gguf(&t.file("b.gguf", b"")).is_err());
+    let full = gguf("llama", |_| 0);
+    for cut in [5, 9, 20, 60, full.len() - 3] {
+        assert!(
+            read_gguf(&t.file("c.gguf", &full[..cut])).is_err(),
+            "cut at {cut}"
+        );
+    }
+    let mut huge = b"GGUF".to_vec();
+    huge.extend(3_u32.to_le_bytes());
+    huge.extend(0_u64.to_le_bytes());
+    huge.extend(u64::MAX.to_le_bytes());
+    assert!(
+        read_gguf(&t.file("d.gguf", &huge)).is_err(),
+        "absurd entry count"
+    );
+    let mut long = b"GGUF".to_vec();
+    long.extend(3_u32.to_le_bytes());
+    long.extend(0_u64.to_le_bytes());
+    long.extend(1_u64.to_le_bytes());
+    long.extend(u64::MAX.to_le_bytes());
+    assert!(
+        read_gguf(&t.file("e.gguf", &long)).is_err(),
+        "absurd string length"
+    );
+}
+
+#[test]
+fn keys_and_suggestions_are_valid_configuration() {
+    assert_eq!(
+        key_from(Path::new("/x/Qwen3-Coder-30B-A3B_Instruct Q4.gguf")),
+        "qwen3-coder-30b-a3b-instruct-q4"
+    );
+    assert_eq!(key_from(Path::new("/x/---.gguf")), "");
+    let t = Temp::new();
+    let path = t.file(
+        "m.gguf",
+        &gguf("llama", |out| {
+            kv_u32(out, "llama.attention.head_count_kv", 8);
+            1
+        }),
+    );
+    let info = read_gguf(&path).unwrap();
+    let head = "[server]\nlisten = \"127.0.0.1:1234\"\nrun_user = \"eliezer\"\nrun_group = \"render\"\n[gpu]\n[backend.llamacpp]\nenabled = true\n";
+    let block = suggest(
+        Path::new("/var/lib/eliezer/models/c/Llama-7B_Q4.gguf"),
+        4_400_000_000,
+        Some(&info),
+    );
+    let config =
+        Config::parse(&format!("{head}{block}")).unwrap_or_else(|e| panic!("{e}\n{block}"));
+    assert_eq!(config.model[0].key, "llama-7b-q4");
+    assert_eq!(config.server.run_group.as_deref(), Some("render"));
+    // without a readable header the block still parses once it carries a memory figure
+    let blind = suggest(
+        Path::new("/var/lib/eliezer/models/unknown.gguf"),
+        1_000_000_000,
+        None,
+    );
+    assert!(blind.contains("could not be read"));
+    // embedding models are recognized by architecture
+    let embedding = GgufInfo {
+        architecture: "nomic-bert".into(),
+        has_tokenizer: true,
+        layers: Some(12),
+        ..Default::default()
+    };
+    assert!(
+        suggest(Path::new("/m/nomic.gguf"), 1, Some(&embedding)).contains("kind = \"embedding\"")
+    );
+}
+
+#[test]
+fn run_user_and_run_group_are_validated() {
+    let base = |extra: &str| format!("[server]\nlisten = \"127.0.0.1:1234\"\n{extra}\n[gpu]\n");
+    assert!(Config::parse(&base("run_user = \"eliezer\"\nrun_group = \"video\"")).is_ok());
+    // names of domain-joined machines have dots and capitals
+    assert!(
+        Config::parse(&base(
+            "run_user = \"joerg.bernau\"\nrun_group = \"Domain_Users\""
+        ))
+        .is_ok()
+    );
+    let too_long = format!("run_user = \"{}\"", "a".repeat(65));
+    for bad in [
+        "run_user = \"a b\"",
+        "run_user = \"\"",
+        "run_group = \"../x\"",
+        "run_user = \"root;rm\"",
+        "run_group = \"1abc\"",
+        "run_user = \".hidden\"",
+        "run_user = \"a/b\"",
+        "run_user = \"a$(id)\"",
+        too_long.as_str(),
+    ] {
+        let error = Config::parse(&base(bad)).unwrap_err().to_string();
+        assert!(error.contains("server.run_"), "{bad}: {error}");
+    }
+}
+
+// --- configuration update ------------------------------------------------------------------
+
+fn imported(path: &str, size: u64, info: Option<GgufInfo>) -> Imported {
+    Imported {
+        target: PathBuf::from(path),
+        size,
+        info,
+    }
+}
+fn llm_info() -> GgufInfo {
+    GgufInfo {
+        architecture: "llama".into(),
+        context_length: Some(32768),
+        layers: Some(32),
+        kv_heads: Some(8),
+        head_dim: Some(128),
+        has_tokenizer: true,
+        ..Default::default()
+    }
+}
+fn image_info() -> GgufInfo {
+    GgufInfo {
+        architecture: "qwen_image21".into(),
+        ..Default::default()
+    }
+}
+const BASE: &str = "[server]\nlisten = \"127.0.0.1:1234\"\n# my comment\n[gpu]\n";
+
+#[test]
+fn model_kinds_follow_the_header() {
+    assert_eq!(llm_info().kind(), Kind::Llm);
+    assert_eq!(
+        image_info().kind(),
+        Kind::Image,
+        "no tokenizer and no layers: a diffusion model"
+    );
+    let embedding = GgufInfo {
+        architecture: "nomic-bert".into(),
+        has_tokenizer: true,
+        layers: Some(12),
+        ..Default::default()
+    };
+    assert_eq!(embedding.kind(), Kind::Embedding);
+    // a header that could not be read is treated as a language model, never as an image model
+    assert!(suggest(Path::new("/m/x.gguf"), 4_000_000_000, None).contains("kind = \"llm\""));
+}
+
+#[test]
+fn update_adds_models_the_backend_and_keeps_comments() {
+    let update = update_config(
+        BASE,
+        &[imported(
+            "/var/lib/eliezer/models/a/Llama-7B_Q4.gguf",
+            4_400_000_000,
+            Some(llm_info()),
+        )],
+    )
+    .unwrap();
+    assert_eq!(update.added, vec!["llama-7b-q4"]);
+    assert!(update.backend_enabled);
+    assert!(
+        update.text.starts_with(BASE.trim_end()),
+        "existing text and comments stay as they were"
+    );
+    assert!(update.text.contains("[backend.llamacpp]\nenabled = true"));
+    let config = Config::parse(&update.text).unwrap_or_else(|e| panic!("{e}\n{}", update.text));
+    assert_eq!(config.model[0].key, "llama-7b-q4");
+    // a second run adds nothing, and the backend section is not repeated
+    let again = update_config(
+        &update.text,
+        &[imported(
+            "/var/lib/eliezer/models/a/Llama-7B_Q4.gguf",
+            4_400_000_000,
+            Some(llm_info()),
+        )],
+    )
+    .unwrap();
+    assert!(again.added.is_empty());
+    assert_eq!(again.skipped[0].1, "already configured");
+    assert_eq!(again.text, update.text, "nothing to add means no change");
+}
+
+#[test]
+fn update_makes_keys_unique_and_skips_projectors_and_image_models() {
+    let first = update_config(
+        BASE,
+        &[imported("/m/a/Model.gguf", 1_000_000_000, Some(llm_info()))],
+    )
+    .unwrap();
+    let second = update_config(
+        &first.text,
+        &[
+            imported("/m/b/Model.gguf", 1_000_000_000, Some(llm_info())),
+            imported("/m/b/mmproj-F16.gguf", 500_000_000, None),
+            imported("/m/b/qwen-image.gguf", 4_600_000_000, Some(image_info())),
+        ],
+    )
+    .unwrap();
+    assert_eq!(second.added, vec!["model-2"]);
+    assert!(
+        second
+            .skipped
+            .iter()
+            .any(|(p, why)| p.ends_with("mmproj-F16.gguf") && why.contains("projector"))
+    );
+    assert!(
+        second
+            .skipped
+            .iter()
+            .any(|(p, why)| p.ends_with("qwen-image.gguf") && why.contains("image"))
+    );
+    assert!(
+        second.notes[0].contains("# backend = \"sdcpp\"")
+            && second.notes[0].contains("not connected yet")
+    );
+    assert!(
+        !second.text.contains("qwen-image"),
+        "an image model never becomes an active entry"
+    );
+    Config::parse(&second.text).unwrap();
+    // only an image model: the configuration stays untouched, not even a backend section appears
+    let only_image = update_config(
+        BASE,
+        &[imported(
+            "/m/qwen-image.gguf",
+            4_600_000_000,
+            Some(image_info()),
+        )],
+    )
+    .unwrap();
+    assert_eq!(only_image.text, BASE);
+}
+
+#[test]
+fn update_refuses_what_it_cannot_do_safely() {
+    let disabled = format!("{BASE}[backend.llamacpp]\nenabled = false\n");
+    assert!(
+        update_config(&disabled, &[imported("/m/a.gguf", 1, Some(llm_info()))])
+            .unwrap_err()
+            .contains("disabled")
+    );
+    assert!(update_config("this is [not toml", &[]).is_err());
+}
+
+#[test]
+fn a_broken_model_list_does_not_block_loading_the_rest() {
+    // an entry whose backend is not configured: the full parse fails, the lenient one works
+    let text = format!(
+        "{BASE}[[model]]\nkey = \"x\"\nbackend = \"llamacpp\"\nsource = {{ file = \"/m/x.gguf\" }}\nkind = \"llm\"\nsize_gb = 4.6\n"
+    );
+    assert!(Config::parse(&text).is_err());
+    let (config, stripped) = Config::parse_without_models(&text).unwrap();
+    assert!(config.model.is_empty() && !stripped.contains("[[model]]"));
+    // adding the backend section repairs that entry as far as the backend goes
+    let update = update_config(
+        &text,
+        &[imported("/m/a.gguf", 1_000_000_000, Some(llm_info()))],
+    )
+    .unwrap();
+    assert!(update.backend_enabled && update.added == vec!["a"]);
+}
+
+#[test]
+fn write_config_is_atomic_and_keeps_a_backup() {
+    let t = Temp::new();
+    let path = t.file("config.toml", b"old");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+    write_config(&path, "new text").unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new text");
+    assert_eq!(
+        fs::read_to_string(t.0.join("config.toml.bak")).unwrap(),
+        "old"
+    );
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o640,
+        "the mode stays"
+    );
+    assert!(!t.0.join("config.toml.new").exists());
+    assert!(write_config(&t.0.join("missing.toml"), "x").is_err());
+}
+
+#[test]
+fn entries_pointing_at_image_models_are_reported() {
+    let t = Temp::new();
+    let image = t.file("qwen-image.gguf", &{
+        let mut file = b"GGUF".to_vec();
+        file.extend(3_u32.to_le_bytes());
+        file.extend(0_u64.to_le_bytes());
+        file.extend(1_u64.to_le_bytes());
+        text(&mut file, "general.architecture");
+        file.extend(8_u32.to_le_bytes());
+        text(&mut file, "qwen_image21");
+        file
+    });
+    let llm = t.file("llm.gguf", &gguf("llama", |_| 0));
+    let config = format!(
+        "{BASE}[[model]]\nkey = \"pasted\"\nbackend = \"llamacpp\"\nsource = {{ file = \"{}\" }}\nkind = \"llm\"\n\
+         [[model]]\nkey = \"fine\"\nbackend = \"llamacpp\"\nsource = {{ file = \"{}\" }}\nkind = \"llm\"\n\
+         [[model]]\nkey = \"gone\"\nbackend = \"llamacpp\"\nsource = {{ file = \"/does/not/exist.gguf\" }}\nkind = \"llm\"\n\
+         [[model]]\nkey = \"right\"\nbackend = \"sdcpp\"\nsource = {{ file = \"{}\" }}\nkind = \"image\"\n",
+        image.display(),
+        llm.display(),
+        image.display()
+    );
+    let found = mismatches(&config);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].key, "pasted");
+    assert!(mismatches("not toml [").is_empty());
+}
+
+// --- hybrid layouts -------------------------------------------------------------------------
+
+fn kv_list(out: &mut Vec<u8>, key: &str, inner: u32, items: &[u32]) {
+    text(out, key);
+    out.extend(9_u32.to_le_bytes());
+    out.extend(inner.to_le_bytes());
+    out.extend((items.len() as u64).to_le_bytes());
+    for item in items {
+        if inner == 7 {
+            out.push(u8::from(*item != 0));
+        } else {
+            out.extend(item.to_le_bytes());
+        }
+    }
+}
+
+/// The attention part of the Gemma 4 header (30 layers, 5 of 6 with a 1024 token window).
+fn gemma_like(out: &mut Vec<u8>) -> u64 {
+    kv_u32(out, "gemma4.block_count", 30);
+    let kv: Vec<u32> = (0..30).map(|i| if i % 6 == 5 { 2 } else { 8 }).collect();
+    // the real file stores these as int32 (type 5), not uint32
+    kv_list(out, "gemma4.attention.head_count_kv", 5, &kv);
+    kv_u32(out, "gemma4.attention.sliding_window", 1024);
+    let pattern: Vec<u32> = (0..30).map(|i| u32::from(i % 6 != 5)).collect();
+    kv_list(out, "gemma4.attention.sliding_window_pattern", 7, &pattern);
+    kv_u32(out, "gemma4.attention.key_length", 512);
+    kv_u32(out, "gemma4.attention.key_length_swa", 256);
+    6
+}
+
+/// The attention part of the Qwen3.8 header (65 layers, only every 4th keeps a KV cache).
+fn qwen_like(out: &mut Vec<u8>) -> u64 {
+    kv_u32(out, "qwen35.block_count", 65);
+    kv_u32(out, "qwen35.attention.head_count_kv", 4);
+    kv_u32(out, "qwen35.attention.key_length", 256);
+    kv_u32(out, "qwen35.full_attention_interval", 4);
+    kv_u32(out, "qwen35.ssm.conv_kernel", 4);
+    kv_u32(out, "qwen35.ssm.state_size", 128);
+    kv_u32(out, "qwen35.ssm.group_count", 16);
+    kv_u32(out, "qwen35.ssm.time_step_rank", 48);
+    kv_u32(out, "qwen35.ssm.inner_size", 6144);
+    9
+}
+
+fn estimate_bytes(block: &str, size_gb: f64, context: u32) -> u64 {
+    let head = "[server]\nlisten = \"127.0.0.1:1234\"\n[gpu]\n[backend.llamacpp]\nenabled = true\n";
+    let block = block.replace(
+        &format!("size_gb = {size_gb:.1}"),
+        &format!("size_gb = {size_gb}"),
+    );
+    let config =
+        Config::parse(&format!("{head}{block}")).unwrap_or_else(|e| panic!("{e}\n{block}"));
+    eliezer_core::memory::estimate(&config.model[0], context, 1, None, None).unwrap()
+}
+
+#[test]
+fn sliding_window_layout_is_worked_out_and_makes_the_estimate_realistic() {
+    let t = Temp::new();
+    let path = t.file("g.gguf", &gguf("gemma4", gemma_like));
+    let info = read_gguf(&path).unwrap();
+    assert_eq!(info.layers, Some(30));
+    assert_eq!((info.swa_layers, info.window), (Some(25), Some(1024)));
+    assert_eq!(
+        (info.kv_heads, info.head_dim),
+        (Some(8), Some(256)),
+        "the window layers"
+    );
+    assert_eq!(
+        (info.full_kv_heads, info.full_head_dim),
+        (Some(2), Some(512)),
+        "the full layers"
+    );
+    assert!(!info.hybrid_unresolved());
+    let target = Path::new("/var/lib/eliezer/models/gemma.gguf");
+    let block = block("gemma", target, 16_800_000_000, Some(&info));
+    assert!(
+        block.contains("swa_layers = 25, window = 1024, full_kv_heads = 2, full_head_dim = 512"),
+        "{block}"
+    );
+    assert!(!block.contains("not understood"));
+    // 16.8 GB of weights plus a small cache: far below the card, not the 49 GB of a naive estimate
+    let realistic = estimate_bytes(&block, 16.8, 32768);
+    assert!(
+        (17_000_000_000..21_000_000_000).contains(&realistic),
+        "{realistic}"
+    );
+    let naive = GgufInfo {
+        swa_layers: None,
+        window: None,
+        full_kv_heads: None,
+        full_head_dim: None,
+        kv_heads: Some(8),
+        head_dim: Some(512),
+        ..info
+    };
+    let wrong = estimate_bytes(
+        &self::block("gemma", target, 16_800_000_000, Some(&naive)),
+        16.8,
+        32768,
+    );
+    assert!(
+        wrong > 30_000_000_000,
+        "the layout is what makes the difference: {wrong}"
+    );
+}
+
+#[test]
+fn linear_attention_layout_is_worked_out_and_makes_the_estimate_realistic() {
+    let t = Temp::new();
+    let path = t.file("q.gguf", &gguf("qwen35", qwen_like));
+    let info = read_gguf(&path).unwrap();
+    assert_eq!(info.layers, Some(65));
+    assert_eq!(
+        info.linear_layers,
+        Some(49),
+        "65 layers, every 4th is full attention: 16 full"
+    );
+    // 4 bytes * (48 heads * 128 * 128 recurrent state + 3 * (6144 + 2 * 16 * 128) convolution state)
+    assert_eq!(info.state_bytes, Some(3_268_608));
+    assert_eq!((info.kv_heads, info.head_dim), (Some(4), Some(256)));
+    let block = block(
+        "qwen",
+        Path::new("/var/lib/eliezer/models/q.gguf"),
+        16_800_000_000,
+        Some(&info),
+    );
+    assert!(
+        block.contains("linear_layers = 49, state_bytes = 3268608"),
+        "{block}"
+    );
+    let realistic = estimate_bytes(&block, 16.8, 32768);
+    assert!(
+        (17_000_000_000..21_500_000_000).contains(&realistic),
+        "{realistic}"
+    );
+}
+
+#[test]
+fn announced_but_unknown_layouts_are_flagged() {
+    let t = Temp::new();
+    // a sliding window without a pattern: we cannot tell which layers use it
+    let path = t.file(
+        "w.gguf",
+        &gguf("gptoss", |out| {
+            kv_u32(out, "gptoss.attention.sliding_window", 128);
+            1
+        }),
+    );
+    let info = read_gguf(&path).unwrap();
+    assert!(info.hybrid_unresolved());
+    assert!(
+        block("w", Path::new("/m/w.gguf"), 1_000_000_000, Some(&info))
+            .contains("announced but not understood")
+    );
+}
+
+fn reasoning_line(template: Option<&str>) -> Option<String> {
+    let t = Temp::new();
+    let path = t.file(
+        "r.gguf",
+        &gguf("llama", |out| {
+            kv_u32(out, "llama.attention.head_count_kv", 8);
+            match template {
+                Some(template) => {
+                    kv_text(out, "tokenizer.chat_template", template);
+                    2
+                }
+                None => 1,
+            }
+        }),
+    );
+    let info = read_gguf(&path).unwrap();
+    let block = block(
+        "m",
+        Path::new("/var/lib/eliezer/models/m.gguf"),
+        4_000_000_000,
+        Some(&info),
+    );
+    // The block must stay valid configuration.
+    estimate_bytes(&block, 4.0, 4096);
+    block
+        .lines()
+        .find(|l| l.starts_with("reasoning"))
+        .map(str::to_owned)
+}
+
+#[test]
+fn the_chat_template_decides_the_reasoning_options() {
+    assert_eq!(reasoning_line(None), None);
+    assert_eq!(reasoning_line(Some("{{ messages }}")), None);
+    // gpt-oss: effort levels, no way to switch thinking off
+    assert_eq!(
+        reasoning_line(Some(
+            "Reasoning: {{ reasoning_effort | default('medium') }}"
+        ))
+        .unwrap(),
+        r#"reasoning = { options = ["low", "medium", "high"], default = "medium" }"#
+    );
+    // Qwen: thinking on by default
+    assert_eq!(
+        reasoning_line(Some(
+            "{% if enable_thinking is undefined or enable_thinking is true %}x{% endif %}"
+        ))
+        .unwrap(),
+        r#"reasoning = { options = ["none", "medium"], default = "medium" }"#
+    );
+    // Gemma 4: thinking off by default
+    assert_eq!(
+        reasoning_line(Some(
+            "{%- set enable_thinking = enable_thinking | default(false) -%}"
+        ))
+        .unwrap(),
+        r#"reasoning = { options = ["none", "medium"], default = "none" }"#
+    );
+    // Qwen3.8: both, with the level xhigh as the default
+    assert_eq!(
+        reasoning_line(Some(
+            "{% if enable_thinking is undefined or enable_thinking is true %}{% set reasoning_effort = reasoning_effort|default('xhigh') %}{% if reasoning_effort not in ('xhigh', 'medium', 'low') %}"
+        ))
+        .unwrap(),
+        r#"reasoning = { options = ["none", "low", "medium", "xhigh"], default = "xhigh" }"#
+    );
+}
+
+#[test]
+fn a_vision_projector_next_to_the_model_is_attached_and_valid() {
+    let t = Temp::new();
+    let model = t.file(
+        "v/model.gguf",
+        &gguf("qwen2vl", |out| {
+            kv_u32(out, "qwen2vl.attention.head_count_kv", 4);
+            1
+        }),
+    );
+    let projector = t.file("v/mmproj-model-F16.gguf", &gguf("clip", |_| 0));
+    let info = read_gguf(&model).unwrap();
+    let block = block("m", &model, 4_000_000_000, Some(&info));
+    assert!(
+        block.contains(&format!("projector = \"{}\"", projector.display())),
+        "{block}"
+    );
+    assert!(block.contains("vision = true") && block.contains("projector_gb = "));
+    // The block is valid configuration, and the projector counts toward the memory.
+    let with = estimate_bytes(&block, 4.0, 4096);
+    let without = estimate_bytes(
+        &block_with("m", &model, 4_000_000_000, Some(&info), None),
+        4.0,
+        4096,
+    );
+    assert!(with > without, "{with} vs {without}");
+    // Two projectors in one directory are ambiguous: nothing is guessed.
+    t.file("v/mmproj-other-F16.gguf", &gguf("clip", |_| 0));
+    assert!(!self::block("m", &model, 4_000_000_000, Some(&info)).contains("projector"));
+}
+
+#[test]
+fn a_vision_model_named_ocr_is_suggested_with_the_ocr_flag() {
+    let t = Temp::new();
+    let model = t.file(
+        "o/olmOCR-2-7B-Q4_K_M.gguf",
+        &gguf("qwen2vl", |out| {
+            kv_u32(out, "qwen2vl.attention.head_count_kv", 4);
+            1
+        }),
+    );
+    t.file("o/mmproj-olmOCR-2-7B-F16.gguf", &gguf("clip", |_| 0));
+    let info = read_gguf(&model).unwrap();
+    let block = block("olmocr-2-7b", &model, 4_700_000_000, Some(&info));
+    assert!(
+        block.contains("vision = true") && block.contains("ocr = true"),
+        "{block}"
+    );
+    estimate_bytes(&block, 4.7, 4096);
+    // a vision model with another name is not marked
+    let other = t.file(
+        "v/gemma-vl.gguf",
+        &gguf("qwen2vl", |out| {
+            kv_u32(out, "qwen2vl.attention.head_count_kv", 4);
+            1
+        }),
+    );
+    t.file("v/mmproj-gemma-vl-F16.gguf", &gguf("clip", |_| 0));
+    let info = read_gguf(&other).unwrap();
+    let block = self::block("gemma-vl", &other, 4_000_000_000, Some(&info));
+    assert!(
+        block.contains("vision = true") && !block.contains("ocr"),
+        "{block}"
+    );
+}

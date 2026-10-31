@@ -1,0 +1,46 @@
+[workspace]
+members = ["crates/*"]
+exclude = ["tests/runtime/llamacpp"]
+resolver = "3"
+
+[workspace.package]
+version = "0.6.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace.dependencies]
+eliezer-core = { path = "crates/eliezer-core" }
+eliezer-api = { path = "crates/eliezer-api" }
+serde = { version = "1.0", features = ["derive"] }
+serde_path_to_error = "0.1.20"
+toml = "=0.9.8"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query", "multipart"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+eliezer-backend = { path = "crates/eliezer-backend" }
+eliezer-gpu = { path = "crates/eliezer-gpu" }
+eliezer-llamacpp = { path = "crates/eliezer-llamacpp" }
+eliezer-hub = { path = "crates/eliezer-hub", default-features = false }
+eliezer-sdcpp = { path = "crates/eliezer-sdcpp" }
+eliezer-audiocpp = { path = "crates/eliezer-audiocpp" }
+eliezer-whispercpp = { path = "crates/eliezer-whispercpp" }
+eliezer-speech = { path = "crates/eliezer-speech" }
+# Decoding of uploaded audio for speech recognition; pure Rust (docs/wiki/Dependencies.md).
+symphonia = { version = "=0.5.5", default-features = false, features = ["mp3", "isomp4", "aac", "ogg", "vorbis", "flac", "wav", "pcm"] }
+rubato = "=0.16.2"
+# MP3 encoder (LAME, LGPL-3.0, built from the C sources of mp3lame-sys) for `eliezer speak --format mp3` (docs/wiki/Dependencies.md).
+mp3lame-encoder = "=0.2.5"
+# Plain HTTPS client for the Hugging Face API; rustls, no OpenSSL (docs/Dependencies.md).
+# Decodes the base64 images of chat requests (already in the dependency tree through reqwest).
+# SHA-256 of downloaded model files (checked against the hash Hugging Face lists).
+sha2 = "0.10"
+base64 = { version = "0.22", default-features = false, features = ["std"] }
+reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls"] }
+serde_json = "1.0"
+futures-core = "0.3"
+nvml-wrapper = "=0.13.0"
+minijinja = { version = "=2.24.0", features = ["json", "loop_controls", "preserve_order"] }
+minijinja-contrib = { version = "=2.24.0", features = ["pycompat"] }

@@ -1,0 +1,15 @@
+message_start
+ping
+content_block_start 0 thinking
+content_block_delta 0 thinking_delta
+content_block_stop 0
+content_block_start 1 text
+content_block_delta 1 text_delta
+content_block_delta 1 text_delta
+content_block_stop 1
+content_block_start 2 tool_use
+content_block_delta 2 input_json_delta
+content_block_delta 2 input_json_delta
+content_block_stop 2
+message_delta
+message_stop

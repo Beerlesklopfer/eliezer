@@ -1,0 +1,40 @@
+{
+  "load": {
+    "exit_code": 0,
+    "seconds": 1.556,
+    "result": {
+      "type": "llm",
+      "instance_id": "mistral-7b-instruct-v0.3-q4-k-m",
+      "load_time_seconds": 1.531231812,
+      "status": "loaded",
+      "load_config": {
+        "context_length": 4096,
+        "parallel": 1
+      }
+    }
+  },
+  "inference": {
+    "exit_code": 0,
+    "seconds": 0.373,
+    "output_received": true
+  },
+  "unload": {
+    "exit_code": 0,
+    "seconds": 0.031,
+    "result": {
+      "unloaded": [
+        "mistral-7b-instruct-v0.3-q4-k-m"
+      ]
+    }
+  },
+  "installed_version": "0.5.0-1",
+  "binary_version": "Eliezer 0.5.0",
+  "service": "active; health ok before and after test",
+  "library_resolution": "ldd /usr/bin/eliezer resolves ROCm libraries under /usr/lib/x86_64-linux-gnu/eliezer, with no unresolved dependencies",
+  "service_started": "2026-10-19 22:58:18 CEST",
+  "service_memory_maps": "not readable with current account",
+  "gpu_used_before_bytes": 1294045184,
+  "gpu_used_after_bytes": 1518493696,
+  "post_test_model_state": "unloaded",
+  "scope": "One short Mistral inference cycle; no claim about every configured model or repeated-cycle memory stability"
+}

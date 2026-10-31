@@ -1,0 +1,73 @@
+[package]
+name = "eliezer-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+eliezer-core.workspace = true
+eliezer-backend.workspace = true
+eliezer-gpu.workspace = true
+eliezer-speech.workspace = true
+eliezer-hub.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+futures-core.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+tower = { version = "0.5", features = ["util"] }
+
+[[test]]
+name = "api"
+path = "../../tests/m3/api.rs"
+
+[[test]]
+name = "anthropic"
+path = "../../tests/m3/anthropic.rs"
+
+[[test]]
+name = "contract_models"
+path = "../../tests/contract/models.rs"
+
+[[test]]
+name = "behavior"
+path = "../../tests/m3/behavior.rs"
+
+[[test]]
+name = "hub_api"
+path = "../../tests/m5/hub_api.rs"
+
+[[test]]
+name = "download_api"
+path = "../../tests/m5/download_api.rs"
+
+[[test]]
+name = "models_api"
+path = "../../tests/m6/models_api.rs"
+
+[[test]]
+name = "helper_api"
+path = "../../tests/m6/helper_api.rs"
+
+[[test]]
+name = "edits_api"
+path = "../../tests/m6/edits_api.rs"
+
+[[test]]
+name = "speech_api"
+path = "../../tests/m7/speech_api.rs"
+
+[[test]]
+name = "transcription_api"
+path = "../../tests/m8/transcription_api.rs"
+
+[[test]]
+name = "tts_api"
+path = "../../tests/m9/tts_api.rs"

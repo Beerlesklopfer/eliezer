@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    # System user of the service; GPU access comes from the groups in the unit file.
+    if ! getent passwd eliezer >/dev/null; then
+        adduser --system --group --home /var/lib/eliezer --no-create-home \
+            --gecos "Eliezer model manager" eliezer
+    fi
+
+    # The state directory, owned by the service. systemd's StateDirectory= is not used (it refuses
+    # a symbolic link), and an existing directory, link or mount point is left exactly as it is.
+    if [ ! -e /var/lib/eliezer ] && [ ! -L /var/lib/eliezer ]; then
+        install -d -o eliezer -g eliezer -m 0750 /var/lib/eliezer
+    fi
+fi
+
+#DEBHELPER#
+
+exit 0

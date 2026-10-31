@@ -1,0 +1,7 @@
+# Addition: replaces the model bind mount with a persistent volume.
+services:
+  eliezer:
+    volumes:
+      - "models:/var/lib/eliezer/models"
+volumes:
+  models:

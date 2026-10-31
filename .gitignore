@@ -1,0 +1,26 @@
+# Rust build output (also in probe programs)
+**/target/
+
+# Backups from rustfmt
+**/*.rs.bk
+
+# Python helpers of the manual checks
+**/__pycache__/
+
+# Local project state
+/docs/Status.md
+
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Temporary editor files
+*.swp
+*.swo
+*~
+
+# Cargo.lock stays versioned for this application workspace.
+
+# Local model store
+/models/

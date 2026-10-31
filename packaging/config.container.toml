@@ -1,0 +1,13 @@
+# Program framework without loaded models; model management follows in M3.
+[server]
+listen = "0.0.0.0:1234"
+[storage]
+models_dir = "/var/lib/eliezer/models"
+[gpu]
+vendor = "none"
+measure = "none"
+vram_budget_gb = 8.0
+reserve_gb = 2.0
+[huggingface]
+cache_dir = "/var/lib/eliezer/models/hf"
+downloads = "never"
