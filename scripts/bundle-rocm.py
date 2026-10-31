@@ -101,11 +101,30 @@ def main():
                     system.add(dependency.name)
         # rocBLAS and hipBLASLt load their architecture-specific code objects at runtime.
         # Preserve their complete trees, including metadata; do not infer these from ldd.
+        # Only the code objects of the target architectures go into the package (the library names the architecture in
+        # the file name, for example `..._gfx1100.co`); files without an architecture in the name are always kept.
+        # AMDGPU_TARGETS comes from scripts/build-deb.sh (the installed card); BUNDLE_ALL_ARCHS=1 keeps every architecture.
+        targets = set(os.environ.get("AMDGPU_TARGETS", "").replace(";", " ").replace(",", " ").split())
+        if os.environ.get("BUNDLE_ALL_ARCHS") == "1" or not targets:
+            keep_arch = None
+        else:
+            keep_arch = targets
+
+        def other_arch(directory, names):
+            # An entry is left out when its name carries a full architecture (gfx plus 3 or 4 hex digits) that is not a target.
+            if keep_arch is None:
+                return []
+            return [n for n in names if (found := re.findall(r"gfx[0-9a-f]{3,4}", n)) and not any(a in keep_arch for a in found)]
+
         for component in ["rocblas", "hipblaslt"]:
             source = rocm / "lib" / component
             if not source.is_dir():
                 raise RuntimeError(f"Missing kernel assets: {source}")
-            shutil.copytree(source, private / component, symlinks=False)
+            shutil.copytree(source, private / component, symlinks=False, ignore=other_arch)
+        if keep_arch is not None:
+            print(f"Kernel assets of rocBLAS and hipBLASLt: only {', '.join(sorted(keep_arch))}")
+        else:
+            print("Kernel assets of rocBLAS and hipBLASLt: all architectures")
         for library in private.glob("*.so*"):
             if not library.is_symlink():
                 subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(library)], check=True)
@@ -145,7 +164,7 @@ def main():
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
         manifest = {"directory": f"/usr/lib/{triplet}/eliezer", "libraries": copied,
-                    "kernel_assets": ["rocblas/library", "hipblaslt/library"], "system_libraries": sorted(system)}
+                    "kernel_assets": ["rocblas/library", "hipblaslt/library"], "kernel_architectures": sorted(keep_arch) if keep_arch is not None else "all", "system_libraries": sorted(system)}
         (root / "usr/share/doc/eliezer/bundled-libraries.json").write_text(json.dumps(manifest, indent=2) + "\n")
         control = root / "DEBIAN/control"
         text = control.read_text()
