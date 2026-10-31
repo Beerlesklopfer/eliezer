@@ -272,7 +272,16 @@ pub fn cmd_speak(client: &Client, parsed: &Parsed) -> Res<()> {
         let text = response
             .text()
             .map_err(|e| Failure::Request(format!("Reading the answer failed: {e}")))?;
-        return Err(api_error(client, status, &text));
+        let failure = api_error(client, status, &text);
+        return Err(match failure {
+            Failure::Request(m) if status == 400 && m.starts_with("Unknown voice") => {
+                Failure::Request(format!(
+                    "{m}{}",
+                    voice_hint(client, parsed.value("--voice"))
+                ))
+            }
+            other => other,
+        });
     }
     let pending: Pending = Arc::default();
     watch_interrupt(pending.clone());
@@ -329,6 +338,37 @@ pub fn cmd_speak(client: &Client, parsed: &Parsed) -> Res<()> {
         eprintln!("Wrote {} ({total} bytes)", path.display());
     }
     Ok(())
+}
+
+/// What to tell the user after the service did not know the voice: the voices there are and the option that names one.
+fn voice_hint(client: &Client, named: Option<&str>) -> String {
+    let names: Vec<String> = call(client, "GET", "/v1/audio/voices", None, SHORT)
+        .ok()
+        .and_then(|answer| {
+            answer["voices"].as_array().map(|l| {
+                l.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+    let given = named.map_or_else(
+        || {
+            "No voice was named, and the voice that the model's settings name is not there."
+                .to_owned()
+        },
+        |v| format!("There is no voice named \"{v}\"."),
+    );
+    if names.is_empty() {
+        format!(
+            "\n{given}\nThere are no voices yet. Add one with `eliezer voices add NAME FILE`, then name it with --voice NAME."
+        )
+    } else {
+        format!(
+            "\n{given}\nVoices: {}\nName one with --voice NAME (list them with `eliezer voices`).",
+            names.join(", ")
+        )
+    }
 }
 
 /// Removes the half-written `.part` file, if there is one.

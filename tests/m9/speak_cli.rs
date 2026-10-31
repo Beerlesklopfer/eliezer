@@ -167,6 +167,11 @@ fn service(types: &[(&str, &str)], pieces: Vec<Vec<u8>>, complete: bool) -> Fake
     let list = models(types);
     serve(Box::new(move |r, stream| match r.path.as_str() {
         "/api/v1/models" => json_reply(stream, "200 OK", &list),
+        "/v1/audio/speech" if r.json()["voice"] == "nobody" => json_reply(
+            stream,
+            "400 Bad Request",
+            &json!({"error": {"message": "Unknown voice (see GET /v1/audio/voices)", "type": "invalid_request"}}),
+        ),
         "/v1/audio/speech" => {
             let _ = stream_head(stream);
             for piece in &pieces {
@@ -761,6 +766,22 @@ fn help_of_a_command_shows_that_command_only() {
     }
     let o = with_host(&fake, &["help", "nonsense"]).output().unwrap();
     assert_eq!(code(&o), 2, "{}", err(&o));
+}
+
+#[test]
+fn an_unknown_voice_is_answered_with_the_voices_there_are() {
+    let fake = tts();
+    let o = speak(
+        &fake,
+        &["--text", "Hallo", "--voice", "nobody", "--out", "-"],
+    );
+    assert_eq!(code(&o), 1, "{}", err(&o));
+    let message = err(&o);
+    assert!(message.contains("Unknown voice"), "{message}");
+    assert!(message.contains("\"nobody\""), "{message}");
+    assert!(message.contains("Voices: mama, papa"), "{message}");
+    assert!(message.contains("--voice NAME"), "{message}");
+    assert!(o.stdout.is_empty());
 }
 
 #[test]
