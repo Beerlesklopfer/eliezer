@@ -25,7 +25,8 @@ eliezer-speech.workspace = true
 mp3lame-encoder.workspace = true
 eliezer-backend.workspace = true
 eliezer-gpu.workspace = true
-eliezer-hub.workspace = true
+# The real client for huggingface.co (the feature `http` of the crate, off in the workspace default).
+eliezer-hub = { workspace = true, features = ["http"] }
 eliezer-sdcpp.workspace = true
 eliezer-audiocpp.workspace = true
 eliezer-whispercpp.workspace = true

@@ -15,7 +15,7 @@ eliezer-core.workspace = true
 eliezer-backend.workspace = true
 eliezer-gpu.workspace = true
 eliezer-speech.workspace = true
-eliezer-hub = { workspace = true, default-features = false }
+eliezer-hub.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 futures-core.workspace = true

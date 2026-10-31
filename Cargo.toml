@@ -23,7 +23,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 eliezer-backend = { path = "crates/eliezer-backend" }
 eliezer-gpu = { path = "crates/eliezer-gpu" }
 eliezer-llamacpp = { path = "crates/eliezer-llamacpp" }
-eliezer-hub = { path = "crates/eliezer-hub" }
+eliezer-hub = { path = "crates/eliezer-hub", default-features = false }
 eliezer-sdcpp = { path = "crates/eliezer-sdcpp" }
 eliezer-audiocpp = { path = "crates/eliezer-audiocpp" }
 eliezer-whispercpp = { path = "crates/eliezer-whispercpp" }
