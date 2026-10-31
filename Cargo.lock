@@ -324,6 +324,7 @@ dependencies = [
  "eliezer-hub",
  "eliezer-llamacpp",
  "eliezer-sdcpp",
+ "eliezer-speech",
  "eliezer-whispercpp",
  "serde_json",
  "tokio",

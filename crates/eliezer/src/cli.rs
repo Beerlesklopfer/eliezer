@@ -107,9 +107,12 @@ Commands (they use the HTTP API of the running service):
   voices | --list-voices          List the voices of speech synthesis
   voices add NAME FILE [--replace] [--transcript TEXT]
   voices add --name NAME --file AUDIO [--file TEXTFILE] [--replace]
+  voices add ... --start TIME --length TIME
                                   Add a voice from a recording (any audio file); --transcript gives
                                   the words spoken in it, --file with a .txt file does the same from
-                                  a file (--file is given for the audio and for the text)
+                                  a file (--file is given for the audio and for the text). --start and
+                                  --length (seconds, or MM:SS, or HH:MM:SS) cut a part out of a long
+                                  recording here, before the upload
   voices rm NAME                  Remove a voice
   search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]
                                   Search Hugging Face for model candidates (nothing is downloaded).
@@ -398,7 +401,7 @@ fn spec_for(command: &str) -> Spec {
             positional: (0, 0),
         },
         "voices" => Spec {
-            values: &["--transcript", "--name", "--file"],
+            values: &["--transcript", "--name", "--file", "--start", "--length"],
             flags: &["--replace"],
             positional: (0, 3),
         },

@@ -531,7 +531,7 @@ The `eliezer` binary is also a client of the running service (synchronous HTTP/1
 | `search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]` | `GET /api/v1/hub/search` | candidate repositories on Hugging Face; nothing is downloaded |
 | `inspect ORG/REPO` | `GET /api/v1/hub/models/{org}/{repo}` | files, quantizations, backend support and fit of one repository |
 | `speak [--model KEY] [--voice NAME] [--language CODE] [--speed F] [--seed N] [--format wav\|pcm] [--text TEXT \| --file FILE] [--out PATH\|-] [--replace]` | `GET /api/v1/models`, `POST /v1/audio/speech` (`stream = true`) | the audio, while it is made |
-| `voices` (alias `--list-voices`), `voices add [--name NAME] [NAME] [FILE] [--file AUDIO] [--file TEXTFILE] [--replace] [--transcript TEXT]`, `voices rm NAME` | `GET`/`POST /v1/audio/voices`, `DELETE /v1/audio/voices/{name}` | the voice names, one per line |
+| `voices` (alias `--list-voices`), `voices add [--name NAME] [NAME] [FILE] [--file AUDIO] [--file TEXTFILE] [--start TIME] [--length TIME] [--replace] [--transcript TEXT]`, `voices rm NAME` | `GET`/`POST /v1/audio/voices`, `DELETE /v1/audio/voices/{name}` | the voice names, one per line |
 | `transcribe PATH... --out DIR [--model KEY] [--language CODE] [--format txt,srt,vtt,json] [--prompt TEXT] [--prompt-file FILE] [--recursive] [--extensions LIST] [--replace] [--dry-run] [--limit N] [--timeout-secs N]` | `GET /api/v1/models` (only without `--model`), `POST /v1/audio/transcriptions` per file | `<name>.txt/.srt/.vtt/.json` below `DIR`; progress and summary on stderr |
 | `listen [--model KEY] [--language CODE] [--prompt TEXT \| --prompt-file FILE] [--rate N] [--channels N] [--min-silence-ms N] [--source -\|FILE] [--json]` | `POST /v1/audio/transcriptions/stream` (specified, not built) |
 | `help` | – | overview |
@@ -545,7 +545,7 @@ complete (a WAV gets its real sizes then), refuses an existing file without `--r
 stream fails or on Ctrl-C; a named pipe (found by its file type) is opened for writing when the service has accepted the request and
 is written block by block, without `.part` and rename; a missing path is created as a regular file. A broken pipe (the reader quit,
 for example `head -c`) ends quietly with exit 0 after the connection is closed, which stops the synthesis. A stream that ends
-without the closing chunk is exit 1. `voices add` uploads the recording as the endpoint expects it (the name is `--name` or the first word; `--file` may be given twice, once for the recording and once for a `.txt` file with the words spoken in it, which becomes the transcript; a service that refuses the upload early, for example with `413`, has its message shown); the library is the
+without the closing chunk is exit 1. `voices add` uploads the recording as the endpoint expects it (the name is `--name` or the first word; `--file` may be given twice, once for the recording and once for a `.txt` file with the words spoken in it, which becomes the transcript; `--start` and `--length` (seconds, `MM:SS` or `HH:MM:SS`) cut a part out of a long recording in the command, with the decoder of the service (no ffmpeg), and upload it as a mono WAV at 24 kHz, so the upload limits of the service apply to the part; a service that refuses the upload early, for example with `413`, has its message shown); the library is the
 service's (names only, no paths). Eliezer writes `wav` and `pcm` only; mp3 and flac are made by sox or ffmpeg.
 
 `transcribe` works through a collection of audio files, one request at a time (the service serves one speech job at

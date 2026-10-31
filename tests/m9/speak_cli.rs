@@ -798,6 +798,65 @@ fn voices_add_takes_the_recording_and_the_text_with_file() {
     assert_eq!(code(&o), 2, "{}", err(&o));
 }
 
+/// The WAV file inside an upload.
+fn uploaded_wav(body: &[u8]) -> &[u8] {
+    let at = body.windows(4).position(|w| w == b"RIFF").unwrap();
+    let end = body
+        .windows(2)
+        .rposition(|w| w == b"\r\n")
+        .unwrap_or(body.len());
+    let tail = &body[at..];
+    // the multipart closing boundary follows the file
+    let boundary_at = tail.windows(4).rposition(|w| w == b"\r\n--").unwrap_or(end);
+    &tail[..boundary_at]
+}
+
+#[test]
+fn voices_add_cuts_a_part_with_start_and_length() {
+    let dir = scratch("add-cut");
+    let file = dir.join("long.wav");
+    // ten seconds at 16 kHz; the value of a sample is its second, so the part can be recognized
+    let samples: Vec<i16> = (0..160_000_u32)
+        .map(|i| (i / 16_000) as i16 * 1000)
+        .collect();
+    fs::write(&file, eliezer_speech::wav_at(&samples, 16_000)).unwrap();
+    let f = file.to_str().unwrap();
+    let fake = tts();
+    let o = voices(
+        &fake,
+        &[
+            "add", "--name", "x", "--file", f, "--start", "0:02", "--length", "3",
+        ],
+    );
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    let sent = fake
+        .requests()
+        .into_iter()
+        .find(|r| r.method == "POST")
+        .unwrap();
+    let wav = uploaded_wav(&sent.body);
+    // three seconds at 24 kHz, 16 bit, behind a 44 byte header
+    assert_eq!(wav.len(), 44 + 3 * 24_000 * 2);
+    let sample = |n: usize| i16::from_le_bytes([wav[44 + 2 * n], wav[45 + 2 * n]]);
+    assert!(
+        (1500..=2500).contains(&sample(12_000)),
+        "{}",
+        sample(12_000)
+    );
+    assert!(
+        (3500..=4500).contains(&sample(60_000)),
+        "{}",
+        sample(60_000)
+    );
+    // a start behind the end, a bad time and a length of 0 are usage errors
+    for args in [["--start", "20"], ["--start", "x"], ["--length", "0"]] {
+        let mut all = vec!["add", "--name", "x", "--file", f];
+        all.extend_from_slice(&args);
+        let o = voices(&fake, &all);
+        assert_eq!(code(&o), 2, "{args:?}: {}", err(&o));
+    }
+}
+
 #[test]
 fn an_upload_refused_early_shows_the_answer_of_the_service() {
     // The service answers 413 and closes before the body has been read; the command shows the answer, not a

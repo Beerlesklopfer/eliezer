@@ -77,6 +77,49 @@ fn multipart(fields: &[(&str, &str)], file: &[u8], file_name: &str) -> (String, 
 /// The voice name, the recording and the transcript from the command line. The name is `--name` or the first word
 /// after `add`; the files are the other words and every `--file`, each a recording or, with the extension `.txt`,
 /// the file with the words spoken in it.
+/// The rate of the part that is uploaded; the service converts it to its own sample rate.
+const CUT_RATE: u32 = 24_000;
+/// The longest part that is cut when only `--start` is given.
+const CUT_MAX_SECONDS: u64 = 600;
+
+/// A time as seconds, minutes and seconds, or hours, minutes and seconds: `90`, `1:30`, `0:01:30.5`.
+fn parse_time(option: &str, text: &str) -> Res<f64> {
+    let bad = || Failure::Usage(format!("{option} is a time such as 90, 1:30 or 0:01:30"));
+    let mut seconds = 0.0_f64;
+    for part in text.split(':') {
+        let value: f64 = part.parse().map_err(|_| bad())?;
+        if !value.is_finite() || value < 0.0 {
+            return Err(bad());
+        }
+        seconds = seconds * 60.0 + value;
+    }
+    Ok(seconds)
+}
+
+/// The part of the recording that `--start` and `--length` name, as a WAV file.
+fn cut(parsed: &Parsed, data: Vec<u8>) -> Res<Vec<u8>> {
+    let start = parsed
+        .value("--start")
+        .map_or(Ok(0.0), |t| parse_time("--start", t))?;
+    let length = parsed
+        .value("--length")
+        .map(|t| parse_time("--length", t))
+        .transpose()?;
+    if length == Some(0.0) {
+        return usage_err("--length must be more than 0");
+    }
+    let limit = length.map_or(CUT_MAX_SECONDS, |l| l.ceil() as u64);
+    match eliezer_speech::decode_window(data, limit, CUT_RATE, start, length) {
+        Ok(samples) => Ok(eliezer_speech::wav_at(&samples, CUT_RATE)),
+        Err(eliezer_speech::DecodeError::NotAudio) => usage_err(
+            "The recording is not audio this program can read, or --start is behind its end",
+        ),
+        Err(eliezer_speech::DecodeError::TooLong) => usage_err(format!(
+            "The part is longer than {CUT_MAX_SECONDS} s; give --length"
+        )),
+    }
+}
+
 fn add_arguments(parsed: &Parsed, rest: &[&str]) -> Res<(String, String, Option<String>)> {
     let (name, words) = match parsed.value("--name") {
         Some(name) => (name, rest),
@@ -110,8 +153,11 @@ fn add(client: &Client, json: bool, parsed: &Parsed, rest: &[&str]) -> Res<()> {
     let (name, file, transcript) = add_arguments(parsed, rest)?;
     let (name, file) = (name.as_str(), file.as_str());
     check_name(name)?;
-    let data = fs::read(file)
+    let mut data = fs::read(file)
         .map_err(|e| Failure::Usage(format!("Cannot read the recording {file}: {e}")))?;
+    if parsed.value("--start").is_some() || parsed.value("--length").is_some() {
+        data = cut(parsed, data)?;
+    }
     let replace = if parsed.flag("--replace") {
         "true"
     } else {

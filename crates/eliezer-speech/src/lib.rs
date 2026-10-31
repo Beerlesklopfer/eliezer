@@ -40,7 +40,25 @@ pub fn decode(bytes: Vec<u8>, max_seconds: u64) -> Result<Vec<i16>, DecodeError>
 
 /// Like [`decode`], with the result at `rate` Hz (a voice sample is stored at the rate of the speech model).
 pub fn decode_at(bytes: Vec<u8>, max_seconds: u64, rate: u32) -> Result<Vec<i16>, DecodeError> {
+    decode_window(bytes, max_seconds, rate, 0.0, None)
+}
+
+/// Like [`decode_at`], but only the part that starts `start` seconds into the recording and lasts `length` seconds
+/// (to the end when `None`). `max_seconds` limits the part, not the recording, and the part before `start` is
+/// dropped as it is decoded, so a long recording needs no more memory than a short one. A `start` behind the end
+/// leaves nothing and is [`DecodeError::NotAudio`].
+pub fn decode_window(
+    bytes: Vec<u8>,
+    max_seconds: u64,
+    rate: u32,
+    start: f64,
+    length: Option<f64>,
+) -> Result<Vec<i16>, DecodeError> {
     let target = rate;
+    let samples_of = |seconds: f64| (seconds.max(0.0) * f64::from(target)).round() as usize;
+    let (start_n, length_n) = (samples_of(start), length.map(samples_of));
+    let mut dropped = 0_usize;
+    let mut cut = false;
     let source = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
     let probed = symphonia::default::get_probe()
         .format(
@@ -110,12 +128,31 @@ pub fn decode_at(bytes: Vec<u8>, max_seconds: u64, rate: u32) -> Result<Vec<i16>
                 r.feed(&mono, &mut out);
             }
         }
+        if dropped < start_n {
+            let drop = (start_n - dropped).min(out.len());
+            out.drain(..drop);
+            dropped += drop;
+        }
+        if let Some(n) = length_n
+            && out.len() >= n
+        {
+            out.truncate(n);
+            cut = true;
+            break;
+        }
         if out.len() > limit {
             return Err(DecodeError::TooLong);
         }
     }
-    if let Some(r) = resampler.as_mut() {
+    if !cut && let Some(r) = resampler.as_mut() {
         r.finish(&mut out);
+        if dropped < start_n {
+            let drop = (start_n - dropped).min(out.len());
+            out.drain(..drop);
+        }
+    }
+    if let Some(n) = length_n {
+        out.truncate(n);
     }
     if out.len() > limit {
         return Err(DecodeError::TooLong);
