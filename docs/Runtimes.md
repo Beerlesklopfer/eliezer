@@ -234,7 +234,7 @@ private directory, the form, error mapping and crashes against it.
 
 ## audio.cpp `audiocpp_server`: speech synthesis with voice cloning (read 2026-10-31, commit 18bba55)
 
-Nothing below was run: the program was built with the music model only and no speech model was downloaded. What was **verified** is the
+The paragraphs below up to "Live check" were written from the source before the program was run; the live check (2026-10-31) follows them and says which statements it confirmed. What was **verified** from the source is the
 source of audio.cpp at the pinned commit `18bba55495c8991bbbfe7625234d4d8dbc6e82f4` (fetched over HTTPS and read: `app/server/README.md`,
 `app/server/api.md`, `app/server/server_protocol.cpp`, `app/server/runtime.cpp`, `examples/server/README.md`, `docs/tts.md`,
 `docs/models/cosyvoice3.md`, `model_specs/chatterbox.json`, `model_specs/cosyvoice3.json`, `src/models/chatterbox/loader.cpp`,
@@ -287,21 +287,38 @@ Verified against the source:
   (2 257 658 336 bytes) and `cosyvoice3-f32.gguf`. Fetch with `eliezer download audio-cpp/audio.cpp-gguf Chatterbox-GGUF/chatterbox-q8_0.gguf`
   (the repository must be on `huggingface.allow`).
 
-Not verified (needs a model and the binary):
+**Live check, 2026-10-31** (workstation with a Radeon RX 7900 XTX, gfx1100, ROCm; `AUDIOCPP_MODELS=minimax_music3,chatterbox
+scripts/build-audiocpp.sh` gives a 231 MB `audiocpp_server`; model `Chatterbox-GGUF/chatterbox-q8_0.gguf`, 2 088 399 204 bytes, from
+`audio-cpp/audio.cpp-gguf`; a test service on a loopback port with `kind = "tts"`, `extra = { family = "chatterbox", language = "de" }`):
 
-- That `audiocpp_server` accepts a `.gguf` file as `path` for Chatterbox. The Kokoro/Pocket examples and `docs/gguf.md` say GGUF files are
-  single-file packages, and `audio-cpp/audio.cpp-gguf` publishes Chatterbox that way, but the loader (`src/models/chatterbox/assets.cpp`)
-  was not read to the end.
-- The sample rate and channels of the answer, and that all passages of one request have the same format (the service refuses to join
-  parts that differ and answers 502; a stream ends with an aborted connection). The service does not assume 24 kHz: it reads the rate from
-  the first passage's WAV and reports it in `X-Audio-Sample-Rate`. Also not verified: that dropping the HTTP request to `audiocpp_server`
-  (a client that went away) stops the program's work on that passage.
+- **Confirmed:** `audiocpp_server` accepts the single `.gguf` file as the model path and lists it as `family: chatterbox`, `task: tts`,
+  `loaded: true`. A request without a voice fails inside the program with HTTP 500 `Chatterbox prepare requires speaker reference audio`
+  (Chatterbox has no default speaker; see `requires_voice`). With a voice (a 26 s mono 24 kHz recording, mean level -24.5 dB, peak -7.1 dB,
+  put in the voice library with `eliezer voices add`) it speaks German.
+- **Format:** the answer is a WAV of 24 000 Hz, 1 channel, 16 bit (`X-Audio-Sample-Rate: 24000`, `X-Audio-Channels: 1`, `X-Audio-Bits: 16`).
+  The level of the output (mean -23.3 dB, peak -7.2 dB) follows the reference.
+- **Speed:** two sentences (7.5 s of audio) took 3.9 s with the model loaded; a poem of 5 176 characters in 20 stanzas (5 min 45 s of audio, about
+  20 passages) took 94 s, that is 3.7 times faster than real time.
+- **Streaming:** with `stream = true` the first bytes arrived after 3.0 s for a text of 1 500 characters (27 s for the whole answer without
+  streaming), the response is chunked and carries the headers above; `eliezer speak --out - | ffmpeg -f wav -i - ...` made an MP3 of the poem
+  and the first audio reached the converter after 0.9 s while the rest was still being made. (A first try against a service built before the
+  streaming commits answered with `content-length` and one body: `stream` is ignored by an older build.)
+- **Read back:** the speech recognition of the same service read the synthesized sentence back almost word for word (the spelling of 1799 is kept:
+  "Tirannen"); two words came back changed ("Möros" as "Myros", "Häscher" as "Hescher"), which points to the pronunciation of umlauts in
+  that model. The owner listened to the reference, to two verses and to the whole poem and found the result good.
+
+Not verified (the live check did not cover these):
+
+- That all passages of one request have the same format (the service refuses to join parts that differ and answers 502; a stream ends with
+  an aborted connection), and that dropping the HTTP request to `audiocpp_server` (a client that went away) stops the program's work on that
+  passage and frees the GPU. Playback in `sox` and `mpv` (`ffmpeg`, `ffplay` and `pw-play` were used).
 - That a changing `seed` or the same `seed` for different passages and voices is accepted: the spec says the cloning settings, including
   `seed`, are "captured during clone preparation; changing it on the same prepared session is rejected". The service sends the same
   `seed` for every passage of a request and nothing otherwise; a request with another seed for the same voice may be refused by the program
   (it would show as a 400). To be tested live.
-- Memory (`vram_gb = 4.0` of the example is an estimate for the q8_0 file of 2.1 GB plus the decoders), speed, and the quality of
-  German speech with a cloned voice (a listening test with a real parent's recording decides between Chatterbox and CosyVoice3).
+- Memory: `vram_gb = 4.0` of the example is still an estimate for the q8_0 file of 2.1 GB plus the decoders (not measured). The quality of
+  German speech with a cloned voice was judged by ear by the owner for one voice only (good); a comparison with CosyVoice3 and a voice of
+  a parent who agreed to it is open.
 - **Ming-3.0-TTS and XTTS v2 are not available at the pinned commit.** `audio-cpp/Ming-3.0-TTS-0.5B-GGUF` (MIT, `ming-3.0-tts-0.5b-q8_0.gguf`
   and `-bf16.gguf`) was published on 2026-10-21, two days after the commit (2026-10-19), and there is no model target or spec for it in the
   source; the commit has to be moved before it can be tried. XTTS v2 does not appear anywhere in audio.cpp (no target, no spec, no GGUF
