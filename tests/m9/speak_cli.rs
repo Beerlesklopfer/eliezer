@@ -639,7 +639,7 @@ fn wrong_usage_is_exit_2_and_sends_nothing() {
         vec!["--out", "-"],
         vec!["--text", "  \n", "--out", "-"],
         vec!["--text", "a", "--file", "b", "--out", "-"],
-        vec!["--text", "a", "--format", "mp3", "--out", "-"],
+        vec!["--text", "a", "--format", "flac", "--out", "-"],
         vec!["--text", "a", "--speed", "9", "--out", "-"],
         vec!["--text", "a", "--seed", "x", "--out", "-"],
         vec!["--text", "a", "--language", "German", "--out", "-"],
@@ -782,6 +782,47 @@ fn an_unknown_voice_is_answered_with_the_voices_there_are() {
     assert!(message.contains("Voices: mama, papa"), "{message}");
     assert!(message.contains("--voice NAME"), "{message}");
     assert!(o.stdout.is_empty());
+}
+
+#[test]
+fn the_format_mp3_encodes_the_stream() {
+    let dir = scratch("mp3");
+    let fake = tts();
+    let target = dir.join("out.mp3");
+    let o = speak(
+        &fake,
+        &[
+            "--text",
+            "Hallo",
+            "--format",
+            "mp3",
+            "--out",
+            target.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    // the service is asked for wav, the file is mp3: a frame sync (or an ID3 tag) opens it
+    assert_eq!(fake.speeches()[0].json()["response_format"], "wav");
+    let file = fs::read(&target).unwrap();
+    assert!(file.len() > 100, "{} bytes", file.len());
+    assert!(
+        file.starts_with(b"ID3") || (file[0] == 0xFF && file[1] & 0xE0 == 0xE0),
+        "{:02x?}",
+        &file[..4]
+    );
+    assert!(!file.starts_with(b"RIFF"));
+    // it decodes again, to about the length that was sent (1750 samples at 8 kHz = 3500 at 16 kHz)
+    let decoded = eliezer_speech::decode(file.clone(), 10).unwrap();
+    assert!((3000..6000).contains(&decoded.len()), "{}", decoded.len());
+    // the same to stdout
+    let o = speak(&fake, &["--text", "Hallo", "--format", "mp3", "--out", "-"]);
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    assert_eq!(o.stdout, file);
+    // a stream that is not WAV is an error, not noise
+    let bad = service(&[("tts", "reader")], vec![pattern(3000, 1)], true);
+    let o = speak(&bad, &["--text", "Hallo", "--format", "mp3", "--out", "-"]);
+    assert_eq!(code(&o), 1, "{}", err(&o));
+    assert!(err(&o).contains("not 16 bit PCM WAV"), "{}", err(&o));
 }
 
 #[test]

@@ -5,6 +5,8 @@ eliezer (0.6.0) UNRELEASED; urgency=low
     keeps all): the ROCm package is 1.05 GB (1.76 GB unpacked) instead of 2.99 GB (6.8 GB) for `gfx1100`, so it installs on a root
     file system with a few GB free. Bundle `whisper-server` (built statically, license text included) and take the model families of
     `audiocpp_server` from `AUDIOCPP_MODELS`. No model is part of the package. INSTALL.MD says how to turn on the speech kinds.
+  * Add `eliezer speak --format mp3` (alias `say`): the command encodes the WAV stream of the service to MP3 with LAME
+    (`mp3lame-encoder`, 96 kbit/s) while the audio arrives. New dependency, LGPL-3.0, listed in docs/wiki/Dependencies.md.
   * Add `eliezer transcribe PATH... --out DIR`: transcribes audio files (or directories, with `--recursive`) one after the other
     through `POST /v1/audio/transcriptions` and writes `txt`, `srt`, `vtt` and `json` outputs built from one `verbose_json`
     answer. Existing outputs are kept (resumable), outputs are written atomically, `--dry-run`, `--limit`, `--replace`,

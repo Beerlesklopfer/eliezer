@@ -31,6 +31,8 @@ eliezer-speech = { path = "crates/eliezer-speech" }
 # Decoding of uploaded audio for speech recognition; pure Rust (docs/wiki/Dependencies.md).
 symphonia = { version = "=0.5.5", default-features = false, features = ["mp3", "isomp4", "aac", "ogg", "vorbis", "flac", "wav", "pcm"] }
 rubato = "=0.16.2"
+# MP3 encoder (LAME, LGPL-3.0, built from the C sources of mp3lame-sys) for `eliezer speak --format mp3` (docs/wiki/Dependencies.md).
+mp3lame-encoder = "=0.2.5"
 # Plain HTTPS client for the Hugging Face API; rustls, no OpenSSL (docs/Dependencies.md).
 # Decodes the base64 images of chat requests (already in the dependency tree through reqwest).
 # SHA-256 of downloaded model files (checked against the hash Hugging Face lists).

@@ -22,6 +22,7 @@ cpu = ["llamacpp", "eliezer-llamacpp/cpu"]
 eliezer-core.workspace = true
 eliezer-api.workspace = true
 eliezer-speech.workspace = true
+mp3lame-encoder.workspace = true
 eliezer-backend.workspace = true
 eliezer-gpu.workspace = true
 eliezer-hub.workspace = true

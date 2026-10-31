@@ -1,7 +1,8 @@
 //! `eliezer speak`: reads a text aloud through `POST /v1/audio/speech` with `stream = true` and copies the audio
 //! to standard output, a regular file or a named pipe while it arrives, so that `sox`, `ffmpeg` or `play` can take it
-//! over. Eliezer encodes nothing: `wav` (with an open length) and `pcm` are the only formats.
-use super::{Client, Failure, Parsed, Res, SHORT, api_error, call, transport, usage_err};
+//! over. The service writes `wav` (with an open length) and `pcm`; `mp3` is made here from the WAV stream, block by
+//! block, by [`super::mp3`].
+use super::{Client, Failure, Parsed, Res, SHORT, api_error, call, mp3, transport, usage_err};
 use serde_json::{Map, Value, json};
 use std::{
     ffi::OsString,
@@ -72,7 +73,7 @@ fn sink(parsed: &Parsed) -> Res<Sink> {
             if parsed.value("--out").is_none() && io::stdout().is_terminal() {
                 return usage_err(
                     "Standard output is a terminal; the audio would not be readable. Pipe it, for example\n\
-                     `eliezer speak --file text.txt | sox -t wav - -t mp3 text.mp3` or `| play -t wav -`,\n\
+                     `eliezer speak --file text.txt --format mp3 > text.mp3` or `| play -t wav -`,\n\
                      or name a file with --out PATH (or --out - to write to the terminal anyway)",
                 );
             }
@@ -249,9 +250,9 @@ fn request(parsed: &Parsed, model: String, text: String, format: &str) -> Res<Va
 
 pub fn cmd_speak(client: &Client, parsed: &Parsed) -> Res<()> {
     let format = parsed.value("--format").unwrap_or("wav");
-    if format != "wav" && format != "pcm" {
+    if !["wav", "pcm", "mp3"].contains(&format) {
         return usage_err(
-            "--format is wav or pcm (use sox or ffmpeg to make mp3, flac or other formats)",
+            "--format is wav, pcm or mp3 (use sox or ffmpeg for flac or other formats)",
         );
     }
     if let Some(l) = parsed.value("--language")
@@ -262,7 +263,13 @@ pub fn cmd_speak(client: &Client, parsed: &Parsed) -> Res<()> {
     let sink = sink(parsed)?;
     let text = read_text(parsed)?;
     let model = resolve_model(client, parsed.value("--model"))?;
-    let body = request(parsed, model, text, format)?;
+    // The service makes wav; mp3 is encoded from it here.
+    let body = request(
+        parsed,
+        model,
+        text,
+        if format == "mp3" { "wav" } else { format },
+    )?;
 
     let response = client
         .send("POST", "/v1/audio/speech", Some(&body.to_string()), WAIT)
@@ -289,9 +296,31 @@ pub fn cmd_speak(client: &Client, parsed: &Parsed) -> Res<()> {
     let mut reader = response.into_reader();
     let mut block = vec![0_u8; BLOCK];
     let mut total = 0_u64;
+    let mut mp3 = (format == "mp3").then(mp3::Mp3Encoder::new);
+    let mut encoded: Vec<u8> = Vec::new();
     let outcome: Result<(), Failure> = loop {
         let n = match reader.read(&mut block) {
-            Ok(0) => break Ok(()),
+            Ok(0) => {
+                // The last MP3 frames.
+                let Some(encoder) = mp3.as_mut() else {
+                    break Ok(());
+                };
+                encoded.clear();
+                if let Err(m) = encoder.finish(&mut encoded) {
+                    break Err(Failure::Request(m));
+                }
+                match sink.write_block(&encoded) {
+                    Ok(()) => break Ok(()),
+                    Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                        drop(reader);
+                        discard(&sink, &pending);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        break Err(Failure::Request(format!("Writing the audio failed: {e}")));
+                    }
+                }
+            }
             Ok(n) => n,
             // The service ends a failed stream without the closing chunk, so a cut stream is an error here and
             // never a short file that looks complete.
@@ -301,8 +330,18 @@ pub fn cmd_speak(client: &Client, parsed: &Parsed) -> Res<()> {
                 )));
             }
         };
-        match sink.write_block(&block[..n]) {
-            Ok(()) => total += n as u64,
+        let piece: &[u8] = match mp3.as_mut() {
+            Some(encoder) => {
+                encoded.clear();
+                if let Err(m) = encoder.push(&block[..n], &mut encoded) {
+                    break Err(Failure::Request(m));
+                }
+                &encoded
+            }
+            None => &block[..n],
+        };
+        match sink.write_block(piece) {
+            Ok(()) => total += piece.len() as u64,
             // The reader quit (for example `head -c`): nothing is wrong, stop asking for more. Dropping the
             // connection tells the service to stop the synthesis.
             Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {

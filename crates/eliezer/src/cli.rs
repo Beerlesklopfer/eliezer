@@ -3,6 +3,7 @@
 //! of the service is started.
 mod format;
 mod http;
+mod mp3;
 mod speak_cmd;
 mod transcribe;
 mod transcribe_cmd;
@@ -90,7 +91,7 @@ Commands (they use the HTTP API of the running service):
   speak | say [OPTIONS]           Read a text aloud (speech synthesis) and write the audio while it is
                                   made. The text comes from --text, --file or standard input; the audio
                                   goes to standard output, so `| sox -t wav - -t mp3 out.mp3` or
-                                  `| play -t wav -` take it over (Eliezer itself writes wav and pcm only)
+                                  `| play -t wav -` take it over; --format mp3 makes an mp3 here
       --text TEXT                 The text
       --file FILE                 Read the text from a file (- is standard input)
       --model KEY                 Speech synthesis model (default: the only tts model of the service)
@@ -99,7 +100,8 @@ Commands (they use the HTTP API of the running service):
       --language CODE             Language code such as de (default: the model's setting)
       --speed F                   Speed from 0.25 to 4
       --seed N                    Seed for a repeatable reading
-      --format wav|pcm            wav (default, with an open length) or raw 16 bit mono samples
+      --format wav|pcm|mp3        wav (default, with an open length), raw 16 bit mono samples, or mp3
+                                  (96 kbit/s, encoded here while the audio arrives)
       --out PATH|-                A file (written as PATH.part and renamed; --replace overwrites), a
                                   named pipe (written into as it is), or - for standard output
                                   (the default; refused on a terminal unless --out - is given)
