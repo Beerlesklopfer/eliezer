@@ -689,6 +689,24 @@ fn a_service_that_is_not_there_is_exit_3() {
     assert!(o.stdout.is_empty());
 }
 
+#[test]
+fn a_dash_as_the_file_reads_stdin() {
+    let fake = tts();
+    let mut child = with_host(&fake, &["speak", "--file", "-", "--out", "-"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all("Hallo Jörg".as_bytes())
+        .unwrap();
+    let o = child.wait_with_output().unwrap();
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    assert_eq!(fake.speeches()[0].json()["input"], "Hallo Jörg");
+}
+
 // ---- voices ----------------------------------------------------------------------------------
 
 fn voices(fake: &Fake, args: &[&str]) -> Output {
@@ -706,6 +724,14 @@ fn voices_lists_the_names() {
     let o = with_host(&fake, &["--json", "voices"]).output().unwrap();
     let parsed: Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(parsed, json!({"voices": ["mama", "papa"]}));
+}
+
+#[test]
+fn list_voices_is_an_alias_of_voices() {
+    let fake = tts();
+    let o = with_host(&fake, &["--list-voices"]).output().unwrap();
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "mama\npapa\n");
 }
 
 #[test]

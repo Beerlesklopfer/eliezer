@@ -164,22 +164,25 @@ fn close_wav(file: &mut File, total: u64) -> io::Result<()> {
     file.flush()
 }
 
+fn read_stdin() -> Res<String> {
+    if io::stdin().is_terminal() {
+        eprintln!("Reading the text from the terminal; end it with Ctrl-D.");
+    }
+    let mut text = String::new();
+    io::stdin()
+        .read_to_string(&mut text)
+        .map_err(|e| Failure::Usage(format!("Cannot read the text from stdin: {e}")))?;
+    Ok(text)
+}
+
 fn read_text(parsed: &Parsed) -> Res<String> {
     let text = match (parsed.value("--text"), parsed.value("--file")) {
         (Some(_), Some(_)) => return usage_err("Give --text or --file, not both"),
         (Some(text), None) => text.to_owned(),
+        // `--file -` reads stdin, as usual for command line tools.
+        (None, Some("-")) | (None, None) => read_stdin()?,
         (None, Some(file)) => fs::read_to_string(file)
             .map_err(|e| Failure::Usage(format!("Cannot read the text file {file}: {e}")))?,
-        (None, None) => {
-            if io::stdin().is_terminal() {
-                eprintln!("Reading the text from the terminal; end it with Ctrl-D.");
-            }
-            let mut text = String::new();
-            io::stdin()
-                .read_to_string(&mut text)
-                .map_err(|e| Failure::Usage(format!("Cannot read the text from stdin: {e}")))?;
-            text
-        }
     };
     if text.trim().is_empty() {
         return usage_err("There is no text to read; give --text, --file or text on stdin");

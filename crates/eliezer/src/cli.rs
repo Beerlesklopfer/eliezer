@@ -92,7 +92,7 @@ Commands (they use the HTTP API of the running service):
                                   goes to standard output, so `| sox -t wav - -t mp3 out.mp3` or
                                   `| play -t wav -` take it over (Eliezer itself writes wav and pcm only)
       --text TEXT                 The text
-      --file FILE                 Read the text from a file
+      --file FILE                 Read the text from a file (- is standard input)
       --model KEY                 Speech synthesis model (default: the only tts model of the service)
       --voice NAME                A voice of `eliezer voices` (default: the model's setting; a model
                                   without a speaker of its own, such as Chatterbox, needs one)
@@ -104,7 +104,7 @@ Commands (they use the HTTP API of the running service):
                                   named pipe (written into as it is), or - for standard output
                                   (the default; refused on a terminal unless --out - is given)
       --replace                   Overwrite an existing file
-  voices                          List the voices of speech synthesis
+  voices | --list-voices          List the voices of speech synthesis
   voices add NAME FILE [--replace] [--transcript TEXT]
                                   Add a voice from a recording (any audio file); --transcript gives
                                   the words spoken in it
@@ -194,7 +194,7 @@ fn usage_err<T>(message: impl Into<String>) -> Res<T> {
 /// Recognizes `eliezer [--config X|--host X|--key-file X|--json]... COMMAND ...`.
 /// Returns `None` when the arguments belong to the service (flags only).
 pub fn dispatch() -> Option<ExitCode> {
-    let args: Vec<String> = std::env::args_os()
+    let mut args: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|a| a.into_string())
         .collect::<Result<_, _>>()
@@ -212,6 +212,10 @@ pub fn dispatch() -> Option<ExitCode> {
             }
             _ => break,
         }
+    }
+    // `--list-voices` in the place of the command word is an alias for `voices`.
+    if args.get(i).is_some_and(|a| a == "--list-voices") {
+        args[i] = "voices".to_owned();
     }
     let word = args.get(i).filter(|a| !a.starts_with('-'))?;
     let code = match run(word, &args, i) {
