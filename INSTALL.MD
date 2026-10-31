@@ -168,7 +168,9 @@ Reading a text aloud (needs a `tts` model and, for a cloned voice, a voice added
 
 ```bash
 eliezer voices add mama mama-sample.wav --transcript "Es war einmal."   # the voices are listed by: eliezer voices
-eliezer speak --voice mama --file kapitel.txt | sox -t wav - -t mp3 kapitel.mp3
+eliezer voices add --name mama --file long.mp3 --file mama.txt --start 5:00 --length 30   # cut 30 s out of a long recording
+eliezer speak --voice mama --file kapitel.txt --format mp3 -o kapitel.mp3      # `say` is a synonym of `speak`
+echo "Hallo Jörg" | eliezer say --file - --voice mama | play -t wav -
 eliezer speak --voice mama --file kapitel.txt | play -t wav -           # listen while it is read
 eliezer speak --voice mama --file kapitel.txt --out kapitel.wav         # a plain WAV file
 mkfifo /tmp/speech.fifo; sox -t wav /tmp/speech.fifo -t flac kapitel.flac &   # a named pipe
@@ -176,8 +178,9 @@ eliezer speak --voice mama --file kapitel.txt --out /tmp/speech.fifo
 ```
 
 The audio is written while the text is read, passage by passage, so a player starts after the first sentences. Eliezer
-produces `wav` and raw `pcm` (`--format pcm`) only: **mp3, flac and other formats are made by sox or ffmpeg**, not by
-Eliezer. On a pipe the WAV has an open length, which sox, ffmpeg and mpv read until the end; a file named with `--out`
+produces `wav`, raw `pcm` (`--format pcm`) and `mp3` (`--format mp3`, encoded by the command with LAME at 96 kbit/s):
+**flac and other formats are made by sox or ffmpeg**. A voice sample is limited by the service (`voice_max_file_mb`, `voice_max_seconds`);
+`--start` and `--length` of `voices add` cut a part out of a longer recording before the upload. `eliezer COMMAND --help` shows one command. On a pipe the WAV has an open length, which sox, ffmpeg and mpv read until the end; a file named with `--out`
 gets the real sizes. If a passage fails after the audio has started, the command exits with 1 (a file is not left behind).
 
 Transcribing a collection of recordings (needs an `stt` model; see `eliezer help` for all options):
