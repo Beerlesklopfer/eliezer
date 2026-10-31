@@ -225,9 +225,22 @@ kernel assets under `/usr/lib/x86_64-linux-gnu/eliezer/` (the native Debian mult
 triplet is detected at build time). Every bundled ELF uses a package-relative search
 path; the installed binary does not require `/opt/rocm` or `LD_LIBRARY_PATH`.
 License notices and a library manifest are installed under `/usr/share/doc/eliezer/`.
-The package is several GB because GPU kernel data is included. Standard Debian
-libraries remain apt dependencies; the kernel driver and GPU device permissions
+rocBLAS and hipBLASLt ship GPU code objects for every architecture. The package keeps only those of the
+target architecture: `AMDGPU_TARGETS` (by default the installed card, read with `rocminfo`; several names are
+separated by spaces) selects them, and `BUNDLE_ALL_ARCHS=1` keeps every architecture. Measured on 2026-10-31 for
+`gfx1100`: the package is 1.05 GB (1.76 GB unpacked); with every architecture it was 2.99 GB (6.8 GB unpacked).
+`dpkg` unpacks the new files next to the old ones, so check the free space on `/` before installing a package; when
+it is short, remove the old package first (`sudo dpkg -r eliezer`; the configuration and the models stay).
+Standard Debian libraries remain apt dependencies; the kernel driver and GPU device permissions
 remain host requirements.
+
+The ROCm package carries the runtimes of the model kinds as programs in `/usr/libexec/<triplet>/eliezer/`:
+`sd-server` (images), `audiocpp_server` (music and speech synthesis) and `whisper-server` (speech recognition),
+each with its license text in `/usr/share/doc/eliezer/`. `SKIP_SDCPP=1`, `SKIP_AUDIOCPP=1` and `SKIP_WHISPERCPP=1`
+leave one out. The model families that `audiocpp_server` contains are a build setting: `AUDIOCPP_MODELS`
+(comma separated, default `minimax_music3`; `AUDIOCPP_MODELS=minimax_music3,chatterbox scripts/build-deb.sh rocm`
+adds speech synthesis with voice cloning). **No model is part of any package**: models are fetched with
+`eliezer download` into `storage.models_dir`.
 
 For building the ROCm 7.2 variant, install AMD's matching SDK on the build machine
 (default `/opt/rocm`, overridden by `ROCM_PATH`), plus `python3`, `patchelf`,
@@ -244,6 +257,26 @@ to a little less than the card's memory; the default of 8 GB refuses larger mode
 `sudo systemctl enable --now eliezer` and check it with `eliezer status`. Removing the package keeps the configuration; purging
 removes it. The user and `/var/lib/eliezer` (models) are always kept.
 `tests/deb/check-package.sh` checks this life cycle in a clean Debian container.
+
+### Turning on speech recognition and speech synthesis
+
+The package installs the programs but changes no configuration (an existing `/etc/eliezer/config.toml` is kept), so
+the order is: install the package, edit the configuration, restart, fetch the models. `/usr/share/doc/eliezer/examples/config.example.toml`
+holds the blocks to copy (commented out):
+
+1. **Speech recognition:** the blocks `[backend.whispercpp]` and `[[model]]` with `kind = "stt"`, and
+   `cstr/whisper-large-v3-turbo-german-ggml` in `[huggingface] allow`. Then, as your user,
+   `eliezer download cstr/whisper-large-v3-turbo-german-ggml ggml-model-q5_0.bin` (0.6 GB).
+2. **Speech synthesis:** the blocks `[backend.audiocpp]` and `[[model]]` with `kind = "tts"`, and
+   `audio-cpp/audio.cpp-gguf` in `[huggingface] allow`. Then
+   `eliezer download audio-cpp/audio.cpp-gguf Chatterbox-GGUF/chatterbox-q8_0.gguf` (2.1 GB). Chatterbox has no speaker
+   of its own: keep `requires_voice = true` and add a voice (a recording of 10 to 30 seconds of one person, with that
+   person's consent) with `eliezer voices add NAME RECORDING.wav`. The voice library is `<storage.models_dir>/voices`
+   (or `[backend.audiocpp] voices_dir`), owned by the service user; it is not part of the package and survives upgrades.
+3. `sudo systemctl restart eliezer`, then `eliezer ls` lists the models (type `stt` or `tts`).
+
+An older installed program does not know the keys of a newer kind (for example `requires_voice`): the check of the
+configuration then refuses it with "Unknown field". Install the package first, edit the configuration second.
 
 ## Running as a systemd service
 

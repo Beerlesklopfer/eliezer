@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the Eliezer program the way the ROCm package contains it and, on request, swaps it into the installed
-# system. For a change of the program alone this replaces a rebuild of the 2.9 GB package. A change of the
+# system. For a change of the program alone this replaces a rebuild of the package (about 1 GB with the kernel files of one architecture). A change of the
 # libraries, of sd-server, of the unit file, the default configuration or the maintainer scripts needs the package
 # (scripts/build-deb.sh).
 #

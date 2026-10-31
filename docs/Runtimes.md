@@ -211,7 +211,7 @@ Build (from the README of whisper.cpp and the CMake options of ggml; not run her
 call the option `GGML_HIPBLAS`; ROCm development files are needed, the same as for audio.cpp), `-DGGML_CUDA=1` for NVIDIA, none
 of them for the CPU. Then `cmake --build build -j --config Release --target whisper-server`; the binary is `build/bin/whisper-server`.
 `scripts/build-whispercpp.sh` builds the tag v1.9.5 (`d2a764c`) with HIP for the installed card into `target/whispercpp` (the same way as
-`scripts/build-audiocpp.sh`; nothing is installed). Bundling the program in the ROCm package is not written yet.
+`scripts/build-audiocpp.sh`; nothing is installed). `scripts/build-deb.sh rocm` bundles the program as `/usr/libexec/<triplet>/eliezer/whisper-server` (`SKIP_WHISPERCPP=1` leaves it out); checked 2026-10-31: the package contains it, with the license text, and it was run from the installed package.
 
 **Live check, 2026-10-30** (workstation with a Radeon RX 7900 XTX, gfx1100, ROCm; model `cstr/whisper-large-v3-turbo-german-ggml`,
 `ggml-model-q5_0.bin`, fetched by `eliezer download`): the program takes the 16 kHz mono 16 bit WAV of the service and finds the card

@@ -12,7 +12,7 @@ result exists yet.
 ## Bundled ROCm runtime
 
 The package script calls `scripts/bundle-rocm.py`: private shared-library closure,
-HIP runtime compiler, complete rocBLAS/hipBLASLt kernel assets, package-relative
+HIP runtime compiler, rocBLAS/hipBLASLt kernel assets (only those of `AMDGPU_TARGETS`, the installed card by default; `BUNDLE_ALL_ARCHS=1` keeps every architecture), package-relative
 RUNPATHs, license notices, manifest and updated package checksums/installed size.
 `check-package.sh` exposes no host ROCm or AMD directory and rejects unresolved
 libraries or paths under `/opt`. It exercises install/start/reload/reinstall/remove.
