@@ -141,6 +141,19 @@ stop_grace_secs = 15                   # how long the program gets to end after 
 # flash_attn = true                    # optional: --flash-attn / --no-flash-attn; without it the program's default applies
 # gpu_device = 0                       # optional: --device
 # library_path = [...]                 # as for sdcpp
+# Live speech input (POST /v1/audio/transcriptions/stream, section 5.3; specified, not built yet). Every value is a setting:
+# [backend.whispercpp.live]
+# max_streams = 2                      # streams at the same time (1 to 64); more are refused with 429
+# max_stream_minutes = 60              # the longest stream (1 to 1440)
+# max_pending_secs = 60                # audio that may wait for recognition; above it the stream ends with the error "overloaded" (5 to 600)
+# idle_timeout_secs = 30               # no incoming bytes for this long ends the stream with "done" (1 to 3600)
+# min_speech_ms = 250                  # speech shorter than this is no phrase (50 to 5000)
+# min_silence_ms = 600                 # a pause of this length ends a phrase (100 to 5000); a request may set its own within the range
+# preroll_ms = 200                     # audio kept before the start of a phrase (0 to 2000)
+# max_segment_secs = 25                # a phrase is cut at the quietest point after this long (5 to 60)
+# energy_threshold_db = "auto"         # "auto" follows the noise floor of the stream, or a fixed level (-80 to -10)
+# carry_context_chars = 200            # the end of the recognized text goes to the next phrase as its prompt (0 to 1000)
+# a model may name a VAD model file of the model store in extra.vad_model (a Silero ggml file); each phrase request then carries vad=true
 
 [[model]]
 key = "qwen/qwen3-coder-30b"           # name used by MultiGPT
@@ -450,6 +463,50 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
   - Scheduling: the job takes the GPU slot like a music job (one picture, song or transcription at a time; language models then
     run on the CPU, section 7a), unless the model is set to `device = "cpu"`: then it is placed in RAM like a language model on the
     CPU (`[cpu] ram_budget_gb`), starts with `--no-gpu` and does not wait for the GPU.
+- `POST /v1/audio/transcriptions/stream` (**live speech input**; **specified on 2026-10-31, not built yet**) for models with `kind = "stt"`: the
+  client sends raw PCM while it speaks and receives the text of each phrase as soon as it is recognized. It is the counterpart of
+  `POST /v1/audio/speech` with `"stream": true` and `pcm`, so that a small device (a Raspberry Pi with a microphone and a speaker) can talk to
+  Eliezer in both directions with raw samples.
+  - Request: `Content-Type: audio/pcm` with the parameters `rate` (8000 to 48000, default 16000), `channels` (1 or 2, default 1) and `format`
+    (`s16le`, the only one in the first version), either as media type parameters (`audio/pcm; rate=16000; channels=1; format=s16le`) or as query
+    parameters of the same names (the query wins). Further query parameters: `model` (can be left out when exactly one `stt` model exists),
+    `language`, `prompt`, `min_silence_ms`. The body is a chunked request body (HTTP/1.1 `Transfer-Encoding: chunked`) that ends when the
+    client closes it. Another content type is `415`, a wrong parameter `400`, an unknown model `404`, too many streams `429`
+    (`max_streams`), a model that does not transcribe `400`; these are ordinary statuses before the first byte.
+  - Response: `200` with `Content-Type: application/x-ndjson`, chunked, sent **while the request body is still arriving** (full duplex on one
+    HTTP/1.1 connection: the client reads and writes at the same time, and a proxy that buffers bodies breaks it). One JSON object per line:
+    `{"type":"segment","id":0,"start":1.2,"end":4.8,"text":"..."}` (seconds since the start of the stream, as in `verbose_json`),
+    `{"type":"error","code":"overloaded|too_long|backend","message":"..."}` (the stream ends after it), and at the end
+    `{"type":"done","duration":123.4,"segments":17}`. The final `done` line is also sent when the client closed the body or the idle time ran out
+    (`idle_timeout_secs`), after the audio that was still waiting has been recognized.
+  - Cutting into phrases (no new dependency): an energy detector with hysteresis on 16 kHz mono (stereo is mixed down, other rates are resampled
+    with `rubato`, as for uploads). The level that counts as speech follows the noise floor measured in the stream (`energy_threshold_db = "auto"`)
+    or is fixed. A phrase starts after `min_speech_ms` of speech, contains `preroll_ms` of the audio before it, and ends after `min_silence_ms` of
+    silence, or at `max_segment_secs` (then cut at the quietest point of the last second, so a word is not split in the middle of a vowel).
+  - Recognition: each phrase goes to the program as one request (the path of uploads: 16 kHz mono 16 bit WAV, `verbose_json`, `split_on_word`),
+    with the last `carry_context_chars` characters of the text recognized so far as its `prompt` (continuity of names and spelling). When the model
+    names `extra.vad_model`, each request carries `vad=true`, so the program's own detector drops phrases without speech; this is the guard against
+    the hallucinations on silent or noisy stretches that the round trip of 2026-10-31 showed (an insertion of 11 words in one read-back). A phrase
+    without text is not sent. The times of a segment are the offset of its phrase plus the time in the program's answer.
+  - Scheduling: **a stream does not hold the GPU.** Each phrase takes the GPU slot (section 7a) like a short transcription and gives it back, so other
+    jobs run between two phrases; waiting phrases are recognized in order. With `device = "cpu"` the stream runs in RAM and never waits for the GPU.
+  - Limits (all settings of `[backend.whispercpp.live]`): `max_streams`, `max_stream_minutes` (the stream ends with `too_long`), `max_pending_secs`
+    (when the recognition is slower than the input, audio piles up; above the limit the stream ends with `overloaded`, it never drops audio
+    silently), `idle_timeout_secs`, `max_segment_secs`. Permissions are those of the other endpoints (API keys).
+  - Privacy: the audio is never written to disk and never logged; the log carries the model, the duration, the number of segments and the end reason.
+  - Latency: a phrase appears `min_silence_ms` after the speaker stopped plus the recognition time. **Measured** on the Radeon RX 7900 XTX with the
+    German large-v3-turbo q5 model: 4 min 11 s of speech were recognized in 4.1 s and 53 min 48 s in 49 s (about 60 times real time), so a
+    phrase of 5 to 10 s needs well under half a second: about 1 s after the end of a sentence. On a CPU with a small model it is several times the
+    length of a phrase (**not measured**).
+  - **Not verified yet** (to probe when it is built): that the server (axum 0.8 on hyper) really answers while it is still reading the request body
+    (if not, WebSocket is the alternative, with the `ws` feature of axum and one more dependency); the energy detector on real recordings (noise,
+    music, several speakers, very quiet speech); the memory of a long stream; the behaviour of common reverse proxies.
+  - Tests (the bench, no network and no GPU): the fake `whisper-server` of `tests/m8`; synthetic PCM (silence, tones, noise bursts, speech-like
+    bursts) for the phrase boundaries (`min_speech_ms`, `min_silence_ms`, `preroll_ms`, the cut at `max_segment_secs`), the adaptive threshold, the carried
+    context in the `prompt`, `vad=true` only when `extra.vad_model` is set, back-pressure with a slow fake (`overloaded`, nothing dropped before it),
+    `idle_timeout_secs`, `max_stream_minutes`, `429` above `max_streams`, a disconnect that drops the pending phrases, the release of the GPU slot between
+    two phrases (another job proceeds in between), the parsing of `audio/pcm` (rates, channels, a wrong format, the query wins), the mix-down and
+    the resampling, an error line followed by the end of the stream, and that no audio reaches the log.
 - Streaming statistics: in the last SSE chunk of the chat response additionally `"eliezer": {"ttft_ms", "gen_ms",
   "tokens"}` (MultiGPT measures on its own and ignores it; Eliezer serves as a cross-check).
 
@@ -474,8 +531,9 @@ The `eliezer` binary is also a client of the running service (synchronous HTTP/1
 | `search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]` | `GET /api/v1/hub/search` | candidate repositories on Hugging Face; nothing is downloaded |
 | `inspect ORG/REPO` | `GET /api/v1/hub/models/{org}/{repo}` | files, quantizations, backend support and fit of one repository |
 | `speak [--model KEY] [--voice NAME] [--language CODE] [--speed F] [--seed N] [--format wav\|pcm] [--text TEXT \| --file FILE] [--out PATH\|-] [--replace]` | `GET /api/v1/models`, `POST /v1/audio/speech` (`stream = true`) | the audio, while it is made |
-| `voices`, `voices add NAME FILE [--replace] [--transcript TEXT]`, `voices rm NAME` | `GET`/`POST /v1/audio/voices`, `DELETE /v1/audio/voices/{name}` | the voice names, one per line |
+| `voices` (alias `--list-voices`), `voices add NAME FILE [--replace] [--transcript TEXT]`, `voices rm NAME` | `GET`/`POST /v1/audio/voices`, `DELETE /v1/audio/voices/{name}` | the voice names, one per line |
 | `transcribe PATH... --out DIR [--model KEY] [--language CODE] [--format txt,srt,vtt,json] [--prompt TEXT] [--prompt-file FILE] [--recursive] [--extensions LIST] [--replace] [--dry-run] [--limit N] [--timeout-secs N]` | `GET /api/v1/models` (only without `--model`), `POST /v1/audio/transcriptions` per file | `<name>.txt/.srt/.vtt/.json` below `DIR`; progress and summary on stderr |
+| `listen [--model KEY] [--language CODE] [--prompt TEXT \| --prompt-file FILE] [--rate N] [--channels N] [--min-silence-ms N] [--source -\|FILE] [--json]` | `POST /v1/audio/transcriptions/stream` (specified, not built) |
 | `help` | – | overview |
 
 `speak` reads the text from `--text`, `--file` or standard input (the limit `max_input_chars` is the service's: it answers `413`) and
@@ -509,6 +567,15 @@ the failed files; with `--json` a JSON summary goes to stdout. A failing file do
 end); a vanished service (connection refused) stops it after the current file with exit 3. One request waits at
 most 6 hours (`--timeout-secs` changes it). Ctrl-C removes the `.part` file, prints the summary so far and exits
 with 130.
+
+`listen` (specified on 2026-10-31, not built yet) reads raw PCM (`s16le`, `--rate` and `--channels` as the input has them, default 16000 and 1) from standard
+input or from `--source FILE` and sends it while it arrives; each phrase is printed on its own line on standard output as soon as it is recognized
+(`--json`: the lines of the service as received), messages go to standard error. The command ends when the input ends (the audio still waiting is
+recognized first) with exit code 0; Ctrl-C ends the stream and prints what is pending; the codes are those of the other commands (3 service not
+reachable, 1 error line of the service). `arecord -t raw -f S16_LE -r 16000 -c 1 | eliezer listen` listens on a Raspberry Pi; together with
+`eliezer speak --format pcm` and a language model it is the loop of a voice assistant:
+`arecord ... | eliezer listen | <assistant> | eliezer speak --format pcm | aplay -t raw -f S16_LE -r 24000 -c 1`. Stopping the speech when the
+user starts to talk (barge-in) belongs to the assistant, not to Eliezer.
 
 Global options: `--host URL` (else `ELIEZER_HOST`, else `server.listen` of the configuration with
 `0.0.0.0` read as `127.0.0.1`, else `http://127.0.0.1:1234`), `--key-file PATH` (else
