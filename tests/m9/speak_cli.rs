@@ -727,6 +727,27 @@ fn voices_lists_the_names() {
 }
 
 #[test]
+fn help_of_a_command_shows_that_command_only() {
+    let fake = tts();
+    for args in [&["voices", "--help"][..], &["help", "voices"][..]] {
+        let o = with_host(&fake, args).output().unwrap();
+        assert_eq!(code(&o), 0, "{}", err(&o));
+        let text = String::from_utf8_lossy(&o.stdout).into_owned();
+        assert!(
+            text.contains("voices add") && text.contains("voices rm"),
+            "{text}"
+        );
+        assert!(text.contains("--start"), "{text}");
+        assert!(
+            !text.contains("speak [OPTIONS]") && !text.contains("Service options"),
+            "{text}"
+        );
+    }
+    let o = with_host(&fake, &["help", "nonsense"]).output().unwrap();
+    assert_eq!(code(&o), 2, "{}", err(&o));
+}
+
+#[test]
 fn list_voices_is_an_alias_of_voices() {
     let fake = tts();
     let o = with_host(&fake, &["--list-voices"]).output().unwrap();

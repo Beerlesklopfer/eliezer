@@ -105,14 +105,17 @@ Commands (they use the HTTP API of the running service):
                                   (the default; refused on a terminal unless --out - is given)
       --replace                   Overwrite an existing file
   voices | --list-voices          List the voices of speech synthesis
-  voices add NAME FILE [--replace] [--transcript TEXT]
-  voices add --name NAME --file AUDIO [--file TEXTFILE] [--replace]
-  voices add ... --start TIME --length TIME
-                                  Add a voice from a recording (any audio file); --transcript gives
-                                  the words spoken in it, --file with a .txt file does the same from
-                                  a file (--file is given for the audio and for the text). --start and
-                                  --length (seconds, or MM:SS, or HH:MM:SS) cut a part out of a long
-                                  recording here, before the upload
+  voices add NAME FILE [OPTIONS]  Add a voice from a recording (any audio file the service can read)
+  voices add --name NAME --file AUDIO [--file TEXTFILE] [OPTIONS]
+                                  The same with options; --file is given for the recording and, with a
+                                  .txt file, for the words spoken in it
+      --name NAME                 The name of the voice (letters, digits, - and _)
+      --file FILE                 The recording, or a .txt file with the words spoken in it
+      --transcript TEXT           The words spoken, as text (instead of a .txt file)
+      --start TIME                Cut the part that starts here out of a long recording, before the
+                                  upload; TIME is seconds, MM:SS or HH:MM:SS
+      --length TIME               The length of that part (the service takes up to 120 s by default)
+      --replace                   Overwrite a voice of that name
   voices rm NAME                  Remove a voice
   search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]
                                   Search Hugging Face for model candidates (nothing is downloaded).
@@ -184,7 +187,10 @@ fn command_usage(command: &str) -> String {
     if let Some(first) = lines.next() {
         out.push_str(first);
         out.push('\n');
-        for line in lines.take_while(|l| indent(l) > 2) {
+        // The indented lines that follow, and further entries of the same command (`voices add ...`).
+        for line in lines.take_while(|l| {
+            indent(l) > 2 || (indent(l) == 2 && l.split_whitespace().next() == Some(command))
+        }) {
             out.push_str(line);
             out.push('\n');
         }
@@ -435,6 +441,11 @@ fn spec_for(command: &str) -> Spec {
             flags: &["--stats"],
             positional: (1, 2),
         },
+        "help" => Spec {
+            values: &[],
+            flags: &[],
+            positional: (0, 1),
+        },
         _ => Spec {
             values: &[],
             flags: &[],
@@ -459,7 +470,19 @@ fn run(command: &str, args: &[String], at: usize) -> Res<()> {
         other => other,
     })?;
     if command == "help" || parsed.flag("--help") {
-        println!("{}", usage());
+        // `eliezer COMMAND --help` and `eliezer help COMMAND` show that command only; the whole text otherwise.
+        let topic = if command == "help" {
+            parsed.positional.first().map(String::as_str)
+        } else {
+            Some(command)
+        };
+        match topic.map(command_usage).filter(|text| !text.is_empty()) {
+            Some(text) => print!("{text}"),
+            None if topic.is_some() && command == "help" => {
+                return usage_err(format!("No help for '{}'", parsed.positional[0]));
+            }
+            None => println!("{}", usage()),
+        }
         return Ok(());
     }
     let json = parsed.flag("--json");

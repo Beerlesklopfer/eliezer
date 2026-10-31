@@ -619,7 +619,14 @@ fn usage_errors_exit_with_2_and_help_lists_the_commands() {
         assert_eq!(code(&o), 2, "{args:?}: {}", err(&o));
         assert!(err(&o).contains("eliezer help"), "{args:?}");
     }
-    for args in [vec!["help"], vec!["--help"], vec!["ls", "--help"]] {
+    // `COMMAND --help` and `help COMMAND` show that command only
+    for args in [vec!["ls", "--help"], vec!["help", "ls"]] {
+        let o = eliezer(&args, &[], None);
+        assert_eq!(code(&o), 0);
+        assert!(out(&o).contains("List the configured models"), "{args:?}");
+        assert!(!out(&o).contains("List the loaded models"), "{args:?}");
+    }
+    for args in [vec!["help"], vec!["--help"]] {
         let o = eliezer(&args, &[], None);
         assert_eq!(code(&o), 0);
         for word in [
