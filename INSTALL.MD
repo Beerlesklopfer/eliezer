@@ -180,6 +180,16 @@ produces `wav` and raw `pcm` (`--format pcm`) only: **mp3, flac and other format
 Eliezer. On a pipe the WAV has an open length, which sox, ffmpeg and mpv read until the end; a file named with `--out`
 gets the real sizes. If a passage fails after the audio has started, the command exits with 1 (a file is not left behind).
 
+Transcribing a collection of recordings (needs an `stt` model; see `eliezer help` for all options):
+
+```bash
+eliezer transcribe ~/Audio/interviews --recursive --out ~/Texts --language de --prompt-file names.txt
+eliezer transcribe talk.mp3 --out . --format srt,vtt --dry-run    # only list what would happen
+```
+
+One file after the other; outputs that exist are kept, so an interrupted run is repeated with the same command.
+Progress and a summary go to stderr; exit code 1 if a file failed.
+
 `run` prints the answer while it is generated. Reasoning ("thinking") text is dimmed on a terminal
 and goes to stderr when the output is piped, so stdout holds only the answer. `--stats` prints the
 token statistics to stderr. Further options: `--system TEXT`, `--temperature F`, `--max-tokens N`,

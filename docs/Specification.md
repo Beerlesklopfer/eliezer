@@ -475,6 +475,7 @@ The `eliezer` binary is also a client of the running service (synchronous HTTP/1
 | `inspect ORG/REPO` | `GET /api/v1/hub/models/{org}/{repo}` | files, quantizations, backend support and fit of one repository |
 | `speak [--model KEY] [--voice NAME] [--language CODE] [--speed F] [--seed N] [--format wav\|pcm] [--text TEXT \| --file FILE] [--out PATH\|-] [--replace]` | `GET /api/v1/models`, `POST /v1/audio/speech` (`stream = true`) | the audio, while it is made |
 | `voices`, `voices add NAME FILE [--replace] [--transcript TEXT]`, `voices rm NAME` | `GET`/`POST /v1/audio/voices`, `DELETE /v1/audio/voices/{name}` | the voice names, one per line |
+| `transcribe PATH... --out DIR [--model KEY] [--language CODE] [--format txt,srt,vtt,json] [--prompt TEXT] [--prompt-file FILE] [--recursive] [--extensions LIST] [--replace] [--dry-run] [--limit N] [--timeout-secs N]` | `GET /api/v1/models` (only without `--model`), `POST /v1/audio/transcriptions` per file | `<name>.txt/.srt/.vtt/.json` below `DIR`; progress and summary on stderr |
 | `help` | – | overview |
 
 `speak` reads the text from `--text`, `--file` or standard input (the limit `max_input_chars` is the service's: it answers `413`) and
@@ -488,6 +489,26 @@ is written block by block, without `.part` and rename; a missing path is created
 for example `head -c`) ends quietly with exit 0 after the connection is closed, which stops the synthesis. A stream that ends
 without the closing chunk is exit 1. `voices add` uploads the recording as the endpoint expects it; the library is the
 service's (names only, no paths). Eliezer writes `wav` and `pcm` only; mp3 and flac are made by sox or ffmpeg.
+
+`transcribe` works through a collection of audio files, one request at a time (the service serves one speech job at
+a time). A `PATH` is a file (taken whatever its extension) or a directory, which is searched for the extensions
+of `--extensions` (default `mp3,m4a,aac,ogg,oga,opus,flac,wav`; hidden files and directories are ignored, sub-directories
+only with `--recursive`, which keeps the relative directory structure below `--out`). `--out` is required; nothing
+is written anywhere else. For each file `<stem>` the outputs `<out>/<stem>.<format>` are written, by default all
+four. The client asks for `verbose_json` once per file and builds `txt` (one segment per line), `srt`, `vtt` (with
+the `WEBVTT` header) and `json` (the answer as received) from it, so a file is transcribed once however many formats
+are wanted. The upload is `multipart/form-data` with the file name quoted as browsers do (a comma, a space or an
+umlaut is no problem). The model is `--model`, else the only `stt` model of `GET /api/v1/models`; none or several is
+a usage error (exit 2). The hint words come from `--prompt` or `--prompt-file`. An existing output is never
+overwritten unless `--replace`; a file whose outputs for all requested formats exist is skipped, so a run can be
+repeated after an interruption (nothing is requested at all when everything exists). Each output is written as
+`<name>.part` and renamed. `--dry-run` lists what would be done and sends nothing; `--limit N` stops after `N`
+transcribed files (skipped files do not count). One progress line per file goes to stderr (index/total, name, audio
+length, seconds taken, speed factor, outcome), then a summary with the counts, the total audio and wall time and
+the failed files; with `--json` a JSON summary goes to stdout. A failing file does not stop the run (exit 1 at the
+end); a vanished service (connection refused) stops it after the current file with exit 3. One request waits at
+most 6 hours (`--timeout-secs` changes it). Ctrl-C removes the `.part` file, prints the summary so far and exits
+with 130.
 
 Global options: `--host URL` (else `ELIEZER_HOST`, else `server.listen` of the configuration with
 `0.0.0.0` read as `127.0.0.1`, else `http://127.0.0.1:1234`), `--key-file PATH` (else
