@@ -764,6 +764,18 @@ fn help_of_a_command_shows_that_command_only() {
 }
 
 #[test]
+fn say_is_an_alias_of_speak() {
+    let fake = tts();
+    let o = with_host(&fake, &["say", "--text", "Hallo", "--out", "-"])
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    assert_eq!(fake.speeches()[0].json()["input"], "Hallo");
+    let o = with_host(&fake, &["say", "--help"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&o.stdout).contains("speak | say"));
+}
+
+#[test]
 fn list_voices_is_an_alias_of_voices() {
     let fake = tts();
     let o = with_host(&fake, &["--list-voices"]).output().unwrap();

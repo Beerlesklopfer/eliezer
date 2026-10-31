@@ -87,7 +87,7 @@ Commands (they use the HTTP API of the running service):
       --max-tokens N              Limit the answer length
       --reasoning LEVEL           none, low, medium or high
       --stats                     Print token statistics at the end (to stderr)
-  speak [OPTIONS]                 Read a text aloud (speech synthesis) and write the audio while it is
+  speak | say [OPTIONS]           Read a text aloud (speech synthesis) and write the audio while it is
                                   made. The text comes from --text, --file or standard input; the audio
                                   goes to standard output, so `| sox -t wav - -t mp3 out.mp3` or
                                   `| play -t wav -` take it over (Eliezer itself writes wav and pcm only)
@@ -224,9 +224,11 @@ pub fn dispatch() -> Option<ExitCode> {
             _ => break,
         }
     }
-    // `--list-voices` in the place of the command word is an alias for `voices`.
-    if args.get(i).is_some_and(|a| a == "--list-voices") {
-        args[i] = "voices".to_owned();
+    // `--list-voices` in the place of the command word is an alias for `voices`, `say` one for `speak`.
+    match args.get(i).map(String::as_str) {
+        Some("--list-voices") => args[i] = "voices".to_owned(),
+        Some("say") => args[i] = "speak".to_owned(),
+        _ => {}
     }
     let word = args.get(i).filter(|a| !a.starts_with('-'))?;
     let code = match run(word, &args, i) {
