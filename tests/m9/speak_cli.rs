@@ -826,6 +826,25 @@ fn the_format_mp3_encodes_the_stream() {
 }
 
 #[test]
+fn o_and_output_are_other_spellings_of_out() {
+    let dir = scratch("output-alias");
+    let fake = tts();
+    for name in ["a.wav", "b.wav", "c.wav"] {
+        let target = dir.join(name);
+        let path = target.to_str().unwrap();
+        let joined = format!("--output={path}");
+        let args: Vec<&str> = match name {
+            "a.wav" => vec!["--text", "Hallo", "-o", path],
+            "b.wav" => vec!["--text", "Hallo", "--output", path],
+            _ => vec!["--text", "Hallo", &joined],
+        };
+        let o = speak(&fake, &args);
+        assert_eq!(code(&o), 0, "{name}: {}", err(&o));
+        assert!(target.is_file(), "{name}");
+    }
+}
+
+#[test]
 fn say_is_an_alias_of_speak() {
     let fake = tts();
     let o = with_host(&fake, &["say", "--text", "Hallo", "--out", "-"])

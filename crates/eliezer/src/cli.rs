@@ -102,7 +102,7 @@ Commands (they use the HTTP API of the running service):
       --seed N                    Seed for a repeatable reading
       --format wav|pcm|mp3        wav (default, with an open length), raw 16 bit mono samples, or mp3
                                   (96 kbit/s, encoded here while the audio arrives)
-      --out PATH|-                A file (written as PATH.part and renamed; --replace overwrites), a
+      --out, -o, --output PATH|-  A file (written as PATH.part and renamed; --replace overwrites), a
                                   named pipe (written into as it is), or - for standard output
                                   (the default; refused on a terminal unless --out - is given)
       --replace                   Overwrite an existing file
@@ -318,6 +318,12 @@ fn parse(words: &[String], spec: &Spec) -> Res<Parsed> {
         let (name, inline) = match word.split_once('=') {
             Some((n, v)) if n.starts_with("--") => (n, Some(v.to_owned())),
             _ => (word, None),
+        };
+        // `-o` and `--output` are other spellings of `--out`.
+        let name = if name == "-o" || name == "--output" {
+            "--out"
+        } else {
+            name
         };
         if GLOBAL_VALUES.contains(&name) || spec.values.contains(&name) {
             let value = match inline {
