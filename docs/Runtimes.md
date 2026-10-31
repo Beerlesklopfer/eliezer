@@ -307,6 +307,28 @@ scripts/build-audiocpp.sh` gives a 231 MB `audiocpp_server`; model `Chatterbox-G
   "Tirannen"); two words came back changed ("Möros" as "Myros", "Häscher" as "Hescher"), which points to the pronunciation of umlauts in
   that model. The owner listened to the reference, to two verses and to the whole poem and found the result good.
 
+**Round trip, 2026-10-31** (text to speech and back; the first 10 minutes of the transcribed German sermon, 1 504 words, spoken in paragraphs of
+about six sentences with the voice library of the test service, then recognized again by the speech recognition of the installed package; the word
+error rate is a word-level edit distance after lower-casing and removing punctuation):
+
+| Reference voice | Audio | Synthesis | Words read back | Word error rate |
+|---|---|---|---|---|
+| A: a 26 s cut of a private family recording | 9 min 56 s | 164 s | 1 503 | 0.8 % (12 edits) |
+| B: a 28 s cut from the sermon recording itself (the speaker's own voice) | 8 min 46 s | 152 s | 1 516 | 1.9 % (28 edits) |
+
+Both reference voices were used only locally for this test; nothing was published or handed on. What the differences are:
+
+- **A:** 11 spots, all single words ("leiten" as "leiden", "weg" as "weck", "Gefühl" as "defoe"), no insertion.
+- **B:** 14 spots. Real mishearings ("gerührt" as "gehört", "auch" as "auf", "runzeln" as "hunzeln"), numbers ("1" as "eins", "25" as
+  "20 20"), spelling ("so wie" as "sowie", "Kinder Gottes" as "Kindergottes", "genieße" as "geniesse", which is the spelling of the
+  speaker, not an error) and **one insertion of 11 words** ("haben nehmen den bof kommands einem erst und entstehen und her ich"), the only
+  conspicuous spot. Its source is most likely the recognition of the read-back (a hallucination on a silent or noisy stretch), not the
+  synthesis; it accounts for the 12 extra words. Without it and without the Swiss spelling, B is at about 1 %.
+- **Weakest point: digits.** Verse and year numbers ("Epheser 5, 21-33") are read back differently. A step before the synthesis that writes numbers
+  as words would help; it is not implemented.
+- The synthesis ran 3.6 and 3.5 times faster than the audio. The round trip says that the speech is **understandable** with both voices over ten
+  minutes (a stable result, no drift in the text); it does not say how close the voice sounds, which is judged by ear.
+
 Not verified (the live check did not cover these):
 
 - That all passages of one request have the same format (the service refuses to join parts that differ and answers 502; a stream ends with
