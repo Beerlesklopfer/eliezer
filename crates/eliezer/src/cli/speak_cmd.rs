@@ -176,6 +176,9 @@ fn read_stdin() -> Res<String> {
 }
 
 fn read_text(parsed: &Parsed) -> Res<String> {
+    if parsed.all_values("--file").len() > 1 {
+        return usage_err("--file may only be given once");
+    }
     let text = match (parsed.value("--text"), parsed.value("--file")) {
         (Some(_), Some(_)) => return usage_err("Give --text or --file, not both"),
         (Some(text), None) => text.to_owned(),

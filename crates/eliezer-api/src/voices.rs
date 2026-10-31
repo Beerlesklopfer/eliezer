@@ -36,6 +36,9 @@ fn refuse(status: StatusCode, code: &str, message: &str) -> Response {
 fn bad(message: &str) -> Response {
     refuse(StatusCode::BAD_REQUEST, "invalid_request", message)
 }
+/// How much of a refused upload is read and discarded so that the refusal reaches the client.
+const DRAIN_MAX_BYTES: u64 = 1 << 30;
+
 fn too_large(message: &str) -> Response {
     refuse(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", message)
 }
@@ -202,6 +205,17 @@ pub async fn upload(
                     match field.chunk().await {
                         Ok(Some(chunk)) => {
                             if bytes.len() as u64 + chunk.len() as u64 > max_bytes {
+                                // Read the rest of the file and throw it away (up to a bound) before answering:
+                                // a connection that is closed with unread data is reset, and the reset can
+                                // destroy the answer on its way, so the client would see a broken pipe instead of
+                                // this message.
+                                let mut skipped = (bytes.len() + chunk.len()) as u64;
+                                while skipped < DRAIN_MAX_BYTES {
+                                    match field.chunk().await {
+                                        Ok(Some(more)) => skipped += more.len() as u64,
+                                        _ => break,
+                                    }
+                                }
                                 return too_large("The file is larger than the limit");
                             }
                             bytes.extend_from_slice(&chunk);

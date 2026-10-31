@@ -235,7 +235,7 @@ impl Client {
                 Err(e) => last = e.to_string(),
             }
         }
-        let mut stream = stream.ok_or(HttpError::Unreachable(last))?;
+        let stream = stream.ok_or(HttpError::Unreachable(last))?;
         let proto = |e: io::Error| HttpError::Protocol(e.to_string());
         // ELIEZER_TIMEOUT_SECS shortens or lengthens the wait for an answer (for scripts and tests).
         let read_timeout = std::env::var("ELIEZER_TIMEOUT_SECS")
@@ -266,81 +266,102 @@ impl Client {
             );
         }
         head += "\r\n";
-        stream.write_all(head.as_bytes()).map_err(proto)?;
-        if let Some((_, body)) = body {
-            stream.write_all(body).map_err(proto)?;
-        }
-        stream.flush().map_err(proto)?;
-
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line).map_err(|e| {
-            if matches!(
-                e.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) {
-                HttpError::Protocol(format!(
-                    "no answer within {} s: the service accepted the connection but did not respond (it may be stopped with Ctrl-Z, overloaded or hung)",
-                    read_timeout.as_secs()
-                ))
-            } else {
-                proto(e)
-            }
-        })?;
-        let status: u16 = line
-            .split_whitespace()
-            .nth(1)
-            .and_then(|s| s.parse().ok())
-            .ok_or_else(|| HttpError::Protocol("The answer is not valid HTTP".to_owned()))?;
-        let (mut length, mut chunked) = (None, false);
-        let mut server: Option<String> = None;
-        for _ in 0..200 {
-            line.clear();
-            if reader.read_line(&mut line).map_err(proto)? == 0 {
-                return Err(HttpError::Protocol("The answer ended early".to_owned()));
-            }
-            let header = line.trim_end();
-            if header.is_empty() {
-                let mode = if chunked {
-                    Mode::Chunked {
-                        left: 0,
-                        after_data: false,
-                        done: false,
-                    }
-                } else if let Some(n) = length {
-                    Mode::Length(n)
-                } else if status == 204 || status == 304 || (100..200).contains(&status) {
-                    Mode::Length(0)
+        // The body is sent while the answer is read: a service that refuses an upload early (for example 413)
+        // answers and closes before it has read the body, and that answer is the message the user needs. A failed
+        // write is reported only when there is no answer to read.
+        let writer = stream.try_clone().map_err(proto)?;
+        let closer = stream.try_clone().map_err(proto)?;
+        let read_answer = |stream: TcpStream| -> Result<Response, HttpError> {
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).map_err(|e| {
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) {
+                    HttpError::Protocol(format!(
+                        "no answer within {} s: the service accepted the connection but did not respond (it may be stopped with Ctrl-Z, overloaded or hung)",
+                        read_timeout.as_secs()
+                    ))
                 } else {
-                    Mode::Eof
-                };
-                if !server
-                    .as_deref()
-                    .is_some_and(|s| s.to_ascii_lowercase().starts_with("eliezer"))
-                {
-                    return Err(HttpError::NotEliezer(server));
+                    proto(e)
                 }
-                return Ok(Response {
-                    status,
-                    body: Body {
-                        inner: reader,
-                        mode,
-                    },
-                });
-            }
-            if let Some((name, value)) = header.split_once(':') {
-                let (name, value) = (name.trim().to_ascii_lowercase(), value.trim());
-                if name == "server" {
-                    server = Some(value.to_owned());
-                } else if name == "content-length" {
-                    length = value.parse().ok();
-                } else if name == "transfer-encoding"
-                    && value.to_ascii_lowercase().contains("chunked")
-                {
-                    chunked = true;
+            })?;
+            let status: u16 = line
+                .split_whitespace()
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| HttpError::Protocol("The answer is not valid HTTP".to_owned()))?;
+            let (mut length, mut chunked) = (None, false);
+            let mut server: Option<String> = None;
+            for _ in 0..200 {
+                line.clear();
+                if reader.read_line(&mut line).map_err(proto)? == 0 {
+                    return Err(HttpError::Protocol("The answer ended early".to_owned()));
+                }
+                let header = line.trim_end();
+                if header.is_empty() {
+                    let mode = if chunked {
+                        Mode::Chunked {
+                            left: 0,
+                            after_data: false,
+                            done: false,
+                        }
+                    } else if let Some(n) = length {
+                        Mode::Length(n)
+                    } else if status == 204 || status == 304 || (100..200).contains(&status) {
+                        Mode::Length(0)
+                    } else {
+                        Mode::Eof
+                    };
+                    if !server
+                        .as_deref()
+                        .is_some_and(|s| s.to_ascii_lowercase().starts_with("eliezer"))
+                    {
+                        return Err(HttpError::NotEliezer(server));
+                    }
+                    return Ok(Response {
+                        status,
+                        body: Body {
+                            inner: reader,
+                            mode,
+                        },
+                    });
+                }
+                if let Some((name, value)) = header.split_once(':') {
+                    let (name, value) = (name.trim().to_ascii_lowercase(), value.trim());
+                    if name == "server" {
+                        server = Some(value.to_owned());
+                    } else if name == "content-length" {
+                        length = value.parse().ok();
+                    } else if name == "transfer-encoding"
+                        && value.to_ascii_lowercase().contains("chunked")
+                    {
+                        chunked = true;
+                    }
                 }
             }
-        }
-        Err(HttpError::Protocol("Too many header lines".to_owned()))
+            Err(HttpError::Protocol("Too many header lines".to_owned()))
+        };
+        std::thread::scope(|scope| {
+            let sender = scope.spawn(move || {
+                let mut writer = writer;
+                writer.write_all(head.as_bytes())?;
+                if let Some((_, body)) = body {
+                    writer.write_all(body)?;
+                }
+                writer.flush()
+            });
+            let result = read_answer(stream);
+            if !sender.is_finished() {
+                // The answer came before the body was sent; stop sending.
+                let _ = closer.shutdown(std::net::Shutdown::Write);
+            }
+            let write_error = sender.join().ok().and_then(Result::err);
+            match (result, write_error) {
+                (Err(HttpError::Protocol(_)), Some(w)) => Err(HttpError::Protocol(w.to_string())),
+                (result, _) => result,
+            }
+        })
     }
 }

@@ -106,8 +106,10 @@ Commands (they use the HTTP API of the running service):
       --replace                   Overwrite an existing file
   voices | --list-voices          List the voices of speech synthesis
   voices add NAME FILE [--replace] [--transcript TEXT]
+  voices add --name NAME --file AUDIO [--file TEXTFILE] [--replace]
                                   Add a voice from a recording (any audio file); --transcript gives
-                                  the words spoken in it
+                                  the words spoken in it, --file with a .txt file does the same from
+                                  a file (--file is given for the audio and for the text)
   voices rm NAME                  Remove a voice
   search [TEXT] [--task T] [--format F] [--license L] [--limit N] [--details]
                                   Search Hugging Face for model candidates (nothing is downloaded).
@@ -245,6 +247,8 @@ struct Spec {
 struct Parsed {
     positional: Vec<String>,
     values: HashMap<String, String>,
+    /// The further values of an option in [`REPEATABLE_VALUES`], in the order given.
+    more: HashMap<String, Vec<String>>,
     flags: HashSet<String>,
 }
 impl Parsed {
@@ -253,6 +257,17 @@ impl Parsed {
     }
     fn value(&self, name: &str) -> Option<&str> {
         self.values.get(name).map(String::as_str)
+    }
+    /// All values of an option that may be given more than once, in the order given.
+    fn all_values(&self, name: &str) -> Vec<&str> {
+        let first = self.values.get(name).map(String::as_str);
+        let more = self
+            .more
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(String::as_str);
+        first.into_iter().chain(more).collect()
     }
     fn number(&self, name: &str) -> Res<Option<u64>> {
         self.value(name)
@@ -265,6 +280,9 @@ impl Parsed {
 }
 
 const GLOBAL_VALUES: &[&str] = &["--host", "--key-file", "--config"];
+/// Options that may be given more than once (`voices add --file a.mp3 --file a.txt`); a command that takes one
+/// value only checks the count itself.
+const REPEATABLE_VALUES: &[&str] = &["--file"];
 
 fn parse(words: &[String], spec: &Spec) -> Res<Parsed> {
     let mut out = Parsed::default();
@@ -296,8 +314,13 @@ fn parse(words: &[String], spec: &Spec) -> Res<Parsed> {
                     .cloned()
                     .ok_or_else(|| Failure::Usage(format!("Value missing after {name}")))?,
             };
-            if out.values.insert(name.to_owned(), value).is_some() {
-                return usage_err(format!("{name} may only be given once"));
+            if out.values.contains_key(name) {
+                if !REPEATABLE_VALUES.contains(&name) {
+                    return usage_err(format!("{name} may only be given once"));
+                }
+                out.more.entry(name.to_owned()).or_default().push(value);
+            } else {
+                out.values.insert(name.to_owned(), value);
             }
         } else if name == "--json" || spec.flags.contains(&name) {
             if inline.is_some() {
@@ -375,7 +398,7 @@ fn spec_for(command: &str) -> Spec {
             positional: (0, 0),
         },
         "voices" => Spec {
-            values: &["--transcript"],
+            values: &["--transcript", "--name", "--file"],
             flags: &["--replace"],
             positional: (0, 3),
         },

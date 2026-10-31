@@ -735,6 +735,102 @@ fn list_voices_is_an_alias_of_voices() {
 }
 
 #[test]
+fn voices_add_takes_the_name_with_name() {
+    let dir = scratch("add-name");
+    let file = dir.join("mama.wav");
+    fs::write(&file, b"RIFFdata").unwrap();
+    let fake = tts();
+    let o = voices(&fake, &["add", "--name", "mama", file.to_str().unwrap()]);
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    let sent = fake
+        .requests()
+        .into_iter()
+        .find(|r| r.method == "POST")
+        .unwrap();
+    assert_eq!(sent.field("name").as_deref(), Some("mama"));
+    // Neither a name nor a file is a usage error.
+    let o = voices(&fake, &["add", "--name", "mama"]);
+    assert_eq!(code(&o), 2, "{}", err(&o));
+}
+
+#[test]
+fn voices_add_takes_the_recording_and_the_text_with_file() {
+    let dir = scratch("add-files");
+    let audio = dir.join("mama.mp3");
+    let text = dir.join("mama.txt");
+    fs::write(&audio, b"RIFFdata").unwrap();
+    fs::write(&text, "Die Worte der Aufnahme.").unwrap();
+    let (a, t) = (audio.to_str().unwrap(), text.to_str().unwrap());
+    let fake = tts();
+    // in either order
+    let o = voices(&fake, &["add", "--name", "mama", "--file", t, "--file", a]);
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    let sent = fake
+        .requests()
+        .into_iter()
+        .find(|r| r.method == "POST")
+        .unwrap();
+    assert_eq!(sent.field("name").as_deref(), Some("mama"));
+    assert_eq!(
+        sent.field("transcript").as_deref(),
+        Some("Die Worte der Aufnahme.")
+    );
+    // two recordings, or a text file together with --transcript, are usage errors
+    let o = voices(&fake, &["add", "--name", "x", "--file", a, "--file", a]);
+    assert_eq!(code(&o), 2, "{}", err(&o));
+    let o = voices(
+        &fake,
+        &[
+            "add",
+            "--name",
+            "x",
+            "--file",
+            a,
+            "--file",
+            t,
+            "--transcript",
+            "Hi",
+        ],
+    );
+    assert_eq!(code(&o), 2, "{}", err(&o));
+    // speak takes one --file only
+    let o = speak(&fake, &["--file", t, "--file", t, "--out", "-"]);
+    assert_eq!(code(&o), 2, "{}", err(&o));
+}
+
+#[test]
+fn an_upload_refused_early_shows_the_answer_of_the_service() {
+    // The service answers 413 and closes before the body has been read; the command shows the answer, not a
+    // broken pipe.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut head = [0_u8; 1024];
+        let _ = stream.read(&mut head);
+        let body =
+            r#"{"error":{"message":"The file is larger than the limit","type":"invalid_request"}}"#;
+        let _ = write!(
+            stream,
+            "HTTP/1.1 413 Payload Too Large\r\nServer: eliezer/test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        // Like the service: read the rest of the body, so that the answer is not lost to a reset.
+        let _ = stream.shutdown(std::net::Shutdown::Write);
+        let _ = std::io::copy(&mut stream, &mut std::io::sink());
+    });
+    let dir = scratch("early-413");
+    let file = dir.join("big.bin");
+    fs::write(&file, vec![0_u8; 32 << 20]).unwrap();
+    let o = command(&["--host", &url, "voices", "add", "x", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(code(&o), 1, "{}", err(&o));
+    assert!(err(&o).contains("larger than the limit"), "{}", err(&o));
+}
+
+#[test]
 fn voices_add_uploads_the_recording() {
     let dir = scratch("add");
     let file = dir.join("mama.wav");

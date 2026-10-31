@@ -5,22 +5,20 @@ use super::{
 };
 use eliezer_core::config::valid_voice_name;
 use serde_json::Value;
-use std::{fs, time::Duration};
+use std::{fs, path::Path, time::Duration};
 
 /// How long to wait for the service to check and store a recording.
 const UPLOAD_WAIT: Duration = Duration::from_secs(300);
 /// The limit of the service is a setting that only it knows; here a name only has to be safe to put into a path.
+const ADD_USAGE: &str = "Usage: eliezer voices add NAME FILE [--replace] [--transcript TEXT]\n   or: eliezer voices add --name NAME --file AUDIO [--file TEXTFILE] [--replace] [--transcript TEXT]";
 const NAME_BOUND: u32 = 255;
 
 pub fn cmd_voices(client: &Client, json: bool, parsed: &Parsed) -> Res<()> {
     let words: Vec<&str> = parsed.positional.iter().map(String::as_str).collect();
     match words.as_slice() {
         [] => list(client, json),
-        ["add", name, file] => add(client, json, parsed, name, file),
+        ["add", rest @ ..] => add(client, json, parsed, rest),
         ["rm", name] => remove(client, json, name),
-        ["add", ..] => {
-            usage_err("Usage: eliezer voices add NAME FILE [--replace] [--transcript TEXT]")
-        }
         ["rm", ..] => usage_err("Usage: eliezer voices rm NAME"),
         [other, ..] => usage_err(format!(
             "Unknown voices command '{other}'; use `eliezer voices`, `voices add` or `voices rm`"
@@ -76,7 +74,41 @@ fn multipart(fields: &[(&str, &str)], file: &[u8], file_name: &str) -> (String, 
     (format!("multipart/form-data; boundary={boundary}"), body)
 }
 
-fn add(client: &Client, json: bool, parsed: &Parsed, name: &str, file: &str) -> Res<()> {
+/// The voice name, the recording and the transcript from the command line. The name is `--name` or the first word
+/// after `add`; the files are the other words and every `--file`, each a recording or, with the extension `.txt`,
+/// the file with the words spoken in it.
+fn add_arguments(parsed: &Parsed, rest: &[&str]) -> Res<(String, String, Option<String>)> {
+    let (name, words) = match parsed.value("--name") {
+        Some(name) => (name, rest),
+        None => match rest.split_first() {
+            Some((name, words)) => (*name, words),
+            None => return usage_err(ADD_USAGE),
+        },
+    };
+    let (mut audio, mut text) = (Vec::new(), Vec::new());
+    for file in words.iter().copied().chain(parsed.all_values("--file")) {
+        let is_text = Path::new(file)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("txt"));
+        if is_text { &mut text } else { &mut audio }.push(file);
+    }
+    let ([audio], true) = (audio.as_slice(), text.len() <= 1) else {
+        return usage_err(ADD_USAGE);
+    };
+    let transcript = match (text.first(), parsed.value("--transcript")) {
+        (Some(_), Some(_)) => return usage_err("Give --transcript or a .txt file, not both"),
+        (Some(file), None) => Some(
+            fs::read_to_string(file)
+                .map_err(|e| Failure::Usage(format!("Cannot read the text file {file}: {e}")))?,
+        ),
+        (None, given) => given.map(str::to_owned),
+    };
+    Ok((name.to_owned(), (*audio).to_owned(), transcript))
+}
+
+fn add(client: &Client, json: bool, parsed: &Parsed, rest: &[&str]) -> Res<()> {
+    let (name, file, transcript) = add_arguments(parsed, rest)?;
+    let (name, file) = (name.as_str(), file.as_str());
     check_name(name)?;
     let data = fs::read(file)
         .map_err(|e| Failure::Usage(format!("Cannot read the recording {file}: {e}")))?;
@@ -86,7 +118,7 @@ fn add(client: &Client, json: bool, parsed: &Parsed, name: &str, file: &str) -> 
         "false"
     };
     let mut fields = vec![("name", name), ("replace", replace)];
-    if let Some(transcript) = parsed.value("--transcript") {
+    if let Some(transcript) = transcript.as_deref() {
         fields.push(("transcript", transcript));
     }
     // The file name is for the log of the service only; a name that cannot be quoted is left out.
