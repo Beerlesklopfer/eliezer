@@ -1,5 +1,9 @@
 FROM docker.io/library/rust:1.88-slim-bookworm AS build
 WORKDIR /build
+# mp3lame-sys builds LAME with its configure script: it needs make and a C++ compiler (gcc and libc come with the image).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends make g++ \
+    && rm -rf /var/lib/apt/lists/*
 # The host toolchain file is not copied: the image toolchain applies here.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates

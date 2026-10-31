@@ -124,16 +124,25 @@ pub async fn fetch(
         .map_err(io_error)?;
     let mut done = offset;
     progress(done);
-    while let Some(chunk) = stream.body.next_chunk().await? {
-        done += chunk.len() as u64;
-        if file.bytes > 0 && done > file.bytes {
-            return Err(FetchError::Size);
+    // A tokio file hands a write to a helper thread and `write_all` returns before it has landed. Whatever ends the
+    // loop, the file is flushed before it is dropped: otherwise a stream that breaks leaves a partial file whose
+    // length is still changing, and the next try resumes at a length that is not the one the data ends at.
+    let streamed: Result<(), FetchError> = async {
+        while let Some(chunk) = stream.body.next_chunk().await? {
+            done += chunk.len() as u64;
+            if file.bytes > 0 && done > file.bytes {
+                return Err(FetchError::Size);
+            }
+            hasher.update(&chunk);
+            out.write_all(&chunk).await.map_err(io_error)?;
+            progress(done);
         }
-        hasher.update(&chunk);
-        out.write_all(&chunk).await.map_err(io_error)?;
-        progress(done);
+        Ok(())
     }
-    out.flush().await.map_err(io_error)?;
+    .await;
+    let flushed = out.flush().await.map_err(io_error);
+    streamed?;
+    flushed?;
     drop(out);
     if file.bytes > 0 && done != file.bytes {
         return Err(FetchError::Size);

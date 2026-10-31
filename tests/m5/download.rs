@@ -228,10 +228,7 @@ async fn an_interrupted_download_continues_where_it_stopped() {
         Err(FetchError::Hub(HubError::Unreachable))
     );
     let part = PathBuf::from(format!("{}.part", dest.display()));
-    // The bytes of the last chunk before the break may or may not have been written (11000 or 12000 were seen);
-    // what counts is that a part is left and that the next try continues exactly behind it.
-    let kept = std::fs::metadata(&part).unwrap().len();
-    assert!((1..=12_000).contains(&kept), "{kept} bytes kept");
+    assert_eq!(std::fs::metadata(&part).unwrap().len(), 12_000);
     assert!(!dest.exists());
     let healthy = hub("m.gguf", &data);
     assert_eq!(
@@ -240,8 +237,8 @@ async fn an_interrupted_download_continues_where_it_stopped() {
     );
     assert_eq!(
         healthy.opened.lock().unwrap()[0].3,
-        kept,
-        "asked from the first byte behind the part"
+        12_000,
+        "asked from the 12000th byte on"
     );
     assert_eq!(
         std::fs::read(&dest).unwrap(),
