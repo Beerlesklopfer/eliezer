@@ -1,13 +1,13 @@
 //! What the service does with the audio of a transcription request before and after the speech program sees it:
 //! decode any uploaded file to 16 kHz mono 16 bit samples (pure Rust: symphonia decodes, rubato resamples), cut a long
 //! recording into overlapping pieces, wrap a piece as a WAV file, join the transcripts of the pieces by time and
-//! write them as plain text, SRT or WebVTT. For speech synthesis: decode a voice sample to any rate, cut a text into
+//! write them as plain text, SRT or WebVTT. With word times the segments are cut anew at word boundaries ([`resegment`]). For speech synthesis: decode a voice sample to any rate, cut a text into
 //! passages at sentence boundaries ([`passages`]) and join the audio of the passages with pauses ([`pcm`]).
 
 pub mod passages;
 pub mod pcm;
 
-use eliezer_backend::{TranscribedSegment, Transcription};
+use eliezer_backend::{TranscribedSegment, TranscribedWord, Transcription};
 use rubato::{FftFixedIn, Resampler};
 use std::ops::Range;
 use symphonia::core::{
@@ -291,11 +291,198 @@ pub fn join(parts: Vec<Part>, overlap_secs: f64) -> Vec<TranscribedSegment> {
                     start,
                     end,
                     text: segment.text,
+                    words: segment
+                        .words
+                        .into_iter()
+                        .map(|w| TranscribedWord {
+                            start: w.start + part.offset,
+                            end: w.end + part.offset,
+                            text: w.text,
+                        })
+                        .collect(),
                 });
             }
         }
     }
     out
+}
+
+/// The longest segment [`resegment`] makes when the configuration names none (characters).
+pub const DEFAULT_MAX_SEGMENT_CHARS: usize = 120;
+/// The longest segment [`resegment`] makes (seconds from the start of its first word to the end of its last).
+pub const MAX_SEGMENT_SECS: f64 = 12.0;
+/// A silence between two words at least this long (seconds) always ends a segment.
+pub const SEGMENT_PAUSE_SECS: f64 = 1.5;
+/// A silence between two words at least this long (seconds) makes a good place for a cut.
+const SHORT_PAUSE_SECS: f64 = 0.3;
+
+/// One word of the recording and what follows it.
+struct Placed {
+    word: TranscribedWord,
+    /// The last word of a segment of the program (the decoder ended a segment there).
+    native_end: bool,
+}
+
+/// Does the word end a sentence? It ends with `.`, `?`, `!` or `…` (a closing quote or bracket may follow), it is not
+/// a number such as "1." (ordinals, verses) or a single letter with a dot, and the next word does not start with a
+/// lowercase letter (abbreviations such as "usw." usually go on in lowercase).
+fn sentence_end(word: &str, next: Option<&str>) -> bool {
+    let core = word.trim_end_matches(['"', '\'', '»', '«', '“', '”', '„', ')', ']']);
+    if !core.ends_with(['.', '?', '!', '…']) {
+        return false;
+    }
+    let body = core.trim_end_matches(['.', '?', '!', '…']);
+    // "1." (ordinals, verses) and single letters such as the "z." of "z. B."
+    if core.ends_with('.')
+        && !body.is_empty()
+        && (body.chars().all(|c| c.is_ascii_digit()) || body.chars().count() == 1)
+    {
+        return false;
+    }
+    next.and_then(|n| n.chars().find(|c| c.is_alphanumeric()))
+        .is_none_or(|c| !c.is_lowercase())
+}
+
+/// Does the word end a clause (`,`, `;`, `:` or a dash)?
+fn clause_end(word: &str) -> bool {
+    word.ends_with([',', ';', ':', '–', '—']) || word == "-"
+}
+
+/// How good a cut after `words[at]` is: a sentence end 4, the end of a segment of the program 3, the end of a clause 2,
+/// any other word boundary 1; a short pause after the word adds 1.5.
+fn cut_score(words: &[Placed], at: usize) -> f64 {
+    let word = &words[at].word;
+    let next = words.get(at + 1);
+    let mut score = if sentence_end(&word.text, next.map(|n| n.word.text.as_str())) {
+        4.0
+    } else if words[at].native_end {
+        3.0
+    } else if clause_end(&word.text) {
+        2.0
+    } else {
+        1.0
+    };
+    if next.is_some_and(|n| n.word.start - word.end >= SHORT_PAUSE_SECS) {
+        score += 1.5;
+    }
+    score
+}
+
+fn chars(words: &[Placed]) -> usize {
+    words
+        .iter()
+        .map(|w| w.word.text.chars().count())
+        .sum::<usize>()
+        + words.len().saturating_sub(1)
+}
+
+fn round_ms(seconds: f64) -> f64 {
+    (seconds * 1000.0).round() / 1000.0
+}
+
+fn segment_of(words: Vec<Placed>) -> TranscribedSegment {
+    let words: Vec<TranscribedWord> = words
+        .into_iter()
+        .map(|p| TranscribedWord {
+            text: p.word.text,
+            start: round_ms(p.word.start),
+            end: round_ms(p.word.end),
+        })
+        .collect();
+    TranscribedSegment {
+        start: words.first().map_or(0.0, |w| w.start),
+        end: words.last().map_or(0.0, |w| w.end),
+        text: words
+            .iter()
+            .map(|w| w.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        words,
+    }
+}
+
+/// Cuts the joined segments anew at word boundaries, so that every segment starts when its first word starts and ends
+/// when its last word ends. Only when every segment with text has words (word timing worked for all pieces); otherwise
+/// the segments are returned as they are (the times of the program) and `false` says so.
+///
+/// The rule:
+/// 1. A segment ends after a word that ends a sentence (see [`sentence_end`]) and before a silence of at least
+///    [`SEGMENT_PAUSE_SECS`].
+/// 2. A segment that would grow over `max_chars` characters or over [`MAX_SEGMENT_SECS`] is cut at its best word
+///    boundary first: a sentence end, then an end of a segment of the program, then a comma, semicolon, colon or
+///    dash, then any word boundary; a pause of at least 0.3 s after the word counts extra, and of equal places the
+///    later one wins (fuller lines). A word is never cut in two, and there is no cut at a fixed character count in the
+///    middle of a sentence unless no better place exists within the limits.
+///
+/// Times are rounded to milliseconds. The words are kept in order; a word that would start before the one in front
+/// (possible where two pieces overlap) starts where that one starts, and no word ends after the next one starts.
+pub fn resegment(
+    segments: Vec<TranscribedSegment>,
+    max_chars: usize,
+) -> (Vec<TranscribedSegment>, bool) {
+    if segments
+        .iter()
+        .any(|s| s.words.is_empty() && !s.text.trim().is_empty())
+    {
+        return (segments, false);
+    }
+    let max_chars = max_chars.max(20);
+    let mut words: Vec<Placed> = Vec::new();
+    for segment in segments {
+        let count = segment.words.len();
+        for (index, word) in segment.words.into_iter().enumerate() {
+            words.push(Placed {
+                word,
+                native_end: index + 1 == count,
+            });
+        }
+    }
+    let mut floor = f64::NEG_INFINITY;
+    for word in &mut words {
+        word.word.start = word.word.start.max(floor);
+        word.word.end = word.word.end.max(word.word.start);
+        floor = word.word.start;
+    }
+    for at in 1..words.len() {
+        let next_start = words[at].word.start;
+        let word = &mut words[at - 1].word;
+        word.end = word.end.min(next_start).max(word.start);
+    }
+    let mut out = Vec::new();
+    let mut current: Vec<Placed> = Vec::new();
+    let mut words = words.into_iter().peekable();
+    while let Some(word) = words.next() {
+        current.push(word);
+        // Too long: cut at the best place, and look again at what is left.
+        while current.len() > 1
+            && (chars(&current) > max_chars
+                || current[current.len() - 1].word.end - current[0].word.start > MAX_SEGMENT_SECS)
+        {
+            let last = current.len() - 1;
+            let best = (0..last)
+                .filter(|&at| {
+                    // The part in front must itself fit.
+                    chars(&current[..=at]) <= max_chars
+                        && current[at].word.end - current[0].word.start <= MAX_SEGMENT_SECS
+                })
+                .map(|at| {
+                    let fill = chars(&current[..=at]) as f64 / max_chars as f64;
+                    (at, cut_score(&current, at) + 0.5 * fill)
+                })
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map_or(0, |(at, _)| at);
+            let rest = current.split_off(best + 1);
+            out.push(segment_of(std::mem::replace(&mut current, rest)));
+        }
+        let Some(last) = current.last() else { continue };
+        let next = words.peek();
+        let sentence = sentence_end(&last.word.text, next.map(|n| n.word.text.as_str()));
+        let pause = next.is_some_and(|n| n.word.start - last.word.end >= SEGMENT_PAUSE_SECS);
+        if sentence || pause || next.is_none() {
+            out.push(segment_of(std::mem::take(&mut current)));
+        }
+    }
+    (out, true)
 }
 
 /// The whole text: the segments with one space between them.

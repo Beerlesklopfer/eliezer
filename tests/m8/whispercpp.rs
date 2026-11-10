@@ -1,8 +1,8 @@
 use eliezer_backend::{Backend, BackendError, ChatRequest, LoadSpec, TranscriptionRequest};
 use eliezer_core::config::DevicePolicy;
 use eliezer_whispercpp::{
-    GENERATION_BASE, ProgramSettings, SpeechModel, WhispercppBackend, arguments, inference_fields,
-    multipart_body, parse_transcription,
+    GENERATION_BASE, NO_WRAP, ProgramSettings, SpeechModel, WhispercppBackend, WordTiming,
+    arguments, dtw_preset_of, inference_fields, multipart_body, parse_transcription,
 };
 use std::{
     collections::HashMap,
@@ -51,6 +51,7 @@ fn model(dir: &Path, mode: &str) -> SpeechModel {
         threads: Some(3),
         split_on_word: true,
         max_segment_chars: 0,
+        word_timing: WordTiming::Off,
     }
 }
 
@@ -110,9 +111,10 @@ fn the_arguments_are_a_fixed_list_without_conversion() {
         threads: Some(4),
         split_on_word: true,
         max_segment_chars: 0,
+        word_timing: WordTiming::Off,
     };
     let strings = |cpu, settings: &ProgramSettings| -> Vec<String> {
-        arguments(&model, 24800, Path::new("/run/x y"), settings, cpu)
+        arguments(&model, 24800, Path::new("/run/x y"), settings, cpu, None)
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
@@ -154,6 +156,75 @@ fn the_arguments_are_a_fixed_list_without_conversion() {
     assert!(cpu.contains(&"--no-gpu".to_owned()));
     assert!(!cpu.contains(&"--device".to_owned()) && !cpu.contains(&"--flash-attn".to_owned()));
     assert!(!gpu.iter().chain(&cpu).any(|a| a.contains("convert")));
+    // word timing: the preset, and flash attention off whatever the setting says (the program drops DTW with it)
+    for cpu in [false, true] {
+        let timed: Vec<String> = arguments(
+            &model,
+            24800,
+            Path::new("/run/x y"),
+            &ProgramSettings {
+                flash_attn: Some(true),
+                gpu_device: Some(1),
+            },
+            cpu,
+            Some("large.v3.turbo"),
+        )
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+        assert!(timed.ends_with(&[
+            "--dtw".to_owned(),
+            "large.v3.turbo".to_owned(),
+            "--no-flash-attn".to_owned()
+        ]));
+        assert!(!timed.contains(&"--flash-attn".to_owned()), "{timed:?}");
+    }
+}
+
+/// The first 48 bytes of a ggml whisper file: the magic and the shape.
+fn ggml_header(vocab: i32, audio_state: i32, audio_layer: i32, text_layer: i32) -> Vec<u8> {
+    let numbers = [
+        0x6767_6d6c_u32 as i32,
+        vocab,
+        1500,
+        audio_state,
+        20,
+        audio_layer,
+        448,
+        audio_state,
+        20,
+        text_layer,
+        128,
+        8,
+    ];
+    numbers.iter().flat_map(|n| n.to_le_bytes()).collect()
+}
+
+#[test]
+fn the_word_timing_preset_is_read_from_the_shape_of_the_model() {
+    let t = Temp::new();
+    let file = t.0.join("ggml.bin");
+    // the shape of cstr/whisper-large-v3-turbo-german-ggml (read from ggml-model-q5_0.bin, 2026-11-10)
+    std::fs::write(&file, ggml_header(51866, 1280, 32, 4)).unwrap();
+    assert_eq!(dtw_preset_of(&file), Some("large.v3.turbo"));
+    std::fs::write(&file, ggml_header(51866, 1280, 32, 32)).unwrap();
+    assert_eq!(dtw_preset_of(&file), Some("large.v3"));
+    std::fs::write(&file, ggml_header(51864, 1024, 24, 24)).unwrap();
+    assert_eq!(dtw_preset_of(&file), Some("medium.en"));
+    // large-v1 and large-v2 cannot be told apart, an unknown shape, a file that is no ggml file, no file
+    std::fs::write(&file, ggml_header(51865, 1280, 32, 32)).unwrap();
+    assert_eq!(dtw_preset_of(&file), None);
+    std::fs::write(&file, ggml_header(51866, 1280, 32, 2)).unwrap();
+    assert_eq!(dtw_preset_of(&file), None);
+    std::fs::write(&file, "ok\n").unwrap();
+    assert_eq!(dtw_preset_of(&file), None);
+    assert_eq!(dtw_preset_of(&t.0.join("missing.bin")), None);
+    assert_eq!(WordTiming::from_setting("auto"), WordTiming::Auto);
+    assert_eq!(WordTiming::from_setting("off"), WordTiming::Off);
+    assert_eq!(
+        WordTiming::from_setting("large.v3"),
+        WordTiming::Preset("large.v3".into())
+    );
 }
 
 #[test]
@@ -162,7 +233,7 @@ fn the_form_carries_the_text_only_as_fields() {
     let mut request = request();
     request.prompt = Some(hostile.into());
     request.temperature = Some(0.2);
-    let fields = inference_fields(&request, true, 0);
+    let fields = inference_fields(&request, true, 0, false);
     assert!(fields.contains(&("response_format", "verbose_json".to_owned())));
     assert!(
         fields.contains(&("split_on_word", "true".to_owned())),
@@ -175,7 +246,11 @@ fn the_form_carries_the_text_only_as_fields() {
     assert!(fields.contains(&("language", "de".to_owned())));
     assert!(fields.contains(&("temperature", "0.2".to_owned())));
     // the settings change the fields
-    let fields = inference_fields(&request, false, 120);
+    // with word timing the program does not wrap at all: the service cuts at word times
+    let timed = inference_fields(&request, true, 120, true);
+    assert!(timed.contains(&("max_len", NO_WRAP.to_string())));
+    assert_eq!(timed.iter().filter(|(n, _)| *n == "max_len").count(), 1);
+    let fields = inference_fields(&request, false, 120, false);
     assert!(fields.contains(&("split_on_word", "false".to_owned())));
     assert!(fields.contains(&("max_len", "120".to_owned())));
     let body = multipart_body("XYZ", &fields, b"RIFFdata");
@@ -197,6 +272,71 @@ fn the_answer_of_the_program_is_read_from_verbose_json() {
     assert_eq!(parsed.segments[0].text, "Hallo Welt");
     assert!(parse_transcription(&serde_json::json!({"text": "x"})).is_none());
     assert!(parse_transcription(&serde_json::json!({"segments": [{"start": 0.0}]})).is_none());
+    assert!(parsed.segments[0].words.is_empty(), "no tokens, no words");
+}
+
+/// A token of `verbose_json` (`t_dtw` in centiseconds).
+fn token(text: &str, t_dtw: i64) -> serde_json::Value {
+    serde_json::json!({"word": text, "start": 0.0, "end": 0.0, "t_dtw": t_dtw, "probability": 0.9})
+}
+
+#[test]
+fn the_words_are_put_together_from_the_tokens_with_their_dtw_times() {
+    let value = serde_json::json!({
+        "segments": [
+            {"start": 0.0, "end": 3.0, "text": " Und Gott sprach: Licht.", "words": [
+                token(" Und", 52), token(" Gott", 80), token(" spr", 120), token("ach", 140), token(":", 150),
+                token(" Licht", 260), token(".", 280),
+            ]},
+            {"start": 3.0, "end": 6.0, "text": " Es ward.", "words": [
+                token(" Es", 460), token(" ward", 480), token(".", 500),
+            ]},
+        ],
+    });
+    let parsed = parse_transcription(&value).unwrap();
+    let words: Vec<(&str, f64, f64)> = parsed
+        .segments
+        .iter()
+        .flat_map(|s| s.words.iter().map(|w| (w.text.as_str(), w.start, w.end)))
+        .collect();
+    let texts: Vec<&str> = words.iter().map(|w| w.0).collect();
+    assert_eq!(texts, ["Und", "Gott", "sprach:", "Licht.", "Es", "ward."]);
+    // a word starts at the DTW time of its first token
+    // a word starts at the DTW time of its first token, 0.1 s earlier (DTW hears a token late)
+    let starts: Vec<f64> = words.iter().map(|w| w.1).collect();
+    let expected = [0.42, 0.7, 1.1, 2.5, 4.5, 4.7];
+    for (got, want) in starts.iter().zip(expected) {
+        assert!((got - want).abs() < 1e-9, "{starts:?}");
+    }
+    // a word lasts its estimated length ("Und": 0.15 + 3 * 0.03 s), but never reaches into the next word ("Es" would
+    // last until 4.71, "ward" starts at 4.7)
+    assert!((words[0].2 - 0.66).abs() < 1e-9 && (words[1].2 - 0.97).abs() < 1e-9);
+    assert!((words[4].2 - 4.7).abs() < 1e-9, "{:?}", words[4]);
+    // "sprach:" would last 0.15 + 7 * 0.03 s, until 1.46, but its last token (":") is heard at 1.4: until 1.5
+    assert!((words[2].2 - 1.5).abs() < 1e-9, "{}", words[2].2);
+    // "Licht." (6 characters) 0.33 s, also at the end of a segment
+    assert!((words[3].2 - 2.83).abs() < 1e-9, "{}", words[3].2);
+    // the last word: its estimated length, at least until 0.1 s after its last token ("." at 5.0 - 0.1)
+    let last = words[5];
+    assert!((last.2 - 5.0).abs() < 1e-9, "{last:?}");
+    for pair in words.windows(2) {
+        assert!(pair[0].2 <= pair[1].1 && pair[0].1 <= pair[0].2);
+    }
+}
+
+#[test]
+fn without_dtw_times_no_segment_has_words() {
+    // the program without --dtw (or with flash attention) sends t_dtw −1: the segments keep the program's times
+    let value = serde_json::json!({
+        "segments": [
+            {"start": 0.0, "end": 3.0, "text": " Und Gott", "words": [token(" Und", 52), token(" Gott", 80)]},
+            {"start": 3.0, "end": 6.0, "text": " sprach", "words": [token(" sprach", -1)]},
+        ],
+    });
+    let parsed = parse_transcription(&value).unwrap();
+    assert!(parsed.segments.iter().all(|s| s.words.is_empty()));
+    assert_eq!(parsed.segments[1].start, 3.0);
+    assert_eq!(parsed.segments[0].text, "Und Gott");
 }
 
 #[tokio::test]
@@ -453,6 +593,74 @@ async fn the_segment_settings_of_the_model_reach_the_program() {
     let sent = recorded(&t.0, "request");
     assert!(sent.contains("name=\"split_on_word\"\r\n\r\nfalse\r\n"));
     assert!(sent.contains("name=\"max_len\"\r\n\r\n90\r\n"));
+    b.stop(&running).await.unwrap();
+}
+
+#[tokio::test]
+async fn with_word_timing_the_program_gets_the_preset_and_the_words_come_back() {
+    let t = Temp::new();
+    let mut timed = model(&t.0, "ok");
+    timed.word_timing = WordTiming::Preset("large.v3.turbo".into());
+    timed.max_segment_chars = 90;
+    let b = backend(timed, ports(1));
+    let running = b.start(&spec(DevicePolicy::Gpu)).await.unwrap();
+    let args = recorded(&t.0, "args");
+    let args: Vec<&str> = args.lines().collect();
+    assert!(args.windows(2).any(|w| w == ["--dtw", "large.v3.turbo"]));
+    assert!(args.contains(&"--no-flash-attn") && !args.contains(&"--flash-attn"));
+    let done = b.transcribe(&running, request()).await.unwrap();
+    let sent = recorded(&t.0, "request");
+    assert!(sent.contains(&format!("name=\"max_len\"\r\n\r\n{NO_WRAP}\r\n")));
+    assert!(done.segments.iter().all(|s| !s.words.is_empty()));
+    let second = &done.segments[1];
+    let texts: Vec<&str> = second.words.iter().map(|w| w.text.as_str()).collect();
+    assert_eq!(texts, ["second"], "the two tokens make one word");
+    assert!((second.words[0].start - 1.6).abs() < 1e-9);
+    b.stop(&running).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_preset_that_does_not_fit_falls_back_to_the_times_of_the_program() {
+    let t = Temp::new();
+    let mut timed = model(&t.0, "crash-with-dtw");
+    timed.word_timing = WordTiming::Preset("large.v3".into());
+    let b = backend(timed, ports(2));
+    let running = b.start(&spec(DevicePolicy::Gpu)).await.unwrap();
+    let args = recorded(&t.0, "args");
+    assert!(!args.contains("--dtw"), "started once more without: {args}");
+    assert!(args.contains("--flash-attn"), "the setting applies again");
+    let done = b.transcribe(&running, request()).await.unwrap();
+    assert!(done.segments.iter().all(|s| s.words.is_empty()));
+    let sent = recorded(&t.0, "request");
+    assert!(
+        !sent.contains("name=\"max_len\""),
+        "the program's own wrapping"
+    );
+    b.stop(&running).await.unwrap();
+}
+
+#[tokio::test]
+async fn auto_without_a_fitting_shape_and_missing_dtw_times_keep_the_old_behaviour() {
+    // `auto` with a file whose header is no ggml shape: no --dtw
+    let t = Temp::new();
+    let mut auto = model(&t.0, "ok");
+    auto.word_timing = WordTiming::Auto;
+    let b = backend(auto, ports(1));
+    let running = b.start(&spec(DevicePolicy::Gpu)).await.unwrap();
+    assert!(!recorded(&t.0, "args").contains("--dtw"));
+    let done = b.transcribe(&running, request()).await.unwrap();
+    assert!(done.segments.iter().all(|s| s.words.is_empty()));
+    b.stop(&running).await.unwrap();
+    // started with --dtw, but the answers carry no DTW times: no words, no failure
+    let t = Temp::new();
+    let mut timed = model(&t.0, "no-dtw-times");
+    timed.word_timing = WordTiming::Preset("large.v3.turbo".into());
+    let b = backend(timed, ports(1));
+    let running = b.start(&spec(DevicePolicy::Gpu)).await.unwrap();
+    assert!(recorded(&t.0, "args").contains("--dtw"));
+    let done = b.transcribe(&running, request()).await.unwrap();
+    assert_eq!(done.segments.len(), 2);
+    assert!(done.segments.iter().all(|s| s.words.is_empty()));
     b.stop(&running).await.unwrap();
 }
 

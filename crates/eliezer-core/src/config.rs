@@ -350,8 +350,13 @@ pub struct WhispercppConfig {
     #[serde(default = "split_on_word_default")]
     pub split_on_word: bool,
     /// Wrap segments after this many characters (`max_len`, 20 to 400); 0 leaves the program's own wrapping. A model can set its own.
+    /// With word timing the service cuts the segments itself and this is the longest segment (0: 120 characters).
     #[serde(default)]
     pub max_segment_chars: u32,
+    /// Word timing (`--dtw` of the program): `auto` (the preset that fits the model file), `off`, or one of
+    /// [`DTW_PRESETS`]. A model can set its own (`extra.dtw`).
+    #[serde(default = "dtw_default")]
+    pub dtw: String,
     /// How long a model may take to load (seconds).
     #[serde(default = "load_timeout_secs_default")]
     pub load_timeout_secs: u32,
@@ -364,6 +369,28 @@ pub struct WhispercppConfig {
 }
 fn split_on_word_default() -> bool {
     true
+}
+fn dtw_default() -> String {
+    "auto".to_owned()
+}
+/// The alignment head presets of `whisper-server --dtw` (whisper.cpp v1.9.5, `examples/server/server.cpp`).
+pub const DTW_PRESETS: &[&str] = &[
+    "tiny",
+    "tiny.en",
+    "base",
+    "base.en",
+    "small",
+    "small.en",
+    "medium",
+    "medium.en",
+    "large.v1",
+    "large.v2",
+    "large.v3",
+    "large.v3.turbo",
+];
+/// A value of the setting `dtw`: `auto`, `off` or a preset.
+pub fn dtw_setting_valid(value: &str) -> bool {
+    value == "auto" || value == "off" || DTW_PRESETS.contains(&value)
 }
 fn load_timeout_secs_default() -> u32 {
     300
@@ -596,6 +623,8 @@ pub struct ExtraConfig {
     pub split_on_word: Option<bool>,
     /// Speech models: `max_len` of the program, 0 or 20 to 400 (default: `backend.whispercpp.max_segment_chars`).
     pub max_segment_chars: Option<u32>,
+    /// Speech models: word timing, `auto`, `off` or a preset of [`DTW_PRESETS`] (default: `backend.whispercpp.dtw`).
+    pub dtw: Option<String>,
     /// Speech synthesis models: the audio.cpp family (one of [`TTS_FAMILIES`]; default the first).
     pub family: Option<String>,
     /// Speech synthesis models: the speaking rate when a request names none (0.25 to 4; the model must support it).
@@ -639,7 +668,7 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
-const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp whispercpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec language threads max_file_mb max_audio_minutes flash_attn gpu_device chunk_secs overlap_secs split_on_word max_segment_chars load_timeout_secs request_timeout_secs stop_grace_secs voices_dir max_input_chars max_passage_chars pause_ms paragraph_pause_ms voice_max_file_mb voice_max_seconds voice_name_max_chars voice_sample_rate max_voices family speed default_voice requires_voice tts_options";
+const FIELDS: &str = "cpu ram_budget_gb device server listen api_keys_file run_user run_group request_timeout_secs storage models_dir gpu vendor index vram_budget_gb reserve_gb measure scheduler idle_unload_secs queue_max queue_wait_secs failed_retry_secs huggingface token_file cache_dir cache_limit_gb downloads search allow backend mistralrs llamacpp sdcpp audiocpp whispercpp enabled max_loaded program port_range library_path compute model key source hf revision file kind priority max_context default_context parallel vision ocr pinned reasoning options default arch layers kv_heads head_dim swa_layers window full_kv_heads full_head_dim linear_layers state_bytes size_gb vram_gb projector projector_gb extra text_encoder vae tokenizer steps cfg_scale sampling_method offload_to_cpu prompt_helper image_edit language_model rvq_depth_decoder flow_transformer duration_sec language threads max_file_mb max_audio_minutes flash_attn gpu_device chunk_secs overlap_secs split_on_word max_segment_chars dtw load_timeout_secs request_timeout_secs stop_grace_secs voices_dir max_input_chars max_passage_chars pause_ms paragraph_pause_ms voice_max_file_mb voice_max_seconds voice_name_max_chars voice_sample_rate max_voices family speed default_voice requires_voice tts_options";
 
 /// Which section each known field belongs to. Used only to say "this field is in another section";
 /// names that are not in this table are never echoed.
@@ -1137,6 +1166,11 @@ impl Config {
                 "The segment length is 0 (the program's own) or 20 to 400 characters",
             )?;
             check(
+                dtw_setting_valid(&speech.dtw),
+                "backend.whispercpp.dtw",
+                "Word timing is auto, off or a preset such as large.v3.turbo",
+            )?;
+            check(
                 (1..=3600).contains(&speech.load_timeout_secs),
                 "backend.whispercpp.load_timeout_secs",
                 "The load time out is 1 to 3600 seconds",
@@ -1438,11 +1472,17 @@ impl Config {
                     || extra.max_file_mb.is_some()
                     || extra.max_audio_minutes.is_some()
                     || extra.split_on_word.is_some()
-                    || extra.max_segment_chars.is_some();
+                    || extra.max_segment_chars.is_some()
+                    || extra.dtw.is_some();
                 check_model(
                     model.kind == ModelKind::Stt || !speech,
                     "extra",
-                    "language, threads, the limits, split_on_word and max_segment_chars belong to speech models",
+                    "language, threads, the limits, split_on_word, max_segment_chars and dtw belong to speech models",
+                )?;
+                check_model(
+                    extra.dtw.as_deref().is_none_or(dtw_setting_valid),
+                    "extra.dtw",
+                    "Word timing is auto, off or a preset such as large.v3.turbo",
                 )?;
                 check_model(
                     extra.language.as_ref().is_none_or(|l| {

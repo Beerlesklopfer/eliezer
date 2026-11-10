@@ -175,6 +175,15 @@ pub struct TranscribedSegment {
     pub start: f64,
     pub end: f64,
     pub text: String,
+    /// The words with their own times, when the program measured them (word timing); empty otherwise.
+    pub words: Vec<TranscribedWord>,
+}
+/// One spoken word: its text (without the space in front, with the punctuation that follows it) and when it is said.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscribedWord {
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
 }
 /// What the program heard in one piece.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -444,6 +453,7 @@ impl Backend for FakeBackend {
                     start: 0.0,
                     end: seconds,
                     text: "test transcript".into(),
+                    words: Vec::new(),
                 }],
             })
         })

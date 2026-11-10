@@ -22,11 +22,14 @@ impl Clock for TestClock {
 
 /// The fake backend with a record of the pieces it was asked for. With `scripted`, every piece is answered with
 /// segments of two seconds that cover it, each text naming its start in the whole recording (the offsets of the
-/// pieces for the settings of `CHUNKED` are 0, 26 and 52 seconds).
+/// pieces for the settings of `CHUNKED` are 0, 26 and 52 seconds). With `words` as well, each scripted segment is a
+/// sentence of two words ("Ss28 gesagt."), said from 0.3 s to 1.6 s into its two seconds, while the segment's own times (those of the
+/// program) cover the two seconds.
 struct Recording {
     inner: FakeBackend,
     pieces: Mutex<Vec<TranscriptionRequest>>,
     scripted: bool,
+    words: bool,
 }
 impl Backend for Recording {
     fn start<'a>(&'a self, spec: &'a LoadSpec) -> BackendFuture<'a, Running> {
@@ -58,16 +61,41 @@ impl Backend for Recording {
         if !self.scripted {
             return self.inner.transcribe(running, request);
         }
+        let words = self.words;
         Box::pin(async move {
             let seconds = (request.wav.len() - 44) / 32000;
             let offset = [0, 26, 52][index % 3];
             Ok(Transcription {
                 language: Some("german".into()),
                 segments: (0..seconds / 2)
-                    .map(|k| TranscribedSegment {
-                        start: (2 * k) as f64,
-                        end: (2 * k + 2) as f64,
-                        text: format!("s{}", offset + 2 * k),
+                    .map(|k| {
+                        let at = (2 * k) as f64;
+                        let name = format!("s{}", offset + 2 * k);
+                        TranscribedSegment {
+                            start: at,
+                            end: at + 2.0,
+                            text: if words {
+                                format!("S{name} gesagt.")
+                            } else {
+                                name.clone()
+                            },
+                            words: if words {
+                                vec![
+                                    TranscribedWord {
+                                        text: format!("S{name}"),
+                                        start: at + 0.3,
+                                        end: at + 0.8,
+                                    },
+                                    TranscribedWord {
+                                        text: "gesagt.".into(),
+                                        start: at + 0.8,
+                                        end: at + 1.6,
+                                    },
+                                ]
+                            } else {
+                                Vec::new()
+                            },
+                        }
                     })
                     .collect(),
             })
@@ -148,11 +176,15 @@ vram_gb=10.0
 "#;
 
 fn setup_with(text: &str, scripted: bool) -> (Router, Arc<Recording>, App) {
+    setup_words(text, scripted, false)
+}
+fn setup_words(text: &str, scripted: bool, words: bool) -> (Router, Arc<Recording>, App) {
     let config = Arc::new(Config::parse(text).unwrap());
     let backend = Arc::new(Recording {
         inner: FakeBackend::new(FakeConfig::default()),
         pieces: Mutex::default(),
         scripted,
+        words,
     });
     let keys: Vec<String> = config.model.iter().map(|m| m.key.clone()).collect();
     let supervisor = Supervisor::spawn(
@@ -398,6 +430,94 @@ async fn a_long_file_is_cut_and_the_segments_are_joined_with_the_offsets() {
 }
 
 #[tokio::test]
+async fn with_word_times_the_segments_follow_the_words_in_every_format() {
+    let text = format!("{BASE}{STT}").replace(
+        "[backend.whispercpp]\nprogram=\"/usr/bin/whisper-server\"\nport_range=[24800,24809]\n",
+        CHUNKED,
+    );
+    let (app, _, _) = setup_words(&text, true, true);
+    let (status, _, body) = post(
+        &app,
+        &Form::new()
+            .text("response_format", "verbose_json")
+            .text("timestamp_granularities[]", "word")
+            .text("timestamp_granularities[]", "segment")
+            .file(wav(70)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let value = json(&body);
+    let segments = value["segments"].as_array().unwrap();
+    assert_eq!(segments.len(), 35);
+    // the segment of the stretch at 28 s (second piece, offset 26): from its first word to its last
+    assert_eq!(
+        segments[14],
+        serde_json::json!({
+            "id": 14, "start": 28.3, "end": 29.6, "text": "Ss28 gesagt.",
+            "words": [
+                {"word": "Ss28", "start": 28.3, "end": 28.8},
+                {"word": "gesagt.", "start": 28.8, "end": 29.6},
+            ],
+        })
+    );
+    // all words with timestamp_granularities[]=word, in order
+    let words = value["words"].as_array().unwrap();
+    assert_eq!(words.len(), 70);
+    assert_eq!(words[28]["word"], "Ss28");
+    assert_eq!(value["text"].as_str().unwrap().split(' ').count(), 70);
+    // without the word granularity there is no list at the top, the segments keep theirs
+    let (_, _, body) = post(
+        &app,
+        &Form::new()
+            .text("response_format", "verbose_json")
+            .file(wav(70)),
+    )
+    .await;
+    let value = json(&body);
+    assert!(value.get("words").is_none());
+    assert!(value["segments"][0]["words"].is_array());
+    // the subtitles carry the same times
+    let (_, _, vtt) = post(
+        &app,
+        &Form::new().text("response_format", "vtt").file(wav(70)),
+    )
+    .await;
+    assert!(
+        vtt.contains("\n00:00:28.300 --> 00:00:29.600\nSs28 gesagt.\n"),
+        "{vtt}"
+    );
+    let (_, _, srt) = post(
+        &app,
+        &Form::new().text("response_format", "srt").file(wav(70)),
+    )
+    .await;
+    assert!(
+        srt.contains("\n15\n00:00:28,300 --> 00:00:29,600\nSs28 gesagt.\n"),
+        "{srt}"
+    );
+}
+
+#[tokio::test]
+async fn without_word_times_the_answer_has_no_words() {
+    let (app, _) = setup(&format!("{BASE}{STT}"));
+    let (status, _, body) = post(
+        &app,
+        &Form::new()
+            .text("response_format", "verbose_json")
+            .text("timestamp_granularities[]", "word")
+            .file(wav(2)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let value = json(&body);
+    assert!(value.get("words").is_none());
+    assert_eq!(
+        value["segments"][0],
+        serde_json::json!({"id": 0, "start": 0.0, "end": 2.0, "text": "test transcript"})
+    );
+}
+
+#[tokio::test]
 async fn every_wrong_request_is_refused_before_a_model_is_asked() {
     let (app, backend) = setup(&format!("{BASE}{STT}{SECOND}{MUSIC}"));
     let good = || Form::new().text("model", "whisper").file(wav(1));
@@ -432,8 +552,8 @@ async fn every_wrong_request_is_refused_before_a_model_is_asked() {
             StatusCode::BAD_REQUEST,
         ),
         (
-            "word timestamps",
-            good().text("timestamp_granularities[]", "word"),
+            "unknown timestamp granularity",
+            good().text("timestamp_granularities[]", "sentence"),
             StatusCode::BAD_REQUEST,
         ),
         (

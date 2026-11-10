@@ -2,6 +2,9 @@
 //! (any of MP3, M4A/AAC, Ogg Vorbis, FLAC, WAV), cut into overlapping pieces of the configured length, the pieces go to the
 //! speech program one after the other, and the segments are joined with the offset of their piece, so every time in
 //! the answer is relative to the whole file. The limits (file size, length) and the piece length come from the configuration.
+//! When the speech program measured the time of every word (word timing), the segments are cut anew at word boundaries
+//! (`eliezer_speech::resegment`): each starts with its first word and ends with its last, and `verbose_json` lists the
+//! words of each segment (`segments[].words`, and all words in `words` with `timestamp_granularities[]=word`).
 
 use super::{App, Error, error, failure, spec};
 use axum::{
@@ -46,6 +49,31 @@ fn limits(app: &App, model: &ModelConfig) -> (u64, u64) {
         .or(defaults.map(|d| d.max_audio_minutes))
         .unwrap_or(0);
     (u64::from(file_mb) << 20, u64::from(minutes) * 60)
+}
+
+/// The longest segment the service cuts with word timing: the model's `extra.max_segment_chars`, else the one of
+/// `[backend.whispercpp]`, else [`eliezer_speech::DEFAULT_MAX_SEGMENT_CHARS`].
+fn max_segment_chars(app: &App, model: &ModelConfig) -> usize {
+    let config = app.config.get();
+    let chars = model
+        .extra
+        .as_ref()
+        .and_then(|e| e.max_segment_chars)
+        .or(config
+            .backend
+            .whispercpp
+            .as_ref()
+            .map(|d| d.max_segment_chars))
+        .unwrap_or(0);
+    if chars == 0 {
+        eliezer_speech::DEFAULT_MAX_SEGMENT_CHARS
+    } else {
+        chars as usize
+    }
+}
+
+fn word_json(word: &eliezer_backend::TranscribedWord) -> Value {
+    json!({"word": word.text, "start": word.start, "end": word.end})
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -162,9 +190,10 @@ pub async fn transcriptions(
         Some("vtt") => Format::Vtt,
         Some(_) => return bad("response_format is json, text, verbose_json, srt or vtt"),
     };
-    if granularities.iter().any(|g| g != "segment") {
-        return bad("Only timestamp_granularities segment is supported");
+    if granularities.iter().any(|g| g != "segment" && g != "word") {
+        return bad("timestamp_granularities is segment or word");
     }
+    let word_list = granularities.iter().any(|g| g == "word");
     let temperature = match temperature.as_deref().filter(|t| !t.is_empty()) {
         None => None,
         Some(text) => match text.trim().parse::<f64>() {
@@ -249,6 +278,10 @@ pub async fn transcriptions(
         }
     }
     let segments = eliezer_speech::join(parts, f64::from(overlap_secs));
+    let (segments, by_words) = eliezer_speech::resegment(segments, max_segment_chars(&app, found));
+    if !by_words {
+        tracing::info!(model = %found.key, "No word times from the speech program; the segments keep its times");
+    }
     let text = eliezer_speech::text(&segments);
     match format {
         Format::Json => Json(json!({"text": text})).into_response(),
@@ -273,19 +306,33 @@ pub async fn transcriptions(
             } else {
                 language
             };
+            let words: Vec<Value> = segments
+                .iter()
+                .flat_map(|s| s.words.iter().map(word_json))
+                .collect();
             let segments: Vec<Value> = segments
                 .iter()
                 .enumerate()
-                .map(|(id, s)| json!({"id": id, "start": s.start, "end": s.end, "text": s.text}))
+                .map(|(id, s)| {
+                    let mut segment =
+                        json!({"id": id, "start": s.start, "end": s.end, "text": s.text});
+                    if !s.words.is_empty() {
+                        segment["words"] = s.words.iter().map(word_json).collect();
+                    }
+                    segment
+                })
                 .collect();
-            Json(json!({
+            let mut answer = json!({
                 "task": "transcribe",
                 "language": shown,
                 "duration": duration,
                 "text": text,
                 "segments": segments,
-            }))
-            .into_response()
+            });
+            if word_list && !words.is_empty() {
+                answer["words"] = Value::Array(words);
+            }
+            Json(answer).into_response()
         }
     }
 }

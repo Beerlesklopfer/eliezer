@@ -1,4 +1,4 @@
-use eliezer_backend::{TranscribedSegment, Transcription};
+use eliezer_backend::{TranscribedSegment, TranscribedWord, Transcription};
 use eliezer_speech::*;
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -165,6 +165,7 @@ fn segment(start: f64, end: f64, text: &str) -> TranscribedSegment {
         start,
         end,
         text: text.into(),
+        words: Vec::new(),
     }
 }
 fn part(offset: f64, segments: Vec<TranscribedSegment>) -> Part {
@@ -237,4 +238,169 @@ fn the_text_formats() {
     );
     assert_eq!(text(&[]), "");
     assert_eq!(vtt(&[]), "WEBVTT\n\n");
+}
+
+/// A segment of the program with words: each word is `(text, start, end)`. The segment's own times are those of the
+/// program (deliberately off, as with the 60 character wrap: they start early and end early).
+fn timed(words: &[(&str, f64, f64)]) -> TranscribedSegment {
+    let start = words.first().map_or(0.0, |w| w.1) - 0.5;
+    let end = words.last().map_or(0.0, |w| w.1);
+    TranscribedSegment {
+        start,
+        end,
+        text: words.iter().map(|w| w.0).collect::<Vec<_>>().join(" "),
+        words: words
+            .iter()
+            .map(|&(text, start, end)| TranscribedWord {
+                text: text.into(),
+                start,
+                end,
+            })
+            .collect(),
+    }
+}
+
+/// Words that follow each other without a pause: 0.3 s per word from `start`.
+fn spoken(text: &str, start: f64) -> Vec<(&str, f64, f64)> {
+    text.split_whitespace()
+        .enumerate()
+        .map(|(i, w)| (w, start + 0.3 * i as f64, start + 0.3 * (i + 1) as f64))
+        .collect()
+}
+
+#[test]
+fn a_segment_starts_with_its_first_word_and_ends_with_its_last() {
+    let segments = vec![
+        timed(&[
+            ("Und", 1.04, 1.3),
+            ("Gott", 1.3, 1.62),
+            ("sprach.", 1.62, 2.2),
+        ]),
+        timed(&[("Es", 3.5, 3.7), ("werde", 3.7, 4.0), ("Licht.", 4.0, 4.6)]),
+    ];
+    let (out, by_words) = resegment(segments, 120);
+    assert!(by_words);
+    assert_eq!(out.len(), 2);
+    assert_eq!((out[0].start, out[0].end), (1.04, 2.2));
+    assert_eq!((out[1].start, out[1].end), (3.5, 4.6));
+    assert_eq!(out[0].text, "Und Gott sprach.");
+    assert_eq!(out[1].words.len(), 3);
+    // the subtitle formats carry the word times
+    assert_eq!(
+        vtt(&out),
+        "WEBVTT\n\n00:00:01.040 --> 00:00:02.200\nUnd Gott sprach.\n\n00:00:03.500 --> 00:00:04.600\nEs werde Licht.\n\n"
+    );
+    assert!(srt(&out).starts_with(
+        "1\n00:00:01,040 --> 00:00:02,200\nUnd Gott sprach.\n\n2\n00:00:03,500 --> 00:00:04,600\n"
+    ));
+}
+
+#[test]
+fn a_sentence_is_not_cut_at_sixty_characters() {
+    // what the program sent as two segments cut after about 60 characters, in the middle of the sentence
+    let sentence = "Wir wollen heute auf den Text aus dem Römerbrief schauen und darüber nachdenken, was Gott uns sagt.";
+    let words = spoken(sentence, 10.0);
+    let (front, back) = words.split_at(10);
+    let (out, _) = resegment(vec![timed(front), timed(back)], 120);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert_eq!(out[0].text, sentence);
+    assert_eq!(out[0].start, 10.0);
+    assert_eq!(out[0].end, words.last().unwrap().2);
+}
+
+#[test]
+fn a_long_sentence_is_cut_at_a_comma_not_at_a_count() {
+    let sentence = "Und als sie das hörte, wandte sie sich um und sah Jesus dastehen und wusste nicht, dass es Jesus war, der zu ihr sprach und sie bei ihrem Namen rief.";
+    assert!(sentence.chars().count() > 120);
+    let (out, by_words) = resegment(vec![timed(&spoken(sentence, 0.0))], 120);
+    assert!(by_words);
+    assert!(out.len() >= 2);
+    for segment in &out {
+        assert!(segment.text.chars().count() <= 120, "{}", segment.text);
+    }
+    // every cut is after a comma or at the end of the sentence
+    for segment in &out {
+        assert!(
+            segment.text.ends_with(',') || segment.text.ends_with('.'),
+            "{}",
+            segment.text
+        );
+    }
+    let joined: Vec<&str> = out.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(joined.join(" "), sentence, "no word lost or cut in two");
+    // the segments meet: the next starts where the previous one's last word ended
+    for pair in out.windows(2) {
+        assert_eq!(pair[0].end, pair[1].start);
+    }
+}
+
+#[test]
+fn a_long_pause_ends_a_segment_and_long_speech_is_cut_by_time() {
+    let mut words = spoken("der Herr ist mein Hirte", 0.0);
+    words.extend(spoken("mir wird nichts mangeln", 4.0));
+    let (out, _) = resegment(vec![timed(&words)], 120);
+    let texts: Vec<&str> = out.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        ["der Herr ist mein Hirte", "mir wird nichts mangeln"]
+    );
+    assert_eq!(out[1].start, 4.0);
+    // slow speech without punctuation: at most 12 s per segment
+    let slow: Vec<(&str, f64, f64)> = (0..30)
+        .map(|i| ("wort", 0.8 * i as f64, 0.8 * i as f64 + 0.5))
+        .collect();
+    let (out, _) = resegment(vec![timed(&slow)], 400);
+    assert!(out.len() >= 2);
+    assert!(out.iter().all(|s| s.end - s.start <= MAX_SEGMENT_SECS));
+}
+
+#[test]
+fn numbers_and_abbreviations_do_not_end_a_sentence() {
+    let words = spoken(
+        "Lesen wir 1. Mose 3 und z. B. den Vers. Dann beten wir.",
+        0.0,
+    );
+    let (out, _) = resegment(vec![timed(&words)], 120);
+    let texts: Vec<&str> = out.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        ["Lesen wir 1. Mose 3 und z. B. den Vers.", "Dann beten wir."]
+    );
+}
+
+#[test]
+fn without_words_the_segments_stay_as_they_are() {
+    let segments = vec![segment(0.0, 1.5, "Hallo"), segment(1.5, 3.0, "Welt")];
+    let (out, by_words) = resegment(segments.clone(), 120);
+    assert!(!by_words);
+    assert_eq!(out, segments);
+    // one segment of a piece without words is enough: no mix of the two kinds of times
+    let mixed = vec![
+        timed(&spoken("Und Gott sprach.", 0.0)),
+        segment(2.0, 3.0, "Welt"),
+    ];
+    let (out, by_words) = resegment(mixed.clone(), 120);
+    assert!(!by_words);
+    assert_eq!(out, mixed);
+}
+
+#[test]
+fn the_join_moves_the_words_with_their_piece() {
+    let first = part(0.0, vec![timed(&spoken("eins zwei.", 1.0))]);
+    let second = part(16.0, vec![timed(&spoken("drei vier.", 4.0))]);
+    let joined = join(vec![first, second], 4.0);
+    assert_eq!(joined[1].words[0].start, 20.0);
+    assert_eq!(joined[1].words[1].end, 20.6);
+    let (out, _) = resegment(joined, 120);
+    assert_eq!((out[1].start, out[1].end), (20.0, 20.6));
+    // words of an overlap never go back in time and never reach into the next word
+    let overlapping = vec![
+        timed(&[("a", 5.0, 6.5), ("b.", 5.5, 6.0)]),
+        timed(&[("c", 5.2, 5.4)]),
+    ];
+    let (out, _) = resegment(overlapping, 120);
+    let words: Vec<&TranscribedWord> = out.iter().flat_map(|s| &s.words).collect();
+    for pair in words.windows(2) {
+        assert!(pair[0].start <= pair[1].start && pair[0].end <= pair[1].start);
+    }
 }

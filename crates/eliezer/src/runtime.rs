@@ -288,6 +288,12 @@ fn whispercpp_models(
                         .and_then(|e| e.max_segment_chars)
                         .or(section.map(|b| b.max_segment_chars))
                         .unwrap_or(0),
+                    word_timing: eliezer_whispercpp::WordTiming::from_setting(
+                        extra
+                            .and_then(|e| e.dtw.as_deref())
+                            .or(section.map(|b| b.dtw.as_str()))
+                            .unwrap_or("auto"),
+                    ),
                 },
             ))
         })
