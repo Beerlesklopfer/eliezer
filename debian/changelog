@@ -1,6 +1,14 @@
 eliezer (0.6.0) UNRELEASED; urgency=low
 
   * Set the package version to 0.6.0, as requested.
+  * Cut transcript segments at word times: `whisper-server` is started with `--dtw` (preset from the model file header, setting
+    `dtw = "auto" | "off" | PRESET` in `[backend.whispercpp]` and per model, flash attention then off) and no longer wraps after 60
+    characters, whose estimated cut times made segments start about 0.45 s early and end before their last word. Segments now start
+    with their first word and end with their last, end at sentences and pauses and are cut at the best word boundary within
+    `max_segment_chars` (default 120) and 12 s. `verbose_json` (and `eliezer transcribe --format json`) gains `segments[].words`;
+    `timestamp_granularities[]=word` is accepted. Without word times the old segments stay. Measured on two sermons: median distance
+    of segment starts to the speech onset 0.08 / 0.04 s (was 0.34 / 0.22 s), segments ending before their last word 0.4 / 0.7 %
+    (was 34 / 31 %), cuts in mid-sentence without a pause 8 / 1 (was 524 / 379); docs/Runtimes.md.
   * Bundle only the GPU kernel files of the target architecture (`AMDGPU_TARGETS`, the installed card by default; `BUNDLE_ALL_ARCHS=1`
     keeps all): the ROCm package is 1.05 GB (1.76 GB unpacked) instead of 2.99 GB (6.8 GB) for `gfx1100`, so it installs on a root
     file system with a few GB free. Bundle `whisper-server` (built statically, license text included) and take the model families of

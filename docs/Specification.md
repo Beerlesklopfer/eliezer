@@ -135,6 +135,7 @@ max_file_mb = 100                      # upload limit; a model can set its own (
 max_audio_minutes = 120                # length limit of a recording; a model can set its own (extra.max_audio_minutes)
 split_on_word = true                   # segments end between words; a model can set its own (extra.split_on_word)
 max_segment_chars = 0                  # 0 = the program's own wrapping, else 20 to 400 (max_len); extra.max_segment_chars per model
+dtw = "auto"                           # word timing: auto, off or a preset of --dtw such as large.v3.turbo; extra.dtw per model
 load_timeout_secs = 300                # how long a model may take to load (1 to 3600)
 request_timeout_secs = 3600            # how long one piece of a recording may take (1 to 86400)
 stop_grace_secs = 15                   # how long the program gets to end after the stop, before it is killed (1 to 300)
@@ -251,8 +252,23 @@ extra = { language = "de", threads = 8, max_file_mb = 200, max_audio_minutes = 1
 request names none; default `auto`), `threads` (1 to 256; the program's default without), `max_file_mb` and `max_audio_minutes`
 (the limits of an upload and of a recording; default: the values of `[backend.whispercpp]`, which default to 100 and 120),
 `split_on_word` (default `true`: segments end between words; with `false` the program may cut a word in two at its 60 character
-wrap) and `max_segment_chars` (0 = the program's own wrapping, else 20 to 400, sent as `max_len`); both default to the values of the
-section. The limits, the length of a piece and the overlap are always settings, never constants. Recommended models (the choice is made by a
+wrap), `max_segment_chars` (0 = the program's own wrapping, else 20 to 400, sent as `max_len`; with word timing the longest segment
+the service cuts, 0 meaning 120) and `dtw` (word timing: `auto`, `off` or a preset of `--dtw`); all default to the values of the
+section.
+
+**Word timing.** With `dtw = "auto"` (default) the service reads the shape of the model from the header of the ggml file (layers,
+width, vocabulary) and starts the program with the fitting alignment heads preset (`--dtw large.v3.turbo` for a large-v3-turbo and its
+fine-tunes) and `--no-flash-attn` (the program silently drops DTW with flash attention). A shape without a preset, `off`, or a program
+that does not load the model with the preset (it is then started once more without) leaves word timing off; the service logs it and
+keeps the segments and times of the program. With word timing the program does not wrap (`max_len` is sent as 1000000) and the
+service cuts the segments itself from the word times (`eliezer_speech::resegment`): a word starts at the DTW time of its first token,
+0.1 s earlier (DTW marks a token about 0.15 s after its sound begins, measured against pause ends); it ends at the next word's start,
+but not later than 0.15 s + 0.03 s per character after its own start, and not before its last token is heard (+0.1 s).
+A segment starts with its first word and ends with its last; it ends after a sentence end (`.`, `?`, `!`, `…`, not after a number
+such as "1." or a single letter, not when the next word starts in lowercase) and before a silence of 1.5 s or more. A segment that
+would grow over `max_segment_chars` (default 120) characters or over 12 s is cut first at its best word boundary: a sentence end,
+then the end of a decoder segment, then a comma, semicolon, colon or dash, then any word; a pause of 0.3 s or more counts extra,
+and of equal places the later one wins. Words are never cut. The limits, the length of a piece and the overlap are always settings, never constants. Recommended models (the choice is made by a
 listening test with real recordings, counting word errors, names and speed): first
 `cstr/whisper-large-v3-turbo-german-ggml`, file `ggml-model-q5_0.bin` (Apache-2.0), for German speech such as sermons; alternatives
 `primeline/whisper-large-v3-turbo-german` (convert to ggml, or use a ggml build of it) and `openai/whisper-large-v3-turbo`
@@ -442,10 +458,12 @@ if a request is currently running, it is awaited (up to `request_timeout_secs`),
   - Fields: `file` (the audio, required), `model` (can be left out when exactly one speech model is configured), `language`
     (`auto` or a lowercase code; default: `extra.language` of the model, else `auto`), `prompt` (a hint with names and terms),
     `response_format` (`json` default, `text`, `verbose_json`, `srt`, `vtt`), `temperature` (0 to 1) and
-    `timestamp_granularities[]` (only `segment`; `word` is refused). Other fields (`stream` and the like) are ignored.
+    `timestamp_granularities[]` (`segment`, `word`). Other fields (`stream` and the like) are ignored.
   - Answers: `json` is `{"text": "…"}`; `text` is the plain text (`text/plain`); `verbose_json` is `{"task": "transcribe",
     "language", "duration" (seconds of the whole file), "text", "segments": [{"id", "start", "end", "text"}]}`; `srt` and `vtt`
-    are subtitle files (`application/x-subrip`, `text/vtt`). All times are seconds from the start of the whole file.
+    are subtitle files (`application/x-subrip`, `text/vtt`). All times are seconds from the start of the whole file. With word
+    timing (see the speech settings) every segment also has `words: [{"word", "start", "end"}]`, and with
+    `timestamp_granularities[]=word` the answer has all words in `words` as well; without word timing both are left out.
   - Decoding is the service's job and happens in Rust: MP3, M4A/AAC, Ogg Vorbis, FLAC and WAV (any rate, any channel count, 8 to 32
     bit) are decoded to 16 kHz mono 16 bit. ffmpeg is not used. A file that is not audio (or that no decoder of the build reads)
     gives `400`.
@@ -796,12 +814,12 @@ trait Backend: Send + Sync {
   inherited variables as audio.cpp) and a private run directory (mode 0700, working directory of the child and the program's
   `--public` folder, removed when the model is unloaded), with the fixed arguments `--model FILE --host 127.0.0.1 --port N
   --language L --public DIR`, plus `--threads N` (`extra.threads`), `--no-gpu` for a model placed on the CPU, or else `--device N`
-  and `--flash-attn`/`--no-flash-attn` (the settings of the section). `--convert` (which starts ffmpeg) is never used. The model counts
+  and `--flash-attn`/`--no-flash-attn` (the settings of the section); with word timing `--dtw PRESET --no-flash-attn`. `--convert` (which starts ffmpeg) is never used. The model counts
   as loaded when `GET /health` answers 200 (the program opens its port only after the model is loaded; load time out `load_timeout_secs`, default 300 s; one piece may take `request_timeout_secs`, default 3600 s; a stopped child gets `stop_grace_secs`, default 15 s, before it is killed). A
   piece becomes `POST /inference`, a `multipart/form-data` body with the 16 kHz mono WAV as `file` and the fields
   `response_format = verbose_json` (the service builds every other format itself from the segments), `language`, `prompt`,
-  `temperature`, `no_language_probabilities`, `split_on_word` (setting, default true) and `max_len` (only when `max_segment_chars` is above 0). Request text is only ever a form field. The answer must hold `segments` with
-  `start`, `end` (seconds) and `text`. `400` of the program is a request it refused (`400`); other failures and answers
+  `temperature`, `no_language_probabilities`, `split_on_word` (setting, default true) and `max_len` (with word timing 1000000, so the program does not wrap; otherwise only when `max_segment_chars` is above 0). Request text is only ever a form field. The answer must hold `segments` with
+  `start`, `end` (seconds) and `text`; the tokens in `segments[].words` with `t_dtw` (centiseconds, −1 without DTW) give the word times. `400` of the program is a request it refused (`400`); other failures and answers
   without segments are `502`; a program that no longer answers marks the model failed. The program serializes requests itself.
 - **fake:** Test bench: configurable load time, VRAM demand, responses, crashes; basis of all tests.
 - Environment of child processes: only `HF_HOME`, `HF_TOKEN` (read from the file, not passed through from the

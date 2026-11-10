@@ -228,6 +228,33 @@ space, so the words reached the text as "Füs se", "bed ienen", "harmon isch". T
 `tests/m8/whispercpp.rs`), so the segments end between words; `max_segment_chars` (default 0) additionally sends `max_len` for a
 shorter or longer wrap.
 
+**Finding, 2026-11-10 (segment times):** the 60 character wrap (`server.cpp`: `max_len` 0 becomes 60; with `verbose_json` or
+`split_on_word` the token times are on) places each cut by spreading the segment's time over its tokens by character count
+(`whisper_exp_compute_token_level_timestamps`), so wrapped segments started a median 0.42 to 0.46 s before their first word (DTW
+reference) and 31 to 34 % of them ended before their last word began; the energy step that should correct this reads the signal
+relative to the wrong origin (`timestamp_to_sample` with `segment.t0` against the energy of the whole piece; derived from the source,
+not confirmed with a patched build). Checked against the source of v1.9.5 and run with the bundled program: `--dtw PRESET` (presets
+`tiny` … `large.v3.turbo`, an unknown one ends the program with status 3) gives every token `t_dtw` (centiseconds) in
+`verbose_json`; with flash attention the program drops DTW silently (`dtw_token_timestamps is not supported with flash_attn`), so
+`--no-flash-attn` is required; a `max_len` larger than any segment (the service sends 1000000) turns the wrap off and keeps the
+decoder's segments. The model `cstr/whisper-large-v3-turbo-german-ggml` has the shape of large-v3-turbo (header: vocabulary 51866,
+32 encoder and 4 decoder layers, width 1280), so `dtw = "auto"` chooses `large.v3.turbo`.
+
+The service now asks for word timing and cuts the segments itself (`eliezer_speech::resegment`, rule in docs/Specification.md).
+Measured on two German sermons of 54 min (CPU, 8 threads, 0.25 of real time with DTW and without flash attention; system 0.6.0
+on the GPU for "before"), pauses from `ffmpeg silencedetect n=-32dB d=0.35`:
+
+| | before (0.6.0) | after |
+|---|---|---|
+| DTW word start minus pause end (first word after a pause) | | median +0.16 / +0.14 s |
+| segment start minus speech onset (pause end within 1 s), median, p10 … p90 | −0.07 / −0.07 s, −0.77 … +0.66 / −0.50 … +0.47 | +0.07 / +0.04 s, −0.03 … +0.36 / −0.02 … +0.28 |
+| ... median of the absolute value | 0.34 / 0.22 s | 0.08 / 0.04 s |
+| segment start minus first word (raw DTW), median | −0.46 / −0.42 s (p10 −1.10 / −0.99) | −0.10 s (the lead) |
+| segments ending before their last word begins (raw DTW) | 34 % / 31 % | 0.4 % / 0.7 % (the next word follows within 0.1 s) |
+| segment end minus speech end (pause start within 1 s), median | +0.01 / +0.00 s (p10 −0.62 / −0.24) | +0.23 / +0.31 s (p10 −0.35 / −0.02) |
+| cuts without punctuation and without a pause | 524 / 379 | 8 / 1 |
+| segments; characters median, max; seconds max | 1047 / 1005; 56, 72; 16.3 | 679 / 669; 76 / 67, 120; 9.0 |
+
 What the tests cover instead: `tests/m8/fake_whisper_server.rs` is a stand-in that speaks the interface as described above
 (arguments, `/health`, the multipart form, `verbose_json`); `tests/m8/whispercpp.rs` checks the arguments, the environment, the
 private directory, the form, error mapping and crashes against it.
