@@ -1,0 +1,93 @@
+name: Hardware test report
+description: Report how Eliezer builds and runs on your GPU (see TESTING.md). Failures are as welcome as successes.
+title: "[Hardware] <GPU> with <cuda|rocm|vulkan|cpu>"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing. The procedure is in [TESTING.md](https://github.com/Beerlesklopfer/eliezer/blob/main/TESTING.md).
+        Please do not paste tokens, API keys or private paths you do not want to publish.
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - All checks passed
+        - Some checks failed
+        - The live check did not start
+        - The build failed
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and memory
+      placeholder: "NVIDIA RTX 4070 12 GB / AMD RX 6800 XT 16 GB (gfx1030) / CPU only"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature
+    attributes:
+      label: Build feature
+      options:
+        - cuda
+        - rocm
+        - vulkan
+        - cpu
+        - Debian package (rocm)
+        - Container image
+    validations:
+      required: true
+
+  - type: input
+    id: driver
+    attributes:
+      label: Driver and GPU runtime
+      placeholder: "NVIDIA driver 580.x, CUDA 13.0 / ROCm 7.2.0 / Mesa 25.x RADV"
+    validations:
+      required: true
+
+  - type: input
+    id: system
+    attributes:
+      label: Distribution and kernel
+      placeholder: "Debian 13, 6.12.x / Fedora 43, 6.17.x"
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Eliezer commit or version
+      description: "`git rev-parse --short HEAD` or `eliezer --version`"
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model used for the live check
+      value: "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf, --context 8192 --parallel 2"
+
+  - type: textarea
+    id: live-check
+    attributes:
+      label: Output of the live check
+      description: The content of `live-check.txt` (step 3 of TESTING.md).
+      render: text
+
+  - type: textarea
+    id: build-test
+    attributes:
+      label: Build or test output (if something failed)
+      description: The last 50 lines of the failed build, or the summary of `cargo test`.
+      render: text
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Other models you tried, images or speech, memory near the limit, things that surprised you.

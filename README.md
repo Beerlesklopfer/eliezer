@@ -152,6 +152,9 @@ eliezer ps                                         # loaded models, device, memo
 
 ## Status and limits
 
+**Help wanted:** Eliezer has been measured on one AMD card only. If you have an NVIDIA card, another AMD generation or want
+to try the Vulkan or CPU build, [TESTING.md](TESTING.md) describes a half-hour test and how to report the result.
+
 Version 0.6.0, developed since October 2026. Everything in the tables above is implemented and was checked live.
 
 - **NVIDIA:** CUDA builds and NVML measurement exist, but they have never run on a real NVIDIA card. AMD is the tested
